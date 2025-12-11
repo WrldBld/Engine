@@ -1,0 +1,36 @@
+# Rust build artifacts
+/target/
+**/*.rs.bk
+Cargo.lock
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Direnv
+.direnv/
+
+# Cargo
+.cargo/
+
+# macOS
+.DS_Store
+
+# Neo4j data (if running locally)
+/data/
+/neo4j/
+
+# Logs
+*.log
+logs/
+
+# Generated assets
+/generated/

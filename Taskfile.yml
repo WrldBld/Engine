@@ -1,0 +1,169 @@
+# https://taskfile.dev
+
+version: '3'
+
+vars:
+  BINARY_NAME: wrldbldr-engine
+  RUST_LOG: debug
+  NEO4J_PASSWORD: wrldbldr123
+  NEO4J_USER: neo4j
+
+env:
+  RUST_BACKTRACE: 1
+  RUST_LOG: '{{.RUST_LOG}}'
+  NEO4J_PASSWORD: '{{.NEO4J_PASSWORD}}'
+  NEO4J_USER: '{{.NEO4J_USER}}'
+tasks:
+  default:
+    desc: Show available tasks
+    cmds:
+      - task --list
+
+  # Development tasks
+  dev:
+    desc: Run the engine in development mode with hot reload
+    cmds:
+      - cargo watch -x run
+    deps: [check]
+
+  run:
+    desc: Run the engine
+    cmds:
+      - cargo run
+
+  # Build tasks
+  build:
+    desc: Build the engine in debug mode
+    cmds:
+      - cargo build
+
+  build:release:
+    desc: Build the engine in release mode
+    cmds:
+      - cargo build --release
+
+  # Code quality tasks
+  check:
+    desc: Check for compilation errors
+    cmds:
+      - cargo check
+
+  test:
+    desc: Run all tests
+    cmds:
+      - cargo test
+
+  test:watch:
+    desc: Run tests in watch mode
+    cmds:
+      - cargo watch -x test
+
+  lint:
+    desc: Run clippy linter
+    cmds:
+      - cargo clippy -- -D warnings
+
+  fmt:
+    desc: Format code
+    cmds:
+      - cargo fmt
+
+  fmt:check:
+    desc: Check code formatting
+    cmds:
+      - cargo fmt -- --check
+
+  # Documentation
+  docs:
+    desc: Generate and open documentation
+    cmds:
+      - cargo doc --open --no-deps
+
+  docs:build:
+    desc: Generate documentation
+    cmds:
+      - cargo doc --no-deps
+
+  # Database tasks
+  db:start:
+    desc: Start Neo4j database (requires Docker)
+    cmds:
+      - cmd: docker rm -f wrldbldr-neo4j
+        ignore_error: true
+      - |
+        docker run -d \
+          --name wrldbldr-neo4j \
+          -p 7474:7474 -p 7687:7687 \
+          -e NEO4J_AUTH={{.NEO4J_USER}}/{{.NEO4J_PASSWORD}} \
+          -e NEO4J_PLUGINS='["apoc"]' \
+          -e NEO4J_dbms_security_procedures_unrestricted='apoc.*' \
+          neo4j:5
+      - echo "Waiting for Neo4j to start..."
+      - sleep 5
+      - |
+        echo "Checking Neo4j status..."
+        docker logs wrldbldr-neo4j 2>&1 | tail -3
+    status:
+      - docker ps --filter "name=wrldbldr-neo4j" --filter "status=running" -q | grep -q .
+  db:stop:
+    desc: Stop Neo4j database
+    cmds:
+      - docker stop wrldbldr-neo4j
+    ignore_error: true
+  
+  db:remove:
+    desc: Remove Neo4j database
+    cmds:
+      - docker stop wrldbldr-neo4j
+      - docker rm wrldbldr-neo4j
+    ignore_error: true
+
+  db:logs:
+    desc: Show Neo4j logs
+    cmds:
+      - docker logs -f wrldbldr-neo4j
+
+  # Cleanup tasks
+  clean:
+    desc: Clean build artifacts
+    cmds:
+      - cargo clean
+      - rm -rf .cargo/
+
+  clean:all:
+    desc: Clean everything including generated files
+    cmds:
+      - task: clean
+      - rm -rf generated/
+      - rm -rf logs/
+
+  # CI/CD tasks
+  ci:
+    desc: Run all CI checks
+    cmds:
+      - task: fmt:check
+      - task: lint
+      - task: test
+      - task: build
+
+  # Utility tasks
+  deps:
+    desc: Show dependency tree
+    cmds:
+      - cargo tree
+
+  deps:outdated:
+    desc: Check for outdated dependencies
+    cmds:
+      - cargo outdated
+
+  deps:audit:
+    desc: Audit dependencies for vulnerabilities
+    cmds:
+      - cargo audit
+
+  size:
+    desc: Show binary size (release build)
+    deps: [build:release]
+    cmds:
+      - ls -lh target/release/{{.BINARY_NAME}}
