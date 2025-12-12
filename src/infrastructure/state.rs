@@ -1,5 +1,7 @@
 //! Shared application state
 
+use std::sync::Arc;
+
 use anyhow::Result;
 use tokio::sync::RwLock;
 
@@ -8,6 +10,7 @@ use crate::application::services::{
 };
 use crate::infrastructure::comfyui::ComfyUIClient;
 use crate::infrastructure::config::AppConfig;
+use crate::infrastructure::export::Neo4jWorldExporter;
 use crate::infrastructure::ollama::OllamaClient;
 use crate::infrastructure::persistence::Neo4jRepository;
 use crate::infrastructure::session::SessionManager;
@@ -46,11 +49,31 @@ impl AppState {
         // Initialize ComfyUI client
         let comfyui_client = ComfyUIClient::new(&config.comfyui_base_url);
 
+        // Create individual repository ports as Arc'd trait objects
+        let world_repo: Arc<dyn crate::application::ports::outbound::WorldRepositoryPort> =
+            Arc::new(repository.worlds());
+        let character_repo: Arc<dyn crate::application::ports::outbound::CharacterRepositoryPort> =
+            Arc::new(repository.characters());
+        let location_repo: Arc<dyn crate::application::ports::outbound::LocationRepositoryPort> =
+            Arc::new(repository.locations());
+        let scene_repo: Arc<dyn crate::application::ports::outbound::SceneRepositoryPort> =
+            Arc::new(repository.scenes());
+        let relationship_repo: Arc<dyn crate::application::ports::outbound::RelationshipRepositoryPort> =
+            Arc::new(repository.relationships());
+
+        // Create world exporter
+        let world_exporter: Arc<dyn crate::application::ports::outbound::WorldExporterPort> =
+            Arc::new(Neo4jWorldExporter::new(repository.clone()));
+
         // Initialize application services
-        let world_service = WorldServiceImpl::new(repository.clone());
-        let character_service = CharacterServiceImpl::new(repository.clone());
-        let location_service = LocationServiceImpl::new(repository.clone());
-        let scene_service = SceneServiceImpl::new(repository.clone());
+        let world_service = WorldServiceImpl::new(world_repo.clone(), world_exporter);
+        let character_service = CharacterServiceImpl::new(
+            world_repo.clone(),
+            character_repo.clone(),
+            relationship_repo,
+        );
+        let location_service = LocationServiceImpl::new(world_repo, location_repo.clone());
+        let scene_service = SceneServiceImpl::new(scene_repo, location_repo, character_repo);
 
         Ok(Self {
             config,

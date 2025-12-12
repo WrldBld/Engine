@@ -5,16 +5,14 @@
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
+use std::sync::Arc;
 use tracing::{debug, info, instrument};
 
-use crate::application::ports::outbound::WorldRepositoryPort;
+use crate::application::ports::outbound::{
+    ExportOptions, PlayerWorldSnapshot, WorldExporterPort, WorldRepositoryPort,
+};
 use crate::domain::entities::{Act, MonomythStage, World};
 use crate::domain::value_objects::{RuleSystemConfig, WorldId};
-
-// TODO: These infrastructure imports should be moved behind a port trait
-// This is a known architecture violation that will be addressed in Phase 3
-use crate::infrastructure::export::{PlayerWorldSnapshot, WorldSnapshotBuilder};
-use crate::infrastructure::persistence::Neo4jRepository;
 
 /// Request to create a new world
 #[derive(Debug, Clone)]
@@ -86,15 +84,22 @@ pub trait WorldService: Send + Sync {
     ) -> Result<PlayerWorldSnapshot>;
 }
 
-/// Default implementation of WorldService using Neo4j repository
+/// Default implementation of WorldService using port abstractions
 pub struct WorldServiceImpl {
-    repository: Neo4jRepository,
+    repository: Arc<dyn WorldRepositoryPort>,
+    exporter: Arc<dyn WorldExporterPort>,
 }
 
 impl WorldServiceImpl {
-    /// Create a new WorldServiceImpl with the given repository
-    pub fn new(repository: Neo4jRepository) -> Self {
-        Self { repository }
+    /// Create a new WorldServiceImpl with the given repository and exporter
+    pub fn new(
+        repository: Arc<dyn WorldRepositoryPort>,
+        exporter: Arc<dyn WorldExporterPort>,
+    ) -> Self {
+        Self {
+            repository,
+            exporter,
+        }
     }
 
     /// Validate a world creation request
@@ -143,7 +148,6 @@ impl WorldService for WorldServiceImpl {
         }
 
         self.repository
-            .worlds()
             .create(&world)
             .await
             .context("Failed to create world in repository")?;
@@ -156,7 +160,6 @@ impl WorldService for WorldServiceImpl {
     async fn get_world(&self, id: WorldId) -> Result<Option<World>> {
         debug!(world_id = %id, "Fetching world");
         self.repository
-            .worlds()
             .get(id)
             .await
             .context("Failed to get world from repository")
@@ -166,14 +169,13 @@ impl WorldService for WorldServiceImpl {
     async fn get_world_with_acts(&self, id: WorldId) -> Result<Option<WorldWithActs>> {
         debug!(world_id = %id, "Fetching world with acts");
 
-        let world = match self.repository.worlds().get(id).await? {
+        let world = match self.repository.get(id).await? {
             Some(w) => w,
             None => return Ok(None),
         };
 
         let acts = self
             .repository
-            .worlds()
             .get_acts(id)
             .await
             .context("Failed to get acts for world")?;
@@ -185,7 +187,6 @@ impl WorldService for WorldServiceImpl {
     async fn list_worlds(&self) -> Result<Vec<World>> {
         debug!("Listing all worlds");
         self.repository
-            .worlds()
             .list()
             .await
             .context("Failed to list worlds from repository")
@@ -197,7 +198,6 @@ impl WorldService for WorldServiceImpl {
 
         let mut world = self
             .repository
-            .worlds()
             .get(id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("World not found: {}", id))?;
@@ -214,7 +214,6 @@ impl WorldService for WorldServiceImpl {
         }
 
         self.repository
-            .worlds()
             .update(&world)
             .await
             .context("Failed to update world in repository")?;
@@ -228,14 +227,12 @@ impl WorldService for WorldServiceImpl {
         // Verify the world exists before deletion
         let world = self
             .repository
-            .worlds()
             .get(id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("World not found: {}", id))?;
 
         // The repository handles cascading deletion
         self.repository
-            .worlds()
             .delete(id)
             .await
             .context("Failed to delete world from repository")?;
@@ -249,7 +246,6 @@ impl WorldService for WorldServiceImpl {
         // Verify the world exists
         let _ = self
             .repository
-            .worlds()
             .get(world_id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("World not found: {}", world_id))?;
@@ -261,7 +257,6 @@ impl WorldService for WorldServiceImpl {
         }
 
         self.repository
-            .worlds()
             .create_act(&act)
             .await
             .context("Failed to create act in repository")?;
@@ -274,7 +269,6 @@ impl WorldService for WorldServiceImpl {
     async fn get_acts(&self, world_id: WorldId) -> Result<Vec<Act>> {
         debug!(world_id = %world_id, "Fetching acts for world");
         self.repository
-            .worlds()
             .get_acts(world_id)
             .await
             .context("Failed to get acts from repository")
@@ -284,8 +278,8 @@ impl WorldService for WorldServiceImpl {
     async fn export_world_snapshot(&self, world_id: WorldId) -> Result<PlayerWorldSnapshot> {
         debug!(world_id = %world_id, "Exporting world snapshot");
 
-        WorldSnapshotBuilder::new(world_id, &self.repository)
-            .build()
+        self.exporter
+            .export_snapshot(world_id)
             .await
             .context("Failed to export world snapshot")
     }
@@ -302,14 +296,13 @@ impl WorldService for WorldServiceImpl {
             "Exporting world snapshot with options"
         );
 
-        let mut builder = WorldSnapshotBuilder::new(world_id, &self.repository);
+        let options = ExportOptions {
+            current_scene_id: None,
+            include_inactive_characters,
+        };
 
-        if include_inactive_characters {
-            builder = builder.include_inactive_characters();
-        }
-
-        builder
-            .build()
+        self.exporter
+            .export_snapshot_with_options(world_id, options)
             .await
             .context("Failed to export world snapshot")
     }

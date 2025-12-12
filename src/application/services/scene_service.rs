@@ -5,15 +5,14 @@
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
+use std::sync::Arc;
 use tracing::{debug, info, instrument};
 
-use crate::application::ports::outbound::SceneRepositoryPort;
+use crate::application::ports::outbound::{
+    CharacterRepositoryPort, LocationRepositoryPort, SceneRepositoryPort,
+};
 use crate::domain::entities::{Character, Location, Scene, SceneCondition, TimeContext};
 use crate::domain::value_objects::{ActId, CharacterId, LocationId, SceneId};
-
-// TODO: This infrastructure import should be moved behind a port trait
-// This is a known architecture violation that will be addressed in Phase 3
-use crate::infrastructure::persistence::Neo4jRepository;
 
 /// Request to create a new scene
 #[derive(Debug, Clone)]
@@ -97,13 +96,23 @@ pub trait SceneService: Send + Sync {
 
 /// Default implementation of SceneService using Neo4j repository
 pub struct SceneServiceImpl {
-    repository: Neo4jRepository,
+    scene_repository: Arc<dyn SceneRepositoryPort>,
+    location_repository: Arc<dyn LocationRepositoryPort>,
+    character_repository: Arc<dyn CharacterRepositoryPort>,
 }
 
 impl SceneServiceImpl {
-    /// Create a new SceneServiceImpl with the given repository
-    pub fn new(repository: Neo4jRepository) -> Self {
-        Self { repository }
+    /// Create a new SceneServiceImpl with the given repositories
+    pub fn new(
+        scene_repository: Arc<dyn SceneRepositoryPort>,
+        location_repository: Arc<dyn LocationRepositoryPort>,
+        character_repository: Arc<dyn CharacterRepositoryPort>,
+    ) -> Self {
+        Self {
+            scene_repository,
+            location_repository,
+            character_repository,
+        }
     }
 
     /// Validate a scene creation request
@@ -144,8 +153,7 @@ impl SceneService for SceneServiceImpl {
 
         // Verify the location exists
         let _ = self
-            .repository
-            .locations()
+            .location_repository
             .get(request.location_id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("Location not found: {}", request.location_id))?;
@@ -153,8 +161,7 @@ impl SceneService for SceneServiceImpl {
         // Verify all featured characters exist
         for char_id in &request.featured_characters {
             let _ = self
-                .repository
-                .characters()
+                .character_repository
                 .get(*char_id)
                 .await?
                 .ok_or_else(|| anyhow::anyhow!("Character not found: {}", char_id))?;
@@ -175,8 +182,7 @@ impl SceneService for SceneServiceImpl {
         scene.entry_conditions = request.entry_conditions;
         scene.order = request.order;
 
-        self.repository
-            .scenes()
+        self.scene_repository
             .create(&scene)
             .await
             .context("Failed to create scene in repository")?;
@@ -188,8 +194,7 @@ impl SceneService for SceneServiceImpl {
     #[instrument(skip(self))]
     async fn get_scene(&self, id: SceneId) -> Result<Option<Scene>> {
         debug!(scene_id = %id, "Fetching scene");
-        self.repository
-            .scenes()
+        self.scene_repository
             .get(id)
             .await
             .context("Failed to get scene from repository")
@@ -199,15 +204,14 @@ impl SceneService for SceneServiceImpl {
     async fn get_scene_with_relations(&self, id: SceneId) -> Result<Option<SceneWithRelations>> {
         debug!(scene_id = %id, "Fetching scene with relations");
 
-        let scene = match self.repository.scenes().get(id).await? {
+        let scene = match self.scene_repository.get(id).await? {
             Some(s) => s,
             None => return Ok(None),
         };
 
         // Load the location
         let location = self
-            .repository
-            .locations()
+            .location_repository
             .get(scene.location_id)
             .await?
             .ok_or_else(|| {
@@ -217,7 +221,7 @@ impl SceneService for SceneServiceImpl {
         // Load all featured characters
         let mut featured_characters = Vec::new();
         for char_id in &scene.featured_characters {
-            if let Some(character) = self.repository.characters().get(*char_id).await? {
+            if let Some(character) = self.character_repository.get(*char_id).await? {
                 featured_characters.push(character);
             }
         }
@@ -234,8 +238,7 @@ impl SceneService for SceneServiceImpl {
         Self::validate_update_request(&request)?;
 
         let mut scene = self
-            .repository
-            .scenes()
+            .scene_repository
             .get(id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("Scene not found: {}", id))?;
@@ -256,8 +259,7 @@ impl SceneService for SceneServiceImpl {
             scene.order = order;
         }
 
-        self.repository
-            .scenes()
+        self.scene_repository
             .update(&scene)
             .await
             .context("Failed to update scene in repository")?;
@@ -269,14 +271,12 @@ impl SceneService for SceneServiceImpl {
     #[instrument(skip(self))]
     async fn delete_scene(&self, id: SceneId) -> Result<()> {
         let scene = self
-            .repository
-            .scenes()
+            .scene_repository
             .get(id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("Scene not found: {}", id))?;
 
-        self.repository
-            .scenes()
+        self.scene_repository
             .delete(id)
             .await
             .context("Failed to delete scene from repository")?;
@@ -291,15 +291,13 @@ impl SceneService for SceneServiceImpl {
             anyhow::bail!("Directorial notes cannot exceed 10000 characters");
         }
 
-        self.repository
-            .scenes()
+        self.scene_repository
             .update_directorial_notes(id, &notes)
             .await
             .context("Failed to update directorial notes")?;
 
         // Fetch and return the updated scene
-        self.repository
-            .scenes()
+        self.scene_repository
             .get(id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("Scene not found after update: {}", id))
@@ -308,8 +306,7 @@ impl SceneService for SceneServiceImpl {
     #[instrument(skip(self))]
     async fn list_scenes_by_act(&self, act_id: ActId) -> Result<Vec<Scene>> {
         debug!(act_id = %act_id, "Listing scenes by act");
-        self.repository
-            .scenes()
+        self.scene_repository
             .list_by_act(act_id)
             .await
             .context("Failed to list scenes by act")
@@ -318,8 +315,7 @@ impl SceneService for SceneServiceImpl {
     #[instrument(skip(self))]
     async fn list_scenes_by_location(&self, location_id: LocationId) -> Result<Vec<Scene>> {
         debug!(location_id = %location_id, "Listing scenes by location");
-        self.repository
-            .scenes()
+        self.scene_repository
             .list_by_location(location_id)
             .await
             .context("Failed to list scenes by location")
@@ -329,15 +325,13 @@ impl SceneService for SceneServiceImpl {
     async fn add_character(&self, scene_id: SceneId, character_id: CharacterId) -> Result<Scene> {
         // Verify the character exists
         let _ = self
-            .repository
-            .characters()
+            .character_repository
             .get(character_id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("Character not found: {}", character_id))?;
 
         let mut scene = self
-            .repository
-            .scenes()
+            .scene_repository
             .get(scene_id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("Scene not found: {}", scene_id))?;
@@ -346,8 +340,7 @@ impl SceneService for SceneServiceImpl {
         if !scene.featured_characters.contains(&character_id) {
             scene.featured_characters.push(character_id);
 
-            self.repository
-                .scenes()
+            self.scene_repository
                 .update(&scene)
                 .await
                 .context("Failed to update scene with new character")?;
@@ -365,8 +358,7 @@ impl SceneService for SceneServiceImpl {
         character_id: CharacterId,
     ) -> Result<Scene> {
         let mut scene = self
-            .repository
-            .scenes()
+            .scene_repository
             .get(scene_id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("Scene not found: {}", scene_id))?;
@@ -378,8 +370,7 @@ impl SceneService for SceneServiceImpl {
         {
             scene.featured_characters.remove(pos);
 
-            self.repository
-                .scenes()
+            self.scene_repository
                 .update(&scene)
                 .await
                 .context("Failed to update scene after removing character")?;
@@ -399,24 +390,21 @@ impl SceneService for SceneServiceImpl {
         // Verify all characters exist
         for char_id in &character_ids {
             let _ = self
-                .repository
-                .characters()
+                .character_repository
                 .get(*char_id)
                 .await?
                 .ok_or_else(|| anyhow::anyhow!("Character not found: {}", char_id))?;
         }
 
         let mut scene = self
-            .repository
-            .scenes()
+            .scene_repository
             .get(scene_id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("Scene not found: {}", scene_id))?;
 
         scene.featured_characters = character_ids;
 
-        self.repository
-            .scenes()
+        self.scene_repository
             .update(&scene)
             .await
             .context("Failed to update scene featured characters")?;
@@ -432,16 +420,14 @@ impl SceneService for SceneServiceImpl {
         condition: SceneCondition,
     ) -> Result<Scene> {
         let mut scene = self
-            .repository
-            .scenes()
+            .scene_repository
             .get(scene_id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("Scene not found: {}", scene_id))?;
 
         scene.entry_conditions.push(condition);
 
-        self.repository
-            .scenes()
+        self.scene_repository
             .update(&scene)
             .await
             .context("Failed to update scene with new entry condition")?;

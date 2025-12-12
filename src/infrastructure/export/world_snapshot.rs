@@ -1,104 +1,23 @@
-//! Simplified world snapshot for Player clients
+//! World snapshot export implementation
 //!
-//! This module provides a streamlined world snapshot specifically designed
-//! for transmission to Player clients over WebSocket. Unlike the full
-//! `JsonExporter::WorldSnapshot`, this focuses on the data needed for
-//! gameplay presentation.
+//! This module provides the infrastructure implementation for exporting
+//! world snapshots. It implements the `WorldExporterPort` trait defined
+//! in the application layer.
 
 use anyhow::Result;
-use serde::{Deserialize, Serialize};
+use async_trait::async_trait;
 
-use crate::domain::value_objects::{RuleSystemConfig, SceneId, WorldId};
+use crate::application::ports::outbound::{
+    CharacterData, ExportOptions, LocationData, PlayerWorldSnapshot, SceneData, WorldData,
+    WorldExporterPort,
+};
+use crate::domain::value_objects::{SceneId, WorldId};
 use crate::infrastructure::persistence::Neo4jRepository;
-
-/// Simplified world snapshot for Player clients
-///
-/// Contains the essential data needed by the Player to render the game world.
-/// This is sent when a client joins a session.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PlayerWorldSnapshot {
-    /// The world metadata
-    pub world: WorldData,
-    /// All locations in the world
-    pub locations: Vec<LocationData>,
-    /// All characters in the world
-    pub characters: Vec<CharacterData>,
-    /// All scenes in the world
-    pub scenes: Vec<SceneData>,
-    /// The current active scene (if any)
-    pub current_scene: Option<SceneData>,
-}
-
-/// World metadata for Player clients
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WorldData {
-    pub id: String,
-    pub name: String,
-    pub description: String,
-    pub rule_system: RuleSystemConfig,
-}
-
-/// Location data for Player clients
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LocationData {
-    pub id: String,
-    pub name: String,
-    pub description: String,
-    pub location_type: String,
-    pub backdrop_asset: Option<String>,
-    pub parent_id: Option<String>,
-}
-
-/// Character data for Player clients
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CharacterData {
-    pub id: String,
-    pub name: String,
-    pub description: String,
-    pub archetype: String,
-    pub sprite_asset: Option<String>,
-    pub portrait_asset: Option<String>,
-    pub is_alive: bool,
-    pub is_active: bool,
-}
-
-/// Scene data for Player clients
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SceneData {
-    pub id: String,
-    pub name: String,
-    pub location_id: String,
-    pub time_context: String,
-    pub backdrop_override: Option<String>,
-    pub featured_characters: Vec<String>,
-    pub directorial_notes: String,
-}
 
 /// Load a complete world snapshot for a Player client
 ///
 /// This loads all necessary data from Neo4j and assembles it into a
 /// `PlayerWorldSnapshot` suitable for WebSocket transmission.
-///
-/// # Arguments
-///
-/// * `world_id` - The ID of the world to load
-/// * `current_scene_id` - Optional ID of the currently active scene
-/// * `repository` - The Neo4j repository to load data from
-///
-/// # Returns
-///
-/// A `PlayerWorldSnapshot` containing all world data, or an error if
-/// the world could not be found.
-///
-/// # Example
-///
-/// ```ignore
-/// let snapshot = load_world_snapshot(
-///     world_id,
-///     Some(scene_id),
-///     &repository
-/// ).await?;
-/// ```
 pub async fn load_world_snapshot(
     world_id: WorldId,
     current_scene_id: Option<SceneId>,
@@ -247,9 +166,49 @@ impl<'a> WorldSnapshotBuilder<'a> {
     }
 }
 
+/// Implementation of WorldExporterPort using Neo4j repository
+pub struct Neo4jWorldExporter {
+    repository: Neo4jRepository,
+}
+
+impl Neo4jWorldExporter {
+    /// Create a new Neo4jWorldExporter with the given repository
+    pub fn new(repository: Neo4jRepository) -> Self {
+        Self { repository }
+    }
+}
+
+#[async_trait]
+impl WorldExporterPort for Neo4jWorldExporter {
+    async fn export_snapshot(&self, world_id: WorldId) -> Result<PlayerWorldSnapshot> {
+        WorldSnapshotBuilder::new(world_id, &self.repository)
+            .build()
+            .await
+    }
+
+    async fn export_snapshot_with_options(
+        &self,
+        world_id: WorldId,
+        options: ExportOptions,
+    ) -> Result<PlayerWorldSnapshot> {
+        let mut builder = WorldSnapshotBuilder::new(world_id, &self.repository);
+
+        if let Some(scene_id) = options.current_scene_id {
+            builder = builder.with_current_scene(scene_id);
+        }
+
+        if options.include_inactive_characters {
+            builder = builder.include_inactive_characters();
+        }
+
+        builder.build().await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::value_objects::RuleSystemConfig;
 
     #[test]
     fn test_world_data_serialization() {

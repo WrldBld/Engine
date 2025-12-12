@@ -5,17 +5,16 @@
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
+use std::sync::Arc;
 use tracing::{debug, info, instrument};
 
-use crate::application::ports::outbound::CharacterRepositoryPort;
+use crate::application::ports::outbound::{
+    CharacterRepositoryPort, RelationshipRepositoryPort, WorldRepositoryPort,
+};
 use crate::domain::entities::{Character, StatBlock};
 use crate::domain::value_objects::{
     CampbellArchetype, CharacterId, Relationship, Want, WantId, WorldId,
 };
-
-// TODO: This infrastructure import should be moved behind a port trait
-// This is a known architecture violation that will be addressed in Phase 3
-use crate::infrastructure::persistence::Neo4jRepository;
 
 /// Request to create a new character
 #[derive(Debug, Clone)]
@@ -123,15 +122,25 @@ pub trait CharacterService: Send + Sync {
     async fn set_active(&self, id: CharacterId, active: bool) -> Result<Character>;
 }
 
-/// Default implementation of CharacterService using Neo4j repository
+/// Default implementation of CharacterService using port abstractions
 pub struct CharacterServiceImpl {
-    repository: Neo4jRepository,
+    world_repository: Arc<dyn WorldRepositoryPort>,
+    character_repository: Arc<dyn CharacterRepositoryPort>,
+    relationship_repository: Arc<dyn RelationshipRepositoryPort>,
 }
 
 impl CharacterServiceImpl {
-    /// Create a new CharacterServiceImpl with the given repository
-    pub fn new(repository: Neo4jRepository) -> Self {
-        Self { repository }
+    /// Create a new CharacterServiceImpl with the given repositories
+    pub fn new(
+        world_repository: Arc<dyn WorldRepositoryPort>,
+        character_repository: Arc<dyn CharacterRepositoryPort>,
+        relationship_repository: Arc<dyn RelationshipRepositoryPort>,
+    ) -> Self {
+        Self {
+            world_repository,
+            character_repository,
+            relationship_repository,
+        }
     }
 
     /// Validate a character creation request
@@ -177,8 +186,7 @@ impl CharacterService for CharacterServiceImpl {
 
         // Verify the world exists
         let _ = self
-            .repository
-            .worlds()
+            .world_repository
             .get(request.world_id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("World not found: {}", request.world_id))?;
@@ -201,8 +209,7 @@ impl CharacterService for CharacterServiceImpl {
             character = character.with_want(want);
         }
 
-        self.repository
-            .characters()
+        self.character_repository
             .create(&character)
             .await
             .context("Failed to create character in repository")?;
@@ -220,8 +227,7 @@ impl CharacterService for CharacterServiceImpl {
     #[instrument(skip(self))]
     async fn get_character(&self, id: CharacterId) -> Result<Option<Character>> {
         debug!(character_id = %id, "Fetching character");
-        self.repository
-            .characters()
+        self.character_repository
             .get(id)
             .await
             .context("Failed to get character from repository")
@@ -234,15 +240,14 @@ impl CharacterService for CharacterServiceImpl {
     ) -> Result<Option<CharacterWithRelationships>> {
         debug!(character_id = %id, "Fetching character with relationships");
 
-        let character = match self.repository.characters().get(id).await? {
+        let character = match self.character_repository.get(id).await? {
             Some(c) => c,
             None => return Ok(None),
         };
 
         let relationships = self
-            .repository
-            .relationships()
-            .get_involving_character(id)
+            .relationship_repository
+            .get_for_character(id)
             .await
             .context("Failed to get relationships for character")?;
 
@@ -255,9 +260,8 @@ impl CharacterService for CharacterServiceImpl {
     #[instrument(skip(self))]
     async fn list_characters(&self, world_id: WorldId) -> Result<Vec<Character>> {
         debug!(world_id = %world_id, "Listing characters in world");
-        self.repository
-            .characters()
-            .list_by_world(world_id)
+        self.character_repository
+            .list(world_id)
             .await
             .context("Failed to list characters from repository")
     }
@@ -266,9 +270,8 @@ impl CharacterService for CharacterServiceImpl {
     async fn list_active_characters(&self, world_id: WorldId) -> Result<Vec<Character>> {
         debug!(world_id = %world_id, "Listing active characters in world");
         let characters = self
-            .repository
-            .characters()
-            .list_by_world(world_id)
+            .character_repository
+            .list(world_id)
             .await
             .context("Failed to list characters from repository")?;
 
@@ -284,8 +287,7 @@ impl CharacterService for CharacterServiceImpl {
         Self::validate_update_request(&request)?;
 
         let mut character = self
-            .repository
-            .characters()
+            .character_repository
             .get(id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("Character not found: {}", id))?;
@@ -312,8 +314,7 @@ impl CharacterService for CharacterServiceImpl {
             character.is_active = is_active;
         }
 
-        self.repository
-            .characters()
+        self.character_repository
             .update(&character)
             .await
             .context("Failed to update character in repository")?;
@@ -325,14 +326,12 @@ impl CharacterService for CharacterServiceImpl {
     #[instrument(skip(self))]
     async fn delete_character(&self, id: CharacterId) -> Result<()> {
         let character = self
-            .repository
-            .characters()
+            .character_repository
             .get(id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("Character not found: {}", id))?;
 
-        self.repository
-            .characters()
+        self.character_repository
             .delete(id)
             .await
             .context("Failed to delete character from repository")?;
@@ -352,8 +351,7 @@ impl CharacterService for CharacterServiceImpl {
         }
 
         let mut character = self
-            .repository
-            .characters()
+            .character_repository
             .get(id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("Character not found: {}", id))?;
@@ -361,8 +359,7 @@ impl CharacterService for CharacterServiceImpl {
         let old_archetype = character.current_archetype;
         character.change_archetype(request.new_archetype, &request.reason);
 
-        self.repository
-            .characters()
+        self.character_repository
             .update(&character)
             .await
             .context("Failed to update character archetype in repository")?;
@@ -385,16 +382,14 @@ impl CharacterService for CharacterServiceImpl {
         archetype: CampbellArchetype,
     ) -> Result<Character> {
         let mut character = self
-            .repository
-            .characters()
+            .character_repository
             .get(id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("Character not found: {}", id))?;
 
         character.assume_archetype(archetype);
 
-        self.repository
-            .characters()
+        self.character_repository
             .update(&character)
             .await
             .context("Failed to update character temporary archetype")?;
@@ -411,16 +406,14 @@ impl CharacterService for CharacterServiceImpl {
     #[instrument(skip(self))]
     async fn revert_to_base_archetype(&self, id: CharacterId) -> Result<Character> {
         let mut character = self
-            .repository
-            .characters()
+            .character_repository
             .get(id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("Character not found: {}", id))?;
 
         character.revert_to_base();
 
-        self.repository
-            .characters()
+        self.character_repository
             .update(&character)
             .await
             .context("Failed to revert character to base archetype")?;
@@ -437,16 +430,14 @@ impl CharacterService for CharacterServiceImpl {
     #[instrument(skip(self, want), fields(character_id = %id))]
     async fn add_want(&self, id: CharacterId, want: Want) -> Result<Character> {
         let mut character = self
-            .repository
-            .characters()
+            .character_repository
             .get(id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("Character not found: {}", id))?;
 
         character.wants.push(want.clone());
 
-        self.repository
-            .characters()
+        self.character_repository
             .update(&character)
             .await
             .context("Failed to add want to character")?;
@@ -463,8 +454,7 @@ impl CharacterService for CharacterServiceImpl {
     #[instrument(skip(self), fields(character_id = %id, want_id = %want_id))]
     async fn remove_want(&self, id: CharacterId, want_id: WantId) -> Result<Character> {
         let mut character = self
-            .repository
-            .characters()
+            .character_repository
             .get(id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("Character not found: {}", id))?;
@@ -472,8 +462,7 @@ impl CharacterService for CharacterServiceImpl {
         if let Some(pos) = character.wants.iter().position(|w| w.id == want_id) {
             character.wants.remove(pos);
 
-            self.repository
-                .characters()
+            self.character_repository
                 .update(&character)
                 .await
                 .context("Failed to remove want from character")?;
@@ -492,16 +481,14 @@ impl CharacterService for CharacterServiceImpl {
     #[instrument(skip(self, wants), fields(character_id = %id, want_count = wants.len()))]
     async fn update_wants(&self, id: CharacterId, wants: Vec<Want>) -> Result<Character> {
         let mut character = self
-            .repository
-            .characters()
+            .character_repository
             .get(id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("Character not found: {}", id))?;
 
         character.wants = wants;
 
-        self.repository
-            .characters()
+        self.character_repository
             .update(&character)
             .await
             .context("Failed to update character wants")?;
@@ -513,8 +500,7 @@ impl CharacterService for CharacterServiceImpl {
     #[instrument(skip(self))]
     async fn kill_character(&self, id: CharacterId) -> Result<Character> {
         let mut character = self
-            .repository
-            .characters()
+            .character_repository
             .get(id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("Character not found: {}", id))?;
@@ -525,8 +511,7 @@ impl CharacterService for CharacterServiceImpl {
 
         character.is_alive = false;
 
-        self.repository
-            .characters()
+        self.character_repository
             .update(&character)
             .await
             .context("Failed to update character death status")?;
@@ -538,8 +523,7 @@ impl CharacterService for CharacterServiceImpl {
     #[instrument(skip(self))]
     async fn resurrect_character(&self, id: CharacterId) -> Result<Character> {
         let mut character = self
-            .repository
-            .characters()
+            .character_repository
             .get(id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("Character not found: {}", id))?;
@@ -550,8 +534,7 @@ impl CharacterService for CharacterServiceImpl {
 
         character.is_alive = true;
 
-        self.repository
-            .characters()
+        self.character_repository
             .update(&character)
             .await
             .context("Failed to update character resurrection status")?;
@@ -563,16 +546,14 @@ impl CharacterService for CharacterServiceImpl {
     #[instrument(skip(self), fields(character_id = %id, active = active))]
     async fn set_active(&self, id: CharacterId, active: bool) -> Result<Character> {
         let mut character = self
-            .repository
-            .characters()
+            .character_repository
             .get(id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("Character not found: {}", id))?;
 
         character.is_active = active;
 
-        self.repository
-            .characters()
+        self.character_repository
             .update(&character)
             .await
             .context("Failed to update character active status")?;
