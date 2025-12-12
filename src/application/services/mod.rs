@@ -18,7 +18,8 @@ pub mod world_service;
 // Re-export LLM service types
 #[allow(unused_imports)]
 pub use llm_service::{
-    GamePromptRequest, LLMGameResponse, LLMService,
+    ActiveNarrativeEventContext, GamePromptRequest, LLMGameResponse, LLMService,
+    NarrativeEventSuggestion,
 };
 
 // Re-export world service types

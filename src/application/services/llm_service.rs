@@ -131,6 +131,7 @@ impl<L: LlmPort> LLMService<L> {
             &request.responding_character,
             directorial_notes,
             &request.active_challenges,
+            &request.active_narrative_events,
         );
         let user_message = self.build_user_message(&request);
 
@@ -161,7 +162,7 @@ impl<L: LlmPort> LLMService<L> {
         context: &SceneContext,
         character: &CharacterContext,
     ) -> String {
-        self.build_system_prompt_with_notes(context, character, None, &[])
+        self.build_system_prompt_with_notes(context, character, None, &[], &[])
     }
 
     /// Build system prompt with optional directorial notes
@@ -174,6 +175,7 @@ impl<L: LlmPort> LLMService<L> {
         character: &CharacterContext,
         directorial_notes: Option<&DirectorialNotes>,
         active_challenges: &[ActiveChallengeContext],
+        active_narrative_events: &[ActiveNarrativeEventContext],
     ) -> String {
         let mut prompt = String::new();
 
@@ -269,6 +271,42 @@ impl<L: LlmPort> LLMService<L> {
             prompt.push_str("</challenge_suggestion>\n\n");
         }
 
+        // Active narrative events - DM-designed story beats that can be triggered
+        if !active_narrative_events.is_empty() {
+            prompt.push_str("## Active Narrative Events\n");
+            prompt.push_str("The following story events may be triggered based on player actions or conversation:\n\n");
+            for (idx, event) in active_narrative_events.iter().enumerate() {
+                prompt.push_str(&format!(
+                    "{}. \"{}\" (Priority: {})\n",
+                    idx + 1,
+                    event.name,
+                    event.priority
+                ));
+                prompt.push_str(&format!(
+                    "   Description: {}\n",
+                    event.description
+                ));
+                if !event.trigger_hints.is_empty() {
+                    prompt.push_str(&format!(
+                        "   Triggers when: {}\n",
+                        event.trigger_hints.join(", ")
+                    ));
+                }
+                if !event.featured_npc_names.is_empty() {
+                    prompt.push_str(&format!(
+                        "   Featured NPCs: {}\n",
+                        event.featured_npc_names.join(", ")
+                    ));
+                }
+                prompt.push_str("\n");
+            }
+
+            prompt.push_str("If a player's action or dialogue matches a narrative event trigger, suggest triggering it using:\n");
+            prompt.push_str("<narrative_event_suggestion>\n");
+            prompt.push_str("{\"event_id\": \"...\", \"confidence\": \"high|medium|low\", \"reasoning\": \"...\", \"matched_triggers\": [\"...\"]}\n");
+            prompt.push_str("</narrative_event_suggestion>\n\n");
+        }
+
         // Response format instructions
         prompt.push_str(r#"
 
@@ -283,6 +321,7 @@ Your internal thoughts about how to respond. Consider:
 - Are any game mechanics or tool calls dramatically appropriate?
 - How do the directorial notes influence your response?
 - Could the player's action trigger any of the active challenges?
+- Could the player's action or dialogue trigger any narrative events?
 This section is hidden from the player but shown to the Game Master for review.
 </reasoning>
 
@@ -510,12 +549,20 @@ Only propose tool calls when dramatically appropriate. The Game Master will appr
                 serde_json::from_str::<ChallengeSuggestion>(&suggestion_text).ok()
             });
 
+        // Parse narrative event suggestion if present
+        let narrative_event_suggestion = self
+            .extract_tag_content(content, "narrative_event_suggestion")
+            .and_then(|suggestion_text| {
+                serde_json::from_str::<NarrativeEventSuggestion>(&suggestion_text).ok()
+            });
+
         Ok(LLMGameResponse {
             npc_dialogue: dialogue.trim().to_string(),
             internal_reasoning: reasoning.trim().to_string(),
             proposed_tool_calls,
             suggested_beats,
             challenge_suggestion,
+            narrative_event_suggestion,
         })
     }
 
@@ -821,6 +868,8 @@ pub struct GamePromptRequest {
     pub responding_character: CharacterContext,
     /// Active challenges that could be triggered
     pub active_challenges: Vec<ActiveChallengeContext>,
+    /// Active narrative events that could be triggered
+    pub active_narrative_events: Vec<ActiveNarrativeEventContext>,
 }
 
 /// Context about the player's action
@@ -888,6 +937,25 @@ pub struct ActiveChallengeContext {
     pub trigger_hints: Vec<String>,
 }
 
+/// Context about an active narrative event that may be triggered
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActiveNarrativeEventContext {
+    /// Unique identifier for the narrative event
+    pub id: String,
+    /// Display name of the event
+    pub name: String,
+    /// Brief description of what this event represents
+    pub description: String,
+    /// Scene direction text to help DM narrate when triggered
+    pub scene_direction: String,
+    /// Keywords/phrases that indicate this event should trigger
+    pub trigger_hints: Vec<String>,
+    /// Names of NPCs featured in this event
+    pub featured_npc_names: Vec<String>,
+    /// Priority level (higher = more important)
+    pub priority: i32,
+}
+
 /// Suggested challenge from the LLM
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChallengeSuggestion {
@@ -897,6 +965,19 @@ pub struct ChallengeSuggestion {
     pub confidence: SuggestionConfidence,
     /// Why the LLM suggests this challenge
     pub reasoning: String,
+}
+
+/// Suggested narrative event trigger from the LLM
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NarrativeEventSuggestion {
+    /// ID of the suggested narrative event
+    pub event_id: String,
+    /// Confidence level of the suggestion
+    pub confidence: SuggestionConfidence,
+    /// Why the LLM suggests triggering this event
+    pub reasoning: String,
+    /// Which triggers matched based on context
+    pub matched_triggers: Vec<String>,
 }
 
 /// Confidence level for a challenge suggestion
@@ -921,6 +1002,8 @@ pub struct LLMGameResponse {
     pub suggested_beats: Vec<String>,
     /// Optional suggested challenge from the LLM
     pub challenge_suggestion: Option<ChallengeSuggestion>,
+    /// Optional suggested narrative event trigger from the LLM
+    pub narrative_event_suggestion: Option<NarrativeEventSuggestion>,
 }
 
 /// A proposed tool call that requires DM approval

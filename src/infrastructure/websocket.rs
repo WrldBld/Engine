@@ -20,7 +20,8 @@ use crate::infrastructure::export::{load_world_snapshot, PlayerWorldSnapshot};
 use crate::infrastructure::session::{ClientId, SessionError, WorldSnapshot};
 use crate::infrastructure::state::AppState;
 use crate::application::services::llm_service::{
-    GamePromptRequest, PlayerActionContext, SceneContext, CharacterContext,
+    ActiveNarrativeEventContext, GamePromptRequest, PlayerActionContext, SceneContext,
+    CharacterContext,
 };
 
 /// WebSocket upgrade handler
@@ -232,6 +233,7 @@ async fn process_player_action_with_llm(
             conversation_history: vec![], // TODO: Load from conversation history
             responding_character: character_context.clone(),
             active_challenges: vec![], // TODO: Fetch from challenge repository
+            active_narrative_events: vec![], // TODO: Fetch from narrative events repository
         };
 
         (prompt_request, character_context.name.clone())
@@ -265,6 +267,19 @@ async fn process_player_action_with_llm(
                 }
             });
 
+            // Convert narrative event suggestion if present
+            let narrative_event_suggestion = response.narrative_event_suggestion.as_ref().map(|nes| {
+                NarrativeEventSuggestionInfo {
+                    event_id: nes.event_id.clone(),
+                    event_name: String::new(), // Will be enriched from event data
+                    description: String::new(),
+                    scene_direction: String::new(),
+                    confidence: format!("{:?}", nes.confidence).to_lowercase(),
+                    reasoning: nes.reasoning.clone(),
+                    matched_triggers: nes.matched_triggers.clone(),
+                }
+            });
+
             // Send ApprovalRequired message to DM
             let approval_msg = ServerMessage::ApprovalRequired {
                 request_id: action_id.clone(),
@@ -273,6 +288,7 @@ async fn process_player_action_with_llm(
                 internal_reasoning: response.internal_reasoning.clone(),
                 proposed_tools: proposed_tools.clone(),
                 challenge_suggestion,
+                narrative_event_suggestion,
             };
 
             // Store pending approval and send to DM
@@ -720,6 +736,53 @@ async fn handle_message(
             // This would either trigger the challenge or discard the suggestion
             None
         }
+
+        ClientMessage::NarrativeEventSuggestionDecision {
+            request_id,
+            event_id,
+            approved,
+            selected_outcome,
+        } => {
+            tracing::debug!(
+                "Received narrative event suggestion decision for {}: event={}, approved={}, outcome={:?}",
+                request_id,
+                event_id,
+                approved,
+                selected_outcome
+            );
+
+            // Only DMs should approve narrative event triggers
+            let sessions = state.sessions.read().await;
+            if let Some(session_id) = sessions.get_client_session(client_id) {
+                if let Some(session) = sessions.get_session(session_id) {
+                    // Verify this client is the DM
+                    if let Some(dm) = session.get_dm() {
+                        if dm.client_id == client_id {
+                            if approved {
+                                // TODO: Implement narrative event triggering
+                                // 1. Load the narrative event from repository
+                                // 2. Mark it as triggered (with selected_outcome)
+                                // 3. Execute any immediate effects
+                                // 4. Record a StoryEvent for the timeline
+                                // 5. Broadcast scene direction to DM
+                                tracing::info!(
+                                    "DM approved narrative event {} trigger for request {}",
+                                    event_id,
+                                    request_id
+                                );
+                            } else {
+                                tracing::info!(
+                                    "DM rejected narrative event {} trigger for request {}",
+                                    event_id,
+                                    request_id
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+            None
+        }
     }
 }
 
@@ -1024,6 +1087,14 @@ pub enum ClientMessage {
         approved: bool,
         modified_difficulty: Option<String>,
     },
+    /// DM approves/rejects a suggested narrative event trigger
+    NarrativeEventSuggestionDecision {
+        request_id: String,
+        event_id: String,
+        approved: bool,
+        /// Optional selected outcome if DM pre-selects an outcome
+        selected_outcome: Option<String>,
+    },
     /// Heartbeat ping
     Heartbeat,
 }
@@ -1076,6 +1147,7 @@ pub enum ServerMessage {
         internal_reasoning: String,
         proposed_tools: Vec<ProposedTool>,
         challenge_suggestion: Option<ChallengeSuggestionInfo>,
+        narrative_event_suggestion: Option<NarrativeEventSuggestionInfo>,
     },
     /// Response was approved and executed
     ResponseApproved {
@@ -1247,4 +1319,16 @@ pub struct ChallengeSuggestionInfo {
     pub difficulty_display: String,
     pub confidence: String,
     pub reasoning: String,
+}
+
+/// Narrative event suggestion information for DM approval
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NarrativeEventSuggestionInfo {
+    pub event_id: String,
+    pub event_name: String,
+    pub description: String,
+    pub scene_direction: String,
+    pub confidence: String,
+    pub reasoning: String,
+    pub matched_triggers: Vec<String>,
 }
