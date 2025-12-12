@@ -9,6 +9,11 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use uuid::Uuid;
 
+use crate::application::services::{
+    ChangeArchetypeRequest as ServiceChangeArchetypeRequest, CharacterService,
+    CreateCharacterRequest as ServiceCreateCharacterRequest,
+    UpdateCharacterRequest as ServiceUpdateCharacterRequest,
+};
 use crate::domain::entities::Character;
 use crate::domain::value_objects::{
     CampbellArchetype, CharacterId, Relationship, RelationshipId, RelationshipType, WorldId,
@@ -68,9 +73,8 @@ pub async fn list_characters(
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid world ID".to_string()))?;
 
     let characters = state
-        .repository
-        .characters()
-        .list_by_world(WorldId::from_uuid(uuid))
+        .character_service
+        .list_characters(WorldId::from_uuid(uuid))
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -92,22 +96,24 @@ pub async fn create_character(
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid world ID".to_string()))?;
 
     let archetype = parse_archetype(&req.archetype);
-    let mut character = Character::new(WorldId::from_uuid(uuid), &req.name, archetype);
+    let service_request = ServiceCreateCharacterRequest {
+        world_id: WorldId::from_uuid(uuid),
+        name: req.name,
+        description: if req.description.is_empty() {
+            None
+        } else {
+            Some(req.description)
+        },
+        archetype,
+        sprite_asset: req.sprite_asset,
+        portrait_asset: req.portrait_asset,
+        stats: None,
+        wants: vec![],
+    };
 
-    if !req.description.is_empty() {
-        character = character.with_description(&req.description);
-    }
-    if let Some(sprite) = req.sprite_asset {
-        character = character.with_sprite(&sprite);
-    }
-    if let Some(portrait) = req.portrait_asset {
-        character = character.with_portrait(&portrait);
-    }
-
-    state
-        .repository
-        .characters()
-        .create(&character)
+    let character = state
+        .character_service
+        .create_character(service_request)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -126,9 +132,8 @@ pub async fn get_character(
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid character ID".to_string()))?;
 
     let character = state
-        .repository
-        .characters()
-        .get(CharacterId::from_uuid(uuid))
+        .character_service
+        .get_character(CharacterId::from_uuid(uuid))
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .ok_or_else(|| (StatusCode::NOT_FOUND, "Character not found".to_string()))?;
@@ -145,25 +150,31 @@ pub async fn update_character(
     let uuid = Uuid::parse_str(&id)
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid character ID".to_string()))?;
 
-    let mut character = state
-        .repository
-        .characters()
-        .get(CharacterId::from_uuid(uuid))
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or_else(|| (StatusCode::NOT_FOUND, "Character not found".to_string()))?;
+    let service_request = ServiceUpdateCharacterRequest {
+        name: Some(req.name),
+        description: if req.description.is_empty() {
+            None
+        } else {
+            Some(req.description)
+        },
+        sprite_asset: req.sprite_asset,
+        portrait_asset: req.portrait_asset,
+        stats: None,
+        is_alive: None,
+        is_active: None,
+    };
 
-    character.name = req.name;
-    character.description = req.description;
-    character.sprite_asset = req.sprite_asset;
-    character.portrait_asset = req.portrait_asset;
-
-    state
-        .repository
-        .characters()
-        .update(&character)
+    let character = state
+        .character_service
+        .update_character(CharacterId::from_uuid(uuid), service_request)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|e| {
+            if e.to_string().contains("not found") {
+                (StatusCode::NOT_FOUND, "Character not found".to_string())
+            } else {
+                (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+            }
+        })?;
 
     Ok(Json(CharacterResponse::from(character)))
 }
@@ -177,11 +188,16 @@ pub async fn delete_character(
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid character ID".to_string()))?;
 
     state
-        .repository
-        .characters()
-        .delete(CharacterId::from_uuid(uuid))
+        .character_service
+        .delete_character(CharacterId::from_uuid(uuid))
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|e| {
+            if e.to_string().contains("not found") {
+                (StatusCode::NOT_FOUND, "Character not found".to_string())
+            } else {
+                (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+            }
+        })?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -202,13 +218,22 @@ pub async fn change_archetype(
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid character ID".to_string()))?;
 
     let archetype = parse_archetype(&req.archetype);
+    let service_request = ServiceChangeArchetypeRequest {
+        new_archetype: archetype,
+        reason: req.reason,
+    };
 
     state
-        .repository
-        .characters()
-        .change_archetype(CharacterId::from_uuid(uuid), archetype, &req.reason)
+        .character_service
+        .change_archetype(CharacterId::from_uuid(uuid), service_request)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|e| {
+            if e.to_string().contains("not found") {
+                (StatusCode::NOT_FOUND, "Character not found".to_string())
+            } else {
+                (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+            }
+        })?;
 
     Ok(StatusCode::OK)
 }
