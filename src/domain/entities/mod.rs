@@ -14,14 +14,14 @@ mod workflow_config;
 mod world;
 
 pub use challenge::{
-    Challenge, ChallengeOutcomes, ChallengeResult, ChallengeType, ComplexChallengeSettings,
-    Difficulty, DifficultyDescriptor, Outcome, OutcomeTrigger, OutcomeType, TriggerCondition,
+    Challenge, ChallengeOutcomes, ChallengeType,
+    Difficulty, DifficultyDescriptor, Outcome, OutcomeTrigger, TriggerCondition,
     TriggerType,
 };
 pub use character::{Character, StatBlock};
 pub use gallery_asset::{AssetType, EntityType, GalleryAsset, GenerationMetadata};
-pub use generation_batch::{BatchSelection, BatchStatus, GenerationBatch, GenerationRequest};
-pub use grid_map::{GridMap, TerrainType, Tile};
+pub use generation_batch::{BatchStatus, GenerationBatch};
+pub use grid_map::{GridMap};
 pub use interaction::{
     InteractionCondition, InteractionTarget, InteractionTemplate, InteractionType,
 };
@@ -30,8 +30,8 @@ pub use location::{
 };
 pub use scene::{Scene, SceneCondition, TimeContext};
 pub use sheet_template::{
-    CharacterSheetData, CharacterSheetTemplate, FieldType, FieldValue, ItemListType,
-    SectionLayout, SelectOption, SheetField, SheetSection, SheetTemplateId,
+    CharacterSheetTemplate, FieldType,
+    SectionLayout, SheetField, SheetSection, SheetTemplateId,
 };
 pub use skill::{default_skills_for_variant, Skill, SkillCategory};
 pub use workflow_config::{

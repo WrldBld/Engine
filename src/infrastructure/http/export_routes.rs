@@ -23,7 +23,7 @@ pub struct ExportQuery {
 pub async fn export_world(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
-    Query(query): Query<ExportQuery>,
+    Query(_query): Query<ExportQuery>,
 ) -> Result<Json<WorldSnapshot>, (StatusCode, String)> {
     let uuid = Uuid::parse_str(&id)
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid world ID".to_string()))?;

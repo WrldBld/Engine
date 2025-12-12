@@ -5,7 +5,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
 use crate::application::ports::outbound::{
-    ChatMessage, FinishReason, LlmPort, LlmRequest, LlmResponse, MessageRole, TokenUsage, ToolCall,
+    FinishReason, LlmPort, LlmRequest, LlmResponse, MessageRole, TokenUsage, ToolCall,
     ToolDefinition,
 };
 

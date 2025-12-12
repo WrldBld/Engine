@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use crate::domain::entities::Character;
 use crate::domain::value_objects::{
-    CampbellArchetype, CharacterId, Relationship, RelationshipId, RelationshipType, Want, WorldId,
+    CampbellArchetype, CharacterId, Relationship, RelationshipId, RelationshipType, WorldId,
 };
 use crate::infrastructure::persistence::SocialNetwork;
 use crate::infrastructure::state::AppState;

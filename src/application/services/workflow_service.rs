@@ -11,7 +11,7 @@ use rand::Rng;
 
 use crate::domain::entities::{
     InputDefault, InputType, PromptMapping, PromptMappingType, WorkflowAnalysis,
-    WorkflowConfiguration, WorkflowInput, WorkflowSlot,
+    WorkflowConfiguration, WorkflowInput,
 };
 
 /// Service for working with ComfyUI workflows
@@ -123,7 +123,7 @@ impl WorkflowService {
 
         // Check that at least some nodes have the expected structure
         let mut valid_nodes = 0;
-        for (node_id, node) in nodes {
+        for (_node_id, node) in nodes {
             if !node.is_object() {
                 continue;
             }

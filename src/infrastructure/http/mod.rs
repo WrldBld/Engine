@@ -22,16 +22,6 @@ use std::sync::Arc;
 
 use crate::infrastructure::state::AppState;
 
-pub use asset_routes::*;
-pub use challenge_routes::*;
-pub use character_routes::*;
-pub use export_routes::*;
-pub use interaction_routes::*;
-pub use location_routes::*;
-pub use scene_routes::*;
-pub use suggestion_routes::*;
-pub use workflow_routes::*;
-pub use world_routes::*;
 
 /// Create all API routes
 pub fn create_routes() -> Router<Arc<AppState>> {

@@ -622,7 +622,7 @@ async fn handle_message(
 
                                         // Store the rejection feedback for LLM context
                                         // This would be used in the next LLM call
-                                        let rejection_context = format!(
+                                        let _rejection_context = format!(
                                             "Previous response was rejected with feedback: {}",
                                             feedback
                                         );
@@ -1248,6 +1248,3 @@ pub struct ChallengeSuggestionInfo {
     pub confidence: String,
     pub reasoning: String,
 }
-
-// Re-export types needed by session module
-pub use ParticipantRole as WsParticipantRole;

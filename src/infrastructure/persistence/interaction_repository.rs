@@ -7,7 +7,7 @@ use super::connection::Neo4jConnection;
 use crate::domain::entities::{
     InteractionCondition, InteractionTarget, InteractionTemplate, InteractionType,
 };
-use crate::domain::value_objects::{CharacterId, InteractionId, ItemId, SceneId};
+use crate::domain::value_objects::{InteractionId, SceneId};
 
 /// Repository for InteractionTemplate operations
 pub struct Neo4jInteractionRepository {

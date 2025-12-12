@@ -14,47 +14,48 @@ pub mod tool_execution_service;
 pub mod workflow_service;
 pub mod world_service;
 
-// Re-export generation service types
-pub use generation_service::{GenerationEvent, GenerationRequest, GenerationService};
-
 // Re-export LLM service types
+#[allow(unused_imports)]
 pub use llm_service::{
-    CharacterContext, ConversationTurn, GamePromptRequest, LLMGameResponse, LLMService,
-    LLMServiceError, PlayerActionContext, ProposedToolCall, SceneContext,
+    GamePromptRequest, LLMGameResponse, LLMService,
 };
 
 // Re-export world service types
+#[allow(unused_imports)]
 pub use world_service::{
-    CreateActRequest, CreateWorldRequest, UpdateWorldRequest, WorldService, WorldServiceImpl,
-    WorldWithActs,
+    CreateActRequest, CreateWorldRequest, UpdateWorldRequest, WorldService,
 };
 
 // Re-export scene service types
+#[allow(unused_imports)]
 pub use scene_service::{
-    CreateSceneRequest, SceneService, SceneServiceImpl, SceneWithRelations, UpdateSceneRequest,
+    CreateSceneRequest, SceneService, UpdateSceneRequest,
 };
 
 // Re-export character service types
+#[allow(unused_imports)]
 pub use character_service::{
-    ChangeArchetypeRequest, CharacterService, CharacterServiceImpl, CharacterWithRelationships,
+    ChangeArchetypeRequest, CharacterService,
     CreateCharacterRequest, UpdateCharacterRequest,
 };
 
 // Re-export location service types
+#[allow(unused_imports)]
 pub use location_service::{
-    CreateConnectionRequest, CreateLocationRequest, LocationHierarchy, LocationService,
-    LocationServiceImpl, LocationWithConnections, UpdateLocationRequest,
+    CreateConnectionRequest, CreateLocationRequest, LocationService,
+    UpdateLocationRequest,
 };
 
 // Re-export suggestion service types
 pub use suggestion_service::{
-    SuggestionContext, SuggestionRequest, SuggestionResponse, SuggestionService, SuggestionType,
+    SuggestionContext, SuggestionService, SuggestionType,
 };
 
 // Re-export workflow service
 pub use workflow_service::WorkflowService;
 
 // Re-export tool execution service types
+#[allow(unused_imports)]
 pub use tool_execution_service::{
-    StateChange, ToolExecutionError, ToolExecutionResult, ToolExecutionService,
+    ToolExecutionService,
 };

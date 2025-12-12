@@ -9,12 +9,11 @@ mod rule_system;
 mod want;
 
 pub use archetype::{ArchetypeChange, CampbellArchetype};
-pub use directorial::{DirectorialNotes, NpcMotivation, PacingGuidance, ToneGuidance};
+pub use directorial::{DirectorialNotes};
 pub use game_tools::{ChangeAmount, GameTool, InfoImportance, RelationshipChange};
 pub use ids::*;
 pub use relationship::{Relationship, RelationshipEvent, RelationshipType};
 pub use rule_system::{
-    DiceSystem, RuleSystemConfig, RuleSystemType, RuleSystemVariant, StatDefinition,
-    SuccessComparison,
+    RuleSystemConfig, RuleSystemType, RuleSystemVariant,
 };
-pub use want::{ActantTarget, Want};
+pub use want::{Want};

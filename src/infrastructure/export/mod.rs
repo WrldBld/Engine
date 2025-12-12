@@ -12,7 +12,7 @@ mod world_snapshot;
 
 pub use json_exporter::{JsonExporter, WorldSnapshot};
 pub use world_snapshot::{
-    load_world_snapshot, CharacterData as PlayerCharacterData, LocationData as PlayerLocationData,
-    PlayerWorldSnapshot, SceneData as PlayerSceneData, WorldData as PlayerWorldData,
+    load_world_snapshot,
+    PlayerWorldSnapshot,
     WorldSnapshotBuilder,
 };

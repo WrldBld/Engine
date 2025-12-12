@@ -23,8 +23,7 @@ pub use connection::Neo4jConnection;
 pub use interaction_repository::Neo4jInteractionRepository;
 pub use location_repository::Neo4jLocationRepository;
 pub use relationship_repository::{
-    CharacterNode, CharacterWithSentiment, Neo4jRelationshipRepository, RelationshipEdge,
-    RelationshipPath, SocialNetwork,
+    Neo4jRelationshipRepository, SocialNetwork,
 };
 pub use scene_repository::Neo4jSceneRepository;
 pub use sheet_template_repository::Neo4jSheetTemplateRepository;

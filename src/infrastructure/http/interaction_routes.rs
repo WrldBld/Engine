@@ -10,7 +10,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::domain::entities::{
-    InteractionCondition, InteractionTarget, InteractionTemplate, InteractionType,
+    InteractionTarget, InteractionTemplate, InteractionType,
 };
 use crate::domain::value_objects::{CharacterId, InteractionId, ItemId, SceneId};
 use crate::infrastructure::state::AppState;

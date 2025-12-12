@@ -12,7 +12,6 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
-use crate::application::services::llm_service::ProposedToolCall;
 use crate::domain::entities::{Character, Location, Scene, World};
 use crate::domain::value_objects::{SessionId, WorldId};
 use crate::infrastructure::websocket::{ParticipantRole, ServerMessage, ProposedTool};

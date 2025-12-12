@@ -5,7 +5,7 @@ use neo4rs::{query, Row};
 
 use super::connection::Neo4jConnection;
 use crate::domain::entities::{
-    Challenge, ChallengeOutcomes, ChallengeType, Difficulty, TriggerCondition,
+    Challenge, ChallengeType,
 };
 use crate::domain::value_objects::{ChallengeId, SceneId, SkillId, WorldId};
 
