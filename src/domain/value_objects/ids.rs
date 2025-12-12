@@ -67,3 +67,6 @@ define_id!(BatchId);
 define_id!(WorkflowConfigId);
 define_id!(SkillId);
 define_id!(ChallengeId);
+define_id!(StoryEventId);
+define_id!(NarrativeEventId);
+define_id!(EventChainId);
