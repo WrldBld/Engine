@@ -32,8 +32,7 @@ pub use location::{
     BackdropRegion, Location, LocationConnection, LocationType, RegionBounds, SpatialRelationship,
 };
 pub use narrative_event::{
-    ChainedEvent, EventEffect, EventOutcome, NarrativeEvent, NarrativeTrigger,
-    NarrativeTriggerType, OutcomeCondition, TriggerContext, TriggerEvaluation, TriggerLogic,
+    EventOutcome, NarrativeEvent, NarrativeTrigger, TriggerLogic,
 };
 pub use scene::{Scene, SceneCondition, TimeContext};
 pub use sheet_template::{

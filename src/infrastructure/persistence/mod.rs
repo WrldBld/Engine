@@ -7,12 +7,15 @@ mod asset_repository;
 mod challenge_repository;
 mod character_repository;
 mod connection;
+mod event_chain_repository;
 mod interaction_repository;
 mod location_repository;
+mod narrative_event_repository;
 mod relationship_repository;
 mod scene_repository;
 mod sheet_template_repository;
 mod skill_repository;
+mod story_event_repository;
 mod workflow_repository;
 mod world_repository;
 
@@ -20,14 +23,17 @@ pub use asset_repository::Neo4jAssetRepository;
 pub use challenge_repository::Neo4jChallengeRepository;
 pub use character_repository::Neo4jCharacterRepository;
 pub use connection::Neo4jConnection;
+pub use event_chain_repository::Neo4jEventChainRepository;
 pub use interaction_repository::Neo4jInteractionRepository;
 pub use location_repository::Neo4jLocationRepository;
+pub use narrative_event_repository::Neo4jNarrativeEventRepository;
 pub use relationship_repository::{
     Neo4jRelationshipRepository, SocialNetwork,
 };
 pub use scene_repository::Neo4jSceneRepository;
 pub use sheet_template_repository::Neo4jSheetTemplateRepository;
 pub use skill_repository::Neo4jSkillRepository;
+pub use story_event_repository::Neo4jStoryEventRepository;
 pub use workflow_repository::Neo4jWorkflowRepository;
 pub use world_repository::Neo4jWorldRepository;
 
@@ -88,5 +94,17 @@ impl Neo4jRepository {
 
     pub fn challenges(&self) -> Neo4jChallengeRepository {
         Neo4jChallengeRepository::new(self.connection.clone())
+    }
+
+    pub fn story_events(&self) -> Neo4jStoryEventRepository {
+        Neo4jStoryEventRepository::new(self.connection.clone())
+    }
+
+    pub fn narrative_events(&self) -> Neo4jNarrativeEventRepository {
+        Neo4jNarrativeEventRepository::new(self.connection.clone())
+    }
+
+    pub fn event_chains(&self) -> Neo4jEventChainRepository {
+        Neo4jEventChainRepository::new(self.connection.clone())
     }
 }
