@@ -1,9 +1,11 @@
 //! World repository implementation for Neo4j
 
 use anyhow::Result;
+use async_trait::async_trait;
 use neo4rs::{query, Row};
 
 use super::connection::Neo4jConnection;
+use crate::application::ports::outbound::WorldRepositoryPort;
 use crate::domain::entities::{Act, MonomythStage, World};
 use crate::domain::value_objects::{ActId, RuleSystemConfig, WorldId};
 
@@ -229,4 +231,39 @@ fn row_to_act(row: Row) -> Result<Act> {
         description,
         order: order_num as u32,
     })
+}
+
+// =============================================================================
+// WorldRepositoryPort Implementation
+// =============================================================================
+
+#[async_trait]
+impl WorldRepositoryPort for Neo4jWorldRepository {
+    async fn create(&self, world: &World) -> Result<()> {
+        Neo4jWorldRepository::create(self, world).await
+    }
+
+    async fn get(&self, id: WorldId) -> Result<Option<World>> {
+        Neo4jWorldRepository::get(self, id).await
+    }
+
+    async fn list(&self) -> Result<Vec<World>> {
+        Neo4jWorldRepository::list(self).await
+    }
+
+    async fn update(&self, world: &World) -> Result<()> {
+        Neo4jWorldRepository::update(self, world).await
+    }
+
+    async fn delete(&self, id: WorldId) -> Result<()> {
+        Neo4jWorldRepository::delete(self, id).await
+    }
+
+    async fn create_act(&self, act: &Act) -> Result<()> {
+        Neo4jWorldRepository::create_act(self, act).await
+    }
+
+    async fn get_acts(&self, world_id: WorldId) -> Result<Vec<Act>> {
+        Neo4jWorldRepository::get_acts(self, world_id).await
+    }
 }

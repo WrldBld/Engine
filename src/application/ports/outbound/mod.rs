@@ -7,3 +7,9 @@ pub use llm_port::{
     ChatMessage, FinishReason, LlmPort, LlmRequest, LlmResponse, MessageRole,
     TokenUsage, ToolCall, ToolDefinition,
 };
+
+pub use repository_port::{
+    AssetRepositoryPort, CharacterRepositoryPort, GridMapRepositoryPort,
+    InteractionRepositoryPort, LocationRepositoryPort, RelationshipRepositoryPort,
+    RepositoryProvider, SceneRepositoryPort, SkillRepositoryPort, WorldRepositoryPort,
+};
