@@ -1,9 +1,11 @@
 //! Scene repository implementation for Neo4j
 
 use anyhow::Result;
+use async_trait::async_trait;
 use neo4rs::{query, Row};
 
 use super::connection::Neo4jConnection;
+use crate::application::ports::outbound::SceneRepositoryPort;
 use crate::domain::entities::{Scene, SceneCondition, TimeContext};
 use crate::domain::value_objects::{ActId, CharacterId, LocationId, SceneId};
 
@@ -252,4 +254,39 @@ fn row_to_scene(row: Row) -> Result<Scene> {
         directorial_notes,
         order: order_num as u32,
     })
+}
+
+// =============================================================================
+// SceneRepositoryPort Implementation
+// =============================================================================
+
+#[async_trait]
+impl SceneRepositoryPort for Neo4jSceneRepository {
+    async fn create(&self, scene: &Scene) -> Result<()> {
+        Neo4jSceneRepository::create(self, scene).await
+    }
+
+    async fn get(&self, id: SceneId) -> Result<Option<Scene>> {
+        Neo4jSceneRepository::get(self, id).await
+    }
+
+    async fn list_by_act(&self, act_id: ActId) -> Result<Vec<Scene>> {
+        Neo4jSceneRepository::list_by_act(self, act_id).await
+    }
+
+    async fn list_by_location(&self, location_id: LocationId) -> Result<Vec<Scene>> {
+        Neo4jSceneRepository::list_by_location(self, location_id).await
+    }
+
+    async fn update(&self, scene: &Scene) -> Result<()> {
+        Neo4jSceneRepository::update(self, scene).await
+    }
+
+    async fn delete(&self, id: SceneId) -> Result<()> {
+        Neo4jSceneRepository::delete(self, id).await
+    }
+
+    async fn update_directorial_notes(&self, id: SceneId, notes: &str) -> Result<()> {
+        Neo4jSceneRepository::update_directorial_notes(self, id, notes).await
+    }
 }

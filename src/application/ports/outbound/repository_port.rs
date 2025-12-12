@@ -7,11 +7,11 @@ use anyhow::Result;
 use async_trait::async_trait;
 
 use crate::domain::entities::{
-    Act, Character, GalleryAsset, GenerationBatch, GridMap, InteractionTemplate, Location, Scene,
-    Skill, World,
+    Act, Character, GalleryAsset, GenerationBatch, GridMap, InteractionTemplate, Location,
+    LocationConnection, Scene, Skill, World,
 };
 use crate::domain::value_objects::{
-    AssetId, BatchId, CharacterId, GridMapId, LocationId, Relationship, SceneId, WorldId,
+    ActId, AssetId, BatchId, CharacterId, GridMapId, LocationId, Relationship, SceneId, WorldId,
 };
 
 // =============================================================================
@@ -90,6 +90,15 @@ pub trait LocationRepositoryPort: Send + Sync {
 
     /// Delete a location
     async fn delete(&self, id: LocationId) -> Result<()>;
+
+    /// Create a connection between locations
+    async fn create_connection(&self, connection: &LocationConnection) -> Result<()>;
+
+    /// Get connections for a location
+    async fn get_connections(&self, location_id: LocationId) -> Result<Vec<LocationConnection>>;
+
+    /// Delete a connection between locations
+    async fn delete_connection(&self, from: LocationId, to: LocationId) -> Result<()>;
 }
 
 // =============================================================================
@@ -105,8 +114,11 @@ pub trait SceneRepositoryPort: Send + Sync {
     /// Get a scene by ID
     async fn get(&self, id: SceneId) -> Result<Option<Scene>>;
 
-    /// List all scenes in a world
-    async fn list(&self, world_id: WorldId) -> Result<Vec<Scene>>;
+    /// List scenes by act
+    async fn list_by_act(&self, act_id: ActId) -> Result<Vec<Scene>>;
+
+    /// List scenes by location
+    async fn list_by_location(&self, location_id: LocationId) -> Result<Vec<Scene>>;
 
     /// Update a scene
     async fn update(&self, scene: &Scene) -> Result<()>;
@@ -114,11 +126,8 @@ pub trait SceneRepositoryPort: Send + Sync {
     /// Delete a scene
     async fn delete(&self, id: SceneId) -> Result<()>;
 
-    /// Get the active scene for a world
-    async fn get_active(&self, world_id: WorldId) -> Result<Option<Scene>>;
-
-    /// Set a scene as active (deactivating others)
-    async fn set_active(&self, scene_id: SceneId) -> Result<()>;
+    /// Update directorial notes for a scene
+    async fn update_directorial_notes(&self, id: SceneId, notes: &str) -> Result<()>;
 }
 
 // =============================================================================

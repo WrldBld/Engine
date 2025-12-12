@@ -1,13 +1,15 @@
 //! Character repository implementation for Neo4j
 
 use anyhow::Result;
+use async_trait::async_trait;
 use neo4rs::{query, Row};
 
 use super::connection::Neo4jConnection;
+use crate::application::ports::outbound::CharacterRepositoryPort;
 use crate::domain::entities::Character;
 use crate::domain::entities::StatBlock;
 use crate::domain::value_objects::{
-    ArchetypeChange, CampbellArchetype, CharacterId, Want, WorldId,
+    ArchetypeChange, CampbellArchetype, CharacterId, SceneId, Want, WorldId,
 };
 
 /// Repository for Character operations
@@ -267,5 +269,38 @@ fn parse_archetype(s: &str) -> CampbellArchetype {
         "Trickster" => CampbellArchetype::Trickster,
         "Ally" => CampbellArchetype::Ally,
         _ => CampbellArchetype::Ally,
+    }
+}
+
+// =============================================================================
+// CharacterRepositoryPort Implementation
+// =============================================================================
+
+#[async_trait]
+impl CharacterRepositoryPort for Neo4jCharacterRepository {
+    async fn create(&self, character: &Character) -> Result<()> {
+        Neo4jCharacterRepository::create(self, character).await
+    }
+
+    async fn get(&self, id: CharacterId) -> Result<Option<Character>> {
+        Neo4jCharacterRepository::get(self, id).await
+    }
+
+    async fn list(&self, world_id: WorldId) -> Result<Vec<Character>> {
+        Neo4jCharacterRepository::list_by_world(self, world_id).await
+    }
+
+    async fn update(&self, character: &Character) -> Result<()> {
+        Neo4jCharacterRepository::update(self, character).await
+    }
+
+    async fn delete(&self, id: CharacterId) -> Result<()> {
+        Neo4jCharacterRepository::delete(self, id).await
+    }
+
+    async fn get_by_scene(&self, _scene_id: SceneId) -> Result<Vec<Character>> {
+        // TODO: Implement scene-based character lookup
+        // For now, return empty vec - scenes have featured_characters field
+        Ok(vec![])
     }
 }

@@ -1,9 +1,11 @@
 //! Location repository implementation for Neo4j
 
 use anyhow::Result;
+use async_trait::async_trait;
 use neo4rs::{query, Row};
 
 use super::connection::Neo4jConnection;
+use crate::application::ports::outbound::LocationRepositoryPort;
 use crate::domain::entities::{
     BackdropRegion, Location, LocationConnection, LocationType, SpatialRelationship,
 };
@@ -365,4 +367,43 @@ fn row_to_connection(row: Row) -> Result<LocationConnection> {
             Some(travel_time as u32)
         },
     })
+}
+
+// =============================================================================
+// LocationRepositoryPort Implementation
+// =============================================================================
+
+#[async_trait]
+impl LocationRepositoryPort for Neo4jLocationRepository {
+    async fn create(&self, location: &Location) -> Result<()> {
+        Neo4jLocationRepository::create(self, location).await
+    }
+
+    async fn get(&self, id: LocationId) -> Result<Option<Location>> {
+        Neo4jLocationRepository::get(self, id).await
+    }
+
+    async fn list(&self, world_id: WorldId) -> Result<Vec<Location>> {
+        Neo4jLocationRepository::list_by_world(self, world_id).await
+    }
+
+    async fn update(&self, location: &Location) -> Result<()> {
+        Neo4jLocationRepository::update(self, location).await
+    }
+
+    async fn delete(&self, id: LocationId) -> Result<()> {
+        Neo4jLocationRepository::delete(self, id).await
+    }
+
+    async fn create_connection(&self, connection: &LocationConnection) -> Result<()> {
+        Neo4jLocationRepository::create_connection(self, connection).await
+    }
+
+    async fn get_connections(&self, location_id: LocationId) -> Result<Vec<LocationConnection>> {
+        Neo4jLocationRepository::get_connections(self, location_id).await
+    }
+
+    async fn delete_connection(&self, from: LocationId, to: LocationId) -> Result<()> {
+        Neo4jLocationRepository::delete_connection(self, from, to).await
+    }
 }
