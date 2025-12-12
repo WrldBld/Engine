@@ -9,6 +9,11 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use uuid::Uuid;
 
+use crate::application::services::{
+    CreateConnectionRequest as ServiceCreateConnectionRequest,
+    CreateLocationRequest as ServiceCreateLocationRequest, LocationService,
+    UpdateLocationRequest as ServiceUpdateLocationRequest,
+};
 use crate::domain::entities::{
     BackdropRegion, Location, LocationConnection, LocationType, RegionBounds, SpatialRelationship,
 };
@@ -114,9 +119,8 @@ pub async fn list_locations(
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid world ID".to_string()))?;
 
     let locations = state
-        .repository
-        .locations()
-        .list_by_world(WorldId::from_uuid(uuid))
+        .location_service
+        .list_locations(WorldId::from_uuid(uuid))
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -135,100 +139,16 @@ pub async fn create_location(
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid world ID".to_string()))?;
 
     let location_type = parse_location_type(&req.location_type);
-    let mut location = Location::new(WorldId::from_uuid(uuid), &req.name, location_type);
 
-    if !req.description.is_empty() {
-        location = location.with_description(&req.description);
-    }
-    if let Some(backdrop) = req.backdrop_asset {
-        location = location.with_backdrop(&backdrop);
-    }
-    if let Some(parent_id) = req.parent_id {
-        let parent_uuid = Uuid::parse_str(&parent_id)
+    let parent_id = if let Some(ref parent_id_str) = req.parent_id {
+        let parent_uuid = Uuid::parse_str(parent_id_str)
             .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid parent ID".to_string()))?;
-        location = location.with_parent(LocationId::from_uuid(parent_uuid));
-    }
-    for region_req in req.backdrop_regions {
-        let region = BackdropRegion::new(
-            region_req.name,
-            RegionBounds {
-                x: region_req.bounds.x,
-                y: region_req.bounds.y,
-                width: region_req.bounds.width,
-                height: region_req.bounds.height,
-            },
-            region_req.backdrop_asset,
-        );
-        let region = if let Some(desc) = region_req.description {
-            region.with_description(desc)
-        } else {
-            region
-        };
-        location = location.with_backdrop_region(region);
-    }
-
-    state
-        .repository
-        .locations()
-        .create(&location)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    Ok((StatusCode::CREATED, Json(LocationResponse::from(location))))
-}
-
-/// Get a location by ID
-pub async fn get_location(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-) -> Result<Json<LocationResponse>, (StatusCode, String)> {
-    let uuid = Uuid::parse_str(&id)
-        .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid location ID".to_string()))?;
-
-    let location = state
-        .repository
-        .locations()
-        .get(LocationId::from_uuid(uuid))
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or_else(|| (StatusCode::NOT_FOUND, "Location not found".to_string()))?;
-
-    Ok(Json(LocationResponse::from(location)))
-}
-
-/// Update a location
-pub async fn update_location(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-    Json(req): Json<CreateLocationRequest>,
-) -> Result<Json<LocationResponse>, (StatusCode, String)> {
-    let uuid = Uuid::parse_str(&id)
-        .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid location ID".to_string()))?;
-
-    let mut location = state
-        .repository
-        .locations()
-        .get(LocationId::from_uuid(uuid))
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or_else(|| (StatusCode::NOT_FOUND, "Location not found".to_string()))?;
-
-    location.name = req.name;
-    location.description = req.description;
-    location.location_type = parse_location_type(&req.location_type);
-    location.backdrop_asset = req.backdrop_asset;
-
-    // Update parent_id
-    if let Some(parent_id) = req.parent_id {
-        let parent_uuid = Uuid::parse_str(&parent_id)
-            .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid parent ID".to_string()))?;
-        location.parent_id = Some(LocationId::from_uuid(parent_uuid));
+        Some(LocationId::from_uuid(parent_uuid))
     } else {
-        location.parent_id = None;
-    }
+        None
+    };
 
-    // Update backdrop regions
-    location.backdrop_regions = req
+    let backdrop_regions: Vec<BackdropRegion> = req
         .backdrop_regions
         .into_iter()
         .map(|r| {
@@ -250,12 +170,89 @@ pub async fn update_location(
         })
         .collect();
 
-    state
-        .repository
-        .locations()
-        .update(&location)
+    let service_request = ServiceCreateLocationRequest {
+        world_id: WorldId::from_uuid(uuid),
+        name: req.name,
+        description: if req.description.is_empty() {
+            None
+        } else {
+            Some(req.description)
+        },
+        location_type,
+        parent_id,
+        backdrop_asset: req.backdrop_asset,
+        grid_map_id: None,
+        backdrop_regions,
+    };
+
+    let location = state
+        .location_service
+        .create_location(service_request)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    Ok((StatusCode::CREATED, Json(LocationResponse::from(location))))
+}
+
+/// Get a location by ID
+pub async fn get_location(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<LocationResponse>, (StatusCode, String)> {
+    let uuid = Uuid::parse_str(&id)
+        .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid location ID".to_string()))?;
+
+    let location = state
+        .location_service
+        .get_location(LocationId::from_uuid(uuid))
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "Location not found".to_string()))?;
+
+    Ok(Json(LocationResponse::from(location)))
+}
+
+/// Update a location
+pub async fn update_location(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(req): Json<CreateLocationRequest>,
+) -> Result<Json<LocationResponse>, (StatusCode, String)> {
+    let uuid = Uuid::parse_str(&id)
+        .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid location ID".to_string()))?;
+
+    let parent_id = if let Some(ref parent_id_str) = req.parent_id {
+        let parent_uuid = Uuid::parse_str(parent_id_str)
+            .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid parent ID".to_string()))?;
+        Some(Some(LocationId::from_uuid(parent_uuid)))
+    } else {
+        Some(None) // Explicitly set to no parent
+    };
+
+    let service_request = ServiceUpdateLocationRequest {
+        name: Some(req.name),
+        description: if req.description.is_empty() {
+            None
+        } else {
+            Some(req.description)
+        },
+        location_type: Some(parse_location_type(&req.location_type)),
+        parent_id,
+        backdrop_asset: req.backdrop_asset,
+        grid_map_id: None,
+    };
+
+    let location = state
+        .location_service
+        .update_location(LocationId::from_uuid(uuid), service_request)
+        .await
+        .map_err(|e| {
+            if e.to_string().contains("not found") {
+                (StatusCode::NOT_FOUND, "Location not found".to_string())
+            } else {
+                (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+            }
+        })?;
 
     Ok(Json(LocationResponse::from(location)))
 }
@@ -269,11 +266,18 @@ pub async fn delete_location(
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid location ID".to_string()))?;
 
     state
-        .repository
-        .locations()
-        .delete(LocationId::from_uuid(uuid))
+        .location_service
+        .delete_location(LocationId::from_uuid(uuid))
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|e| {
+            if e.to_string().contains("not found") {
+                (StatusCode::NOT_FOUND, "Location not found".to_string())
+            } else if e.to_string().contains("child locations") {
+                (StatusCode::CONFLICT, e.to_string())
+            } else {
+                (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+            }
+        })?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -330,8 +334,7 @@ pub async fn get_connections(
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid location ID".to_string()))?;
 
     let connections = state
-        .repository
-        .locations()
+        .location_service
         .get_connections(LocationId::from_uuid(uuid))
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -362,31 +365,39 @@ pub async fn create_connection(
         )
     })?;
 
-    let mut connection = LocationConnection::new(
-        LocationId::from_uuid(from_uuid),
-        LocationId::from_uuid(to_uuid),
-    );
+    let connection_type = req
+        .connection_type
+        .as_ref()
+        .map(|ct| parse_spatial_relationship(ct))
+        .unwrap_or(SpatialRelationship::ConnectsTo);
 
-    // Set connection type if provided
-    if let Some(ref ct) = req.connection_type {
-        let spatial_rel = parse_spatial_relationship(ct);
-        connection = connection.with_connection_type(spatial_rel);
-    }
-
-    if !req.description.is_empty() {
-        connection = connection.with_description(&req.description);
-    }
-    if !req.bidirectional {
-        connection = connection.one_way();
-    }
-    connection.travel_time = req.travel_time;
+    let service_request = ServiceCreateConnectionRequest {
+        from_location: LocationId::from_uuid(from_uuid),
+        to_location: LocationId::from_uuid(to_uuid),
+        connection_type,
+        description: if req.description.is_empty() {
+            None
+        } else {
+            Some(req.description)
+        },
+        bidirectional: req.bidirectional,
+        travel_time: req.travel_time,
+    };
 
     state
-        .repository
-        .locations()
-        .create_connection(&connection)
+        .location_service
+        .create_connection(service_request)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|e| {
+            if e.to_string().contains("not found") {
+                (StatusCode::NOT_FOUND, e.to_string())
+            } else if e.to_string().contains("different worlds") || e.to_string().contains("itself")
+            {
+                (StatusCode::BAD_REQUEST, e.to_string())
+            } else {
+                (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+            }
+        })?;
 
     Ok(StatusCode::CREATED)
 }
