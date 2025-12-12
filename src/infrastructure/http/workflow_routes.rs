@@ -58,11 +58,23 @@ impl From<&WorkflowConfiguration> for WorkflowConfigResponse {
 pub struct WorkflowSlotStatus {
     pub slot: String,
     pub display_name: String,
-    pub category: String,
     pub default_width: u32,
     pub default_height: u32,
     pub configured: bool,
     pub config: Option<WorkflowConfigResponse>,
+}
+
+/// A category of workflow slots (e.g., "Character Assets")
+#[derive(Debug, Serialize)]
+pub struct WorkflowSlotCategory {
+    pub name: String,
+    pub slots: Vec<WorkflowSlotStatus>,
+}
+
+/// Response containing all workflow slots grouped by category
+#[derive(Debug, Serialize)]
+pub struct WorkflowSlotsResponse {
+    pub categories: Vec<WorkflowSlotCategory>,
 }
 
 /// Request to create/update a workflow configuration
@@ -123,10 +135,10 @@ impl From<&WorkflowConfiguration> for WorkflowConfigFullResponse {
 // Route Handlers
 // ============================================================================
 
-/// List all workflow slots with their configuration status
+/// List all workflow slots grouped by category
 pub async fn list_workflow_slots(
     State(state): State<Arc<AppState>>,
-) -> Result<Json<Vec<WorkflowSlotStatus>>, (StatusCode, String)> {
+) -> Result<Json<WorkflowSlotsResponse>, (StatusCode, String)> {
     let configs = state
         .repository
         .workflows()
@@ -134,24 +146,37 @@ pub async fn list_workflow_slots(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    let mut statuses = Vec::new();
+    // Group slots by category, maintaining order
+    let category_order = ["Character Assets", "Location Assets", "Item Assets", "Map Assets"];
+    let mut categories: Vec<WorkflowSlotCategory> = category_order
+        .iter()
+        .map(|name| WorkflowSlotCategory {
+            name: name.to_string(),
+            slots: Vec::new(),
+        })
+        .collect();
 
     for slot in WorkflowSlot::all() {
         let config = configs.iter().find(|c| c.slot == *slot);
         let (width, height) = slot.default_dimensions();
+        let category_name = slot.category();
 
-        statuses.push(WorkflowSlotStatus {
+        let status = WorkflowSlotStatus {
             slot: slot.as_str().to_string(),
             display_name: slot.display_name().to_string(),
-            category: slot.category().to_string(),
             default_width: width,
             default_height: height,
             configured: config.is_some(),
             config: config.map(WorkflowConfigResponse::from),
-        });
+        };
+
+        // Find the category and add the slot
+        if let Some(category) = categories.iter_mut().find(|c| c.name == category_name) {
+            category.slots.push(status);
+        }
     }
 
-    Ok(Json(statuses))
+    Ok(Json(WorkflowSlotsResponse { categories }))
 }
 
 /// Get a workflow configuration by slot
