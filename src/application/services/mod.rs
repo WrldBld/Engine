@@ -9,6 +9,7 @@ pub mod generation_service;
 pub mod llm_service;
 pub mod location_service;
 pub mod scene_service;
+pub mod story_event_service;
 pub mod suggestion_service;
 pub mod tool_execution_service;
 pub mod workflow_service;
@@ -59,3 +60,6 @@ pub use workflow_service::WorkflowService;
 pub use tool_execution_service::{
     ToolExecutionService,
 };
+
+// Re-export story event service
+pub use story_event_service::StoryEventService;
