@@ -9,6 +9,10 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use uuid::Uuid;
 
+use crate::application::services::{
+    CreateSceneRequest as ServiceCreateSceneRequest, SceneService,
+    UpdateSceneRequest as ServiceUpdateSceneRequest,
+};
 use crate::domain::entities::{Scene, TimeContext};
 use crate::domain::value_objects::{ActId, CharacterId, LocationId, SceneId};
 use crate::infrastructure::state::AppState;
@@ -71,9 +75,8 @@ pub async fn list_scenes_by_act(
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid act ID".to_string()))?;
 
     let scenes = state
-        .repository
-        .scenes()
-        .list_by_act(ActId::from_uuid(uuid))
+        .scene_service
+        .list_scenes_by_act(ActId::from_uuid(uuid))
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -91,33 +94,33 @@ pub async fn create_scene(
     let location_uuid = Uuid::parse_str(&req.location_id)
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid location ID".to_string()))?;
 
-    let mut scene = Scene::new(
-        ActId::from_uuid(act_uuid),
-        &req.name,
-        LocationId::from_uuid(location_uuid),
-    );
-
-    if let Some(time) = req.time_context {
-        scene = scene.with_time(TimeContext::Custom(time));
-    }
-    if !req.directorial_notes.is_empty() {
-        scene = scene.with_directorial_notes(&req.directorial_notes);
-    }
-
-    scene.backdrop_override = req.backdrop_override;
-    scene.order = req.order;
-
     // Parse featured character IDs
-    for char_id_str in &req.featured_characters {
-        if let Ok(char_uuid) = Uuid::parse_str(char_id_str) {
-            scene = scene.with_character(CharacterId::from_uuid(char_uuid));
-        }
-    }
+    let featured_characters: Vec<CharacterId> = req
+        .featured_characters
+        .iter()
+        .filter_map(|s| Uuid::parse_str(s).ok())
+        .map(CharacterId::from_uuid)
+        .collect();
 
-    state
-        .repository
-        .scenes()
-        .create(&scene)
+    let service_request = ServiceCreateSceneRequest {
+        act_id: ActId::from_uuid(act_uuid),
+        name: req.name,
+        location_id: LocationId::from_uuid(location_uuid),
+        time_context: req.time_context.map(TimeContext::Custom),
+        backdrop_override: req.backdrop_override,
+        featured_characters,
+        directorial_notes: if req.directorial_notes.is_empty() {
+            None
+        } else {
+            Some(req.directorial_notes)
+        },
+        entry_conditions: vec![],
+        order: req.order,
+    };
+
+    let scene = state
+        .scene_service
+        .create_scene(service_request)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -133,9 +136,8 @@ pub async fn get_scene(
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid scene ID".to_string()))?;
 
     let scene = state
-        .repository
-        .scenes()
-        .get(SceneId::from_uuid(uuid))
+        .scene_service
+        .get_scene(SceneId::from_uuid(uuid))
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .ok_or_else(|| (StatusCode::NOT_FOUND, "Scene not found".to_string()))?;
@@ -151,39 +153,49 @@ pub async fn update_scene(
 ) -> Result<Json<SceneResponse>, (StatusCode, String)> {
     let uuid = Uuid::parse_str(&id)
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid scene ID".to_string()))?;
-    let location_uuid = Uuid::parse_str(&req.location_id)
-        .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid location ID".to_string()))?;
+    let scene_id = SceneId::from_uuid(uuid);
 
-    let mut scene = state
-        .repository
-        .scenes()
-        .get(SceneId::from_uuid(uuid))
+    // Update basic scene fields via service
+    let service_request = ServiceUpdateSceneRequest {
+        name: Some(req.name),
+        time_context: req.time_context.map(TimeContext::Custom),
+        backdrop_override: req.backdrop_override,
+        entry_conditions: None,
+        order: Some(req.order),
+    };
+
+    let _scene = state
+        .scene_service
+        .update_scene(scene_id, service_request)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or_else(|| (StatusCode::NOT_FOUND, "Scene not found".to_string()))?;
+        .map_err(|e| {
+            if e.to_string().contains("not found") {
+                (StatusCode::NOT_FOUND, "Scene not found".to_string())
+            } else {
+                (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+            }
+        })?;
 
-    scene.name = req.name;
-    scene.location_id = LocationId::from_uuid(location_uuid);
-    scene.backdrop_override = req.backdrop_override;
-    scene.directorial_notes = req.directorial_notes;
-    scene.order = req.order;
-
-    if let Some(time) = req.time_context {
-        scene.time_context = TimeContext::Custom(time);
+    // Update directorial notes if provided
+    if !req.directorial_notes.is_empty() {
+        state
+            .scene_service
+            .update_directorial_notes(scene_id, req.directorial_notes)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     }
 
     // Update featured characters
-    scene.featured_characters = req
+    let featured_characters: Vec<CharacterId> = req
         .featured_characters
         .iter()
         .filter_map(|s| Uuid::parse_str(s).ok())
         .map(CharacterId::from_uuid)
         .collect();
 
-    state
-        .repository
-        .scenes()
-        .update(&scene)
+    let scene = state
+        .scene_service
+        .update_featured_characters(scene_id, featured_characters)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -199,11 +211,16 @@ pub async fn delete_scene(
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid scene ID".to_string()))?;
 
     state
-        .repository
-        .scenes()
-        .delete(SceneId::from_uuid(uuid))
+        .scene_service
+        .delete_scene(SceneId::from_uuid(uuid))
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|e| {
+            if e.to_string().contains("not found") {
+                (StatusCode::NOT_FOUND, "Scene not found".to_string())
+            } else {
+                (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+            }
+        })?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -223,11 +240,16 @@ pub async fn update_directorial_notes(
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid scene ID".to_string()))?;
 
     state
-        .repository
-        .scenes()
-        .update_directorial_notes(SceneId::from_uuid(uuid), &req.notes)
+        .scene_service
+        .update_directorial_notes(SceneId::from_uuid(uuid), req.notes)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|e| {
+            if e.to_string().contains("not found") {
+                (StatusCode::NOT_FOUND, "Scene not found".to_string())
+            } else {
+                (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+            }
+        })?;
 
     Ok(StatusCode::OK)
 }
