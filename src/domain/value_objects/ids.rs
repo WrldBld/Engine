@@ -64,3 +64,6 @@ define_id!(EventId);
 define_id!(InteractionId);
 define_id!(AssetId);
 define_id!(BatchId);
+define_id!(WorkflowConfigId);
+define_id!(SkillId);
+define_id!(ChallengeId);

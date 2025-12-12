@@ -10,15 +10,40 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::domain::entities::{Act, MonomythStage, World};
-use crate::domain::value_objects::{RuleSystemConfig, WorldId};
+use crate::domain::value_objects::{RuleSystemConfig, RuleSystemVariant, WorldId};
 use crate::infrastructure::state::AppState;
 
+/// Request to create a world - accepts just the variant and expands to full config
 #[derive(Debug, Deserialize)]
 pub struct CreateWorldRequest {
     pub name: String,
-    pub description: String,
     #[serde(default)]
-    pub rule_system: Option<RuleSystemConfig>,
+    pub description: String,
+    /// Rule system configuration - can be a full config or just a variant
+    #[serde(default)]
+    pub rule_system: Option<RuleSystemInput>,
+}
+
+/// Flexible input for rule system - either a variant name or full config
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum RuleSystemInput {
+    /// Just specify a variant, and we'll expand to full config
+    VariantOnly {
+        variant: RuleSystemVariant,
+    },
+    /// Full configuration (for custom systems)
+    Full(RuleSystemConfig),
+}
+
+impl RuleSystemInput {
+    /// Convert to a full RuleSystemConfig
+    pub fn into_config(self) -> RuleSystemConfig {
+        match self {
+            RuleSystemInput::VariantOnly { variant } => RuleSystemConfig::from_variant(variant),
+            RuleSystemInput::Full(config) => config,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -72,8 +97,8 @@ pub async fn create_world(
 ) -> Result<(StatusCode, Json<WorldResponse>), (StatusCode, String)> {
     let mut world = World::new(&req.name, &req.description);
 
-    if let Some(rule_system) = req.rule_system {
-        world = world.with_rule_system(rule_system);
+    if let Some(rule_system_input) = req.rule_system {
+        world = world.with_rule_system(rule_system_input.into_config());
     }
 
     state

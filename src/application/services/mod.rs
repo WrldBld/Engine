@@ -10,6 +10,8 @@ pub mod llm_service;
 pub mod location_service;
 pub mod scene_service;
 pub mod suggestion_service;
+pub mod tool_execution_service;
+pub mod workflow_service;
 pub mod world_service;
 
 // Re-export generation service types
@@ -47,4 +49,12 @@ pub use location_service::{
 // Re-export suggestion service types
 pub use suggestion_service::{
     SuggestionContext, SuggestionRequest, SuggestionResponse, SuggestionService, SuggestionType,
+};
+
+// Re-export workflow service
+pub use workflow_service::WorkflowService;
+
+// Re-export tool execution service types
+pub use tool_execution_service::{
+    StateChange, ToolExecutionError, ToolExecutionResult, ToolExecutionService,
 };

@@ -1,12 +1,17 @@
 //! HTTP REST API routes
 
 mod asset_routes;
+mod challenge_routes;
 mod character_routes;
 mod export_routes;
 mod interaction_routes;
 mod location_routes;
+mod rule_system_routes;
 mod scene_routes;
+mod sheet_template_routes;
+mod skill_routes;
 mod suggestion_routes;
+mod workflow_routes;
 mod world_routes;
 
 use axum::{
@@ -18,12 +23,14 @@ use std::sync::Arc;
 use crate::infrastructure::state::AppState;
 
 pub use asset_routes::*;
+pub use challenge_routes::*;
 pub use character_routes::*;
 pub use export_routes::*;
 pub use interaction_routes::*;
 pub use location_routes::*;
 pub use scene_routes::*;
 pub use suggestion_routes::*;
+pub use workflow_routes::*;
 pub use world_routes::*;
 
 /// Create all API routes
@@ -255,5 +262,143 @@ pub fn create_routes() -> Router<Arc<AppState>> {
         .route(
             "/api/suggest/location/secrets",
             post(suggestion_routes::suggest_location_secrets),
+        )
+        // Workflow Configuration routes
+        .route("/api/workflows", get(workflow_routes::list_workflow_slots))
+        .route(
+            "/api/workflows/{slot}",
+            get(workflow_routes::get_workflow_config),
+        )
+        .route(
+            "/api/workflows/{slot}",
+            post(workflow_routes::save_workflow_config),
+        )
+        .route(
+            "/api/workflows/{slot}",
+            delete(workflow_routes::delete_workflow_config),
+        )
+        .route(
+            "/api/workflows/analyze",
+            post(workflow_routes::analyze_workflow),
+        )
+        .route(
+            "/api/workflows/export",
+            get(workflow_routes::export_workflows),
+        )
+        .route(
+            "/api/workflows/import",
+            post(workflow_routes::import_workflows),
+        )
+        .route(
+            "/api/workflows/{slot}/test",
+            post(workflow_routes::test_workflow),
+        )
+        // Rule System routes
+        .route(
+            "/api/rule-systems",
+            get(rule_system_routes::list_rule_systems),
+        )
+        .route(
+            "/api/rule-systems/{system_type}",
+            get(rule_system_routes::get_rule_system),
+        )
+        .route(
+            "/api/rule-systems/{system_type}/presets",
+            get(rule_system_routes::list_presets),
+        )
+        .route(
+            "/api/rule-systems/{system_type}/presets/{variant}",
+            get(rule_system_routes::get_preset),
+        )
+        // Skill routes
+        .route(
+            "/api/worlds/{world_id}/skills",
+            get(skill_routes::list_skills),
+        )
+        .route(
+            "/api/worlds/{world_id}/skills",
+            post(skill_routes::create_skill),
+        )
+        .route(
+            "/api/worlds/{world_id}/skills/{skill_id}",
+            put(skill_routes::update_skill),
+        )
+        .route(
+            "/api/worlds/{world_id}/skills/{skill_id}",
+            delete(skill_routes::delete_skill),
+        )
+        .route(
+            "/api/worlds/{world_id}/skills/initialize",
+            post(skill_routes::initialize_skills),
+        )
+        // Sheet Template routes
+        .route(
+            "/api/worlds/{world_id}/sheet-template",
+            get(sheet_template_routes::get_template),
+        )
+        .route(
+            "/api/worlds/{world_id}/sheet-templates",
+            get(sheet_template_routes::list_templates),
+        )
+        .route(
+            "/api/worlds/{world_id}/sheet-templates/{template_id}",
+            get(sheet_template_routes::get_template_by_id),
+        )
+        .route(
+            "/api/worlds/{world_id}/sheet-templates/{template_id}",
+            delete(sheet_template_routes::delete_template),
+        )
+        .route(
+            "/api/worlds/{world_id}/sheet-template/initialize",
+            post(sheet_template_routes::initialize_template),
+        )
+        .route(
+            "/api/worlds/{world_id}/sheet-templates/{template_id}/sections",
+            post(sheet_template_routes::add_section),
+        )
+        .route(
+            "/api/worlds/{world_id}/sheet-templates/{template_id}/sections/{section_id}/fields",
+            post(sheet_template_routes::add_field),
+        )
+        // Challenge routes
+        .route(
+            "/api/worlds/{world_id}/challenges",
+            get(challenge_routes::list_challenges),
+        )
+        .route(
+            "/api/worlds/{world_id}/challenges",
+            post(challenge_routes::create_challenge),
+        )
+        .route(
+            "/api/worlds/{world_id}/challenges/active",
+            get(challenge_routes::list_active_challenges),
+        )
+        .route(
+            "/api/worlds/{world_id}/challenges/favorites",
+            get(challenge_routes::list_favorite_challenges),
+        )
+        .route(
+            "/api/scenes/{scene_id}/challenges",
+            get(challenge_routes::list_scene_challenges),
+        )
+        .route(
+            "/api/challenges/{challenge_id}",
+            get(challenge_routes::get_challenge),
+        )
+        .route(
+            "/api/challenges/{challenge_id}",
+            put(challenge_routes::update_challenge),
+        )
+        .route(
+            "/api/challenges/{challenge_id}",
+            delete(challenge_routes::delete_challenge),
+        )
+        .route(
+            "/api/challenges/{challenge_id}/favorite",
+            put(challenge_routes::toggle_favorite),
+        )
+        .route(
+            "/api/challenges/{challenge_id}/active",
+            put(challenge_routes::set_active),
         )
 }

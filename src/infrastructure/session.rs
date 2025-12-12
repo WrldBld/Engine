@@ -2,7 +2,8 @@
 //!
 //! This module provides session tracking for WebSocket connections,
 //! allowing multiple clients to join a shared game session and
-//! receive synchronized updates.
+//! receive synchronized updates. It also maintains conversation history
+//! for LLM context.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -11,9 +12,10 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
+use crate::application::services::llm_service::ProposedToolCall;
 use crate::domain::entities::{Character, Location, Scene, World};
 use crate::domain::value_objects::{SessionId, WorldId};
-use crate::infrastructure::websocket::{ParticipantRole, ServerMessage};
+use crate::infrastructure::websocket::{ParticipantRole, ServerMessage, ProposedTool};
 
 /// Unique identifier for a connected client
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -37,6 +39,34 @@ impl std::fmt::Display for ClientId {
     }
 }
 
+/// Represents a single turn in the conversation history
+///
+/// Each turn tracks a message exchange between a player/NPC and captures
+/// the speaker identity, content, and timestamp for LLM context.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConversationTurn {
+    /// Name of the speaker (character name or "Player")
+    pub speaker: String,
+    /// Content of the dialogue or action
+    pub content: String,
+    /// Timestamp when this turn occurred
+    pub timestamp: DateTime<Utc>,
+    /// Whether this was a player action (true) or NPC response (false)
+    pub is_player: bool,
+}
+
+impl ConversationTurn {
+    /// Create a new conversation turn
+    pub fn new(speaker: String, content: String, is_player: bool) -> Self {
+        Self {
+            speaker,
+            content,
+            timestamp: Utc::now(),
+            is_player,
+        }
+    }
+}
+
 /// A participant in a game session
 #[derive(Debug, Clone)]
 pub struct SessionParticipant {
@@ -46,6 +76,47 @@ pub struct SessionParticipant {
     pub joined_at: DateTime<Utc>,
     /// Channel to send messages to this client
     pub sender: mpsc::UnboundedSender<ServerMessage>,
+}
+
+/// Tracks a pending approval request from the LLM
+///
+/// This structure maintains all information needed to process the DM's approval decision.
+#[derive(Debug, Clone)]
+pub struct PendingApproval {
+    /// Request ID matching the ApprovalRequired message
+    pub request_id: String,
+    /// Name of the NPC responding
+    pub npc_name: String,
+    /// Original proposed dialogue from LLM
+    pub proposed_dialogue: String,
+    /// Internal reasoning from LLM
+    pub internal_reasoning: String,
+    /// Proposed tool calls
+    pub proposed_tools: Vec<ProposedTool>,
+    /// Number of rejection retries already used
+    pub retry_count: u32,
+    /// Timestamp when approval was requested
+    pub requested_at: DateTime<Utc>,
+}
+
+impl PendingApproval {
+    pub fn new(
+        request_id: String,
+        npc_name: String,
+        proposed_dialogue: String,
+        internal_reasoning: String,
+        proposed_tools: Vec<ProposedTool>,
+    ) -> Self {
+        Self {
+            request_id,
+            npc_name,
+            proposed_dialogue,
+            internal_reasoning,
+            proposed_tools,
+            retry_count: 0,
+            requested_at: Utc::now(),
+        }
+    }
 }
 
 /// A snapshot of the current world state for session joining
@@ -102,9 +173,18 @@ pub struct GameSession {
     pub participants: HashMap<ClientId, SessionParticipant>,
     pub created_at: DateTime<Utc>,
     pub current_scene_id: Option<String>,
+    /// Conversation history for LLM context
+    conversation_history: Vec<ConversationTurn>,
+    /// Maximum number of conversation turns to keep in history
+    max_history_length: usize,
+    /// Pending approval requests awaiting DM decision
+    pending_approvals: HashMap<String, PendingApproval>,
 }
 
 impl GameSession {
+    /// Default maximum history length (30 turns = ~15 exchanges)
+    const DEFAULT_MAX_HISTORY_LENGTH: usize = 30;
+
     /// Create a new game session for a world
     pub fn new(world_id: WorldId, world_snapshot: WorldSnapshot) -> Self {
         Self {
@@ -114,6 +194,9 @@ impl GameSession {
             participants: HashMap::new(),
             created_at: Utc::now(),
             current_scene_id: None,
+            conversation_history: Vec::new(),
+            max_history_length: Self::DEFAULT_MAX_HISTORY_LENGTH,
+            pending_approvals: HashMap::new(),
         }
     }
 
@@ -152,6 +235,94 @@ impl GameSession {
         self.participants
             .values()
             .find(|p| p.role == ParticipantRole::DungeonMaster)
+    }
+
+    /// Add a player action to the conversation history
+    ///
+    /// # Arguments
+    /// * `character_name` - Name of the character performing the action
+    /// * `action` - Description of the action or dialogue
+    pub fn add_player_action(&mut self, character_name: &str, action: &str) {
+        let turn = ConversationTurn::new(
+            character_name.to_string(),
+            action.to_string(),
+            true,
+        );
+        self.add_turn(turn);
+    }
+
+    /// Add an NPC response to the conversation history
+    ///
+    /// # Arguments
+    /// * `npc_name` - Name of the NPC speaking
+    /// * `dialogue` - The NPC's dialogue or response
+    pub fn add_npc_response(&mut self, npc_name: &str, dialogue: &str) {
+        let turn = ConversationTurn::new(
+            npc_name.to_string(),
+            dialogue.to_string(),
+            false,
+        );
+        self.add_turn(turn);
+    }
+
+    /// Internal method to add a turn and maintain history length limit
+    fn add_turn(&mut self, turn: ConversationTurn) {
+        self.conversation_history.push(turn);
+        // Remove oldest turns if we exceed the maximum
+        if self.conversation_history.len() > self.max_history_length {
+            let excess = self.conversation_history.len() - self.max_history_length;
+            self.conversation_history.drain(0..excess);
+        }
+    }
+
+    /// Get the recent conversation history
+    ///
+    /// Returns a slice of the most recent conversation turns.
+    /// If `max_turns` is 0, returns the entire history.
+    ///
+    /// # Arguments
+    /// * `max_turns` - Maximum number of recent turns to return (0 = all)
+    ///
+    /// # Returns
+    /// Slice of conversation turns
+    pub fn get_recent_history(&self, max_turns: usize) -> &[ConversationTurn] {
+        if max_turns == 0 || self.conversation_history.len() <= max_turns {
+            &self.conversation_history
+        } else {
+            let start = self.conversation_history.len() - max_turns;
+            &self.conversation_history[start..]
+        }
+    }
+
+    /// Get the entire conversation history
+    pub fn get_full_history(&self) -> &[ConversationTurn] {
+        &self.conversation_history
+    }
+
+    /// Clear all conversation history
+    pub fn clear_history(&mut self) {
+        self.conversation_history.clear();
+    }
+
+    /// Set the maximum history length
+    ///
+    /// When set, the history will be trimmed if it exceeds this length.
+    ///
+    /// # Arguments
+    /// * `max_length` - New maximum length (must be > 0)
+    pub fn set_max_history_length(&mut self, max_length: usize) {
+        assert!(max_length > 0, "max_history_length must be greater than 0");
+        self.max_history_length = max_length;
+        // Trim history if it now exceeds the new maximum
+        if self.conversation_history.len() > max_length {
+            let excess = self.conversation_history.len() - max_length;
+            self.conversation_history.drain(0..excess);
+        }
+    }
+
+    /// Get the current number of turns in history
+    pub fn history_length(&self) -> usize {
+        self.conversation_history.len()
     }
 
     /// Broadcast a message to all participants
@@ -214,6 +385,27 @@ impl GameSession {
     /// Check if the session is empty
     pub fn is_empty(&self) -> bool {
         self.participants.is_empty()
+    }
+
+    /// Store a pending approval request
+    pub fn add_pending_approval(&mut self, approval: PendingApproval) {
+        self.pending_approvals
+            .insert(approval.request_id.clone(), approval);
+    }
+
+    /// Retrieve a pending approval request by ID
+    pub fn get_pending_approval(&self, request_id: &str) -> Option<&PendingApproval> {
+        self.pending_approvals.get(request_id)
+    }
+
+    /// Get a mutable pending approval request
+    pub fn get_pending_approval_mut(&mut self, request_id: &str) -> Option<&mut PendingApproval> {
+        self.pending_approvals.get_mut(request_id)
+    }
+
+    /// Remove a pending approval request (after it's been processed)
+    pub fn remove_pending_approval(&mut self, request_id: &str) -> Option<PendingApproval> {
+        self.pending_approvals.remove(request_id)
     }
 }
 
@@ -512,5 +704,173 @@ mod tests {
             tx2,
         );
         assert!(matches!(result2, Err(SessionError::DmAlreadyPresent)));
+    }
+
+    #[test]
+    fn test_add_player_action() {
+        let mut session = GameSession::new(
+            WorldId::new(),
+            create_test_snapshot(create_test_world()),
+        );
+
+        session.add_player_action("Alice", "I try to negotiate with the merchant");
+
+        assert_eq!(session.history_length(), 1);
+        let history = session.get_full_history();
+        assert_eq!(history[0].speaker, "Alice");
+        assert_eq!(history[0].content, "I try to negotiate with the merchant");
+        assert!(history[0].is_player);
+    }
+
+    #[test]
+    fn test_add_npc_response() {
+        let mut session = GameSession::new(
+            WorldId::new(),
+            create_test_snapshot(create_test_world()),
+        );
+
+        session.add_npc_response("Merchant", "That will cost you 50 gold pieces");
+
+        assert_eq!(session.history_length(), 1);
+        let history = session.get_full_history();
+        assert_eq!(history[0].speaker, "Merchant");
+        assert_eq!(history[0].content, "That will cost you 50 gold pieces");
+        assert!(!history[0].is_player);
+    }
+
+    #[test]
+    fn test_conversation_history_sequence() {
+        let mut session = GameSession::new(
+            WorldId::new(),
+            create_test_snapshot(create_test_world()),
+        );
+
+        session.add_player_action("Bob", "I cast fireball");
+        session.add_npc_response("Guard", "That's not happening");
+        session.add_player_action("Bob", "I try running away");
+        session.add_npc_response("Guard", "You cannot escape!");
+
+        assert_eq!(session.history_length(), 4);
+
+        let history = session.get_full_history();
+        assert_eq!(history[0].speaker, "Bob");
+        assert_eq!(history[1].speaker, "Guard");
+        assert_eq!(history[2].speaker, "Bob");
+        assert_eq!(history[3].speaker, "Guard");
+    }
+
+    #[test]
+    fn test_history_length_limit() {
+        let mut session = GameSession::new(
+            WorldId::new(),
+            create_test_snapshot(create_test_world()),
+        );
+
+        // Set a small limit for testing
+        session.set_max_history_length(5);
+
+        // Add 10 turns
+        for i in 1..=10 {
+            session.add_player_action("Player", &format!("Action {}", i));
+        }
+
+        // Should only have 5 turns
+        assert_eq!(session.history_length(), 5);
+
+        // Check that we have the last 5 turns
+        let history = session.get_full_history();
+        assert_eq!(history[0].content, "Action 6");
+        assert_eq!(history[4].content, "Action 10");
+    }
+
+    #[test]
+    fn test_get_recent_history() {
+        let mut session = GameSession::new(
+            WorldId::new(),
+            create_test_snapshot(create_test_world()),
+        );
+
+        // Add 5 turns
+        for i in 1..=5 {
+            session.add_player_action("Player", &format!("Action {}", i));
+        }
+
+        // Get last 3 turns
+        let recent = session.get_recent_history(3);
+        assert_eq!(recent.len(), 3);
+        assert_eq!(recent[0].content, "Action 3");
+        assert_eq!(recent[2].content, "Action 5");
+    }
+
+    #[test]
+    fn test_get_recent_history_all() {
+        let mut session = GameSession::new(
+            WorldId::new(),
+            create_test_snapshot(create_test_world()),
+        );
+
+        session.add_player_action("Player", "Action 1");
+        session.add_player_action("Player", "Action 2");
+
+        // Get all history with 0 (means all)
+        let all = session.get_recent_history(0);
+        assert_eq!(all.len(), 2);
+    }
+
+    #[test]
+    fn test_clear_history() {
+        let mut session = GameSession::new(
+            WorldId::new(),
+            create_test_snapshot(create_test_world()),
+        );
+
+        session.add_player_action("Player", "Action 1");
+        session.add_npc_response("NPC", "Response 1");
+        assert_eq!(session.history_length(), 2);
+
+        session.clear_history();
+        assert_eq!(session.history_length(), 0);
+        assert!(session.get_full_history().is_empty());
+    }
+
+    #[test]
+    fn test_set_max_history_length() {
+        let mut session = GameSession::new(
+            WorldId::new(),
+            create_test_snapshot(create_test_world()),
+        );
+
+        // Add 10 turns with default limit (30)
+        for i in 1..=10 {
+            session.add_player_action("Player", &format!("Action {}", i));
+        }
+        assert_eq!(session.history_length(), 10);
+
+        // Change limit to 5
+        session.set_max_history_length(5);
+
+        // Should trim excess
+        assert_eq!(session.history_length(), 5);
+
+        // Verify we have the last 5
+        let history = session.get_full_history();
+        assert_eq!(history[0].content, "Action 6");
+        assert_eq!(history[4].content, "Action 10");
+    }
+
+    #[test]
+    fn test_conversation_turn_creation() {
+        let turn = ConversationTurn::new(
+            "Alice".to_string(),
+            "Hello, world!".to_string(),
+            true,
+        );
+
+        assert_eq!(turn.speaker, "Alice");
+        assert_eq!(turn.content, "Hello, world!");
+        assert!(turn.is_player);
+        // Timestamp should be very recent
+        let elapsed = Utc::now().signed_duration_since(turn.timestamp);
+        assert!(elapsed.num_seconds() < 1);
     }
 }

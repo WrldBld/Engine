@@ -13,6 +13,9 @@ use serde::{Deserialize, Serialize};
 use crate::application::ports::outbound::{
     ChatMessage, LlmPort, LlmRequest, MessageRole, ToolDefinition,
 };
+use crate::domain::value_objects::{
+    ChangeAmount, DirectorialNotes, GameTool, InfoImportance, RelationshipChange,
+};
 
 /// Service for generating AI-powered game responses
 ///
@@ -94,11 +97,83 @@ impl<L: LlmPort> LLMService<L> {
         self.parse_response(&response.content, &response.tool_calls)
     }
 
+    /// Generate an NPC response with comprehensive directorial guidance
+    ///
+    /// This is the enhanced version that integrates DirectorialNotes for fuller
+    /// scene context and more tailored LLM responses. Recommended for complex
+    /// scene interactions where pacing, tone, and narrative beats are important.
+    ///
+    /// # Arguments
+    ///
+    /// * `request` - The core interaction request
+    /// * `directorial_notes` - Optional structured guidance for the LLM about
+    ///                         tone, pacing, and narrative direction
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use wrldbldr_engine::domain::value_objects::{DirectorialNotes, ToneGuidance, PacingGuidance};
+    ///
+    /// let notes = DirectorialNotes::new()
+    ///     .with_tone(ToneGuidance::Mysterious)
+    ///     .with_pacing(PacingGuidance::Slow)
+    ///     .with_general_notes("Build suspicion about the stranger");
+    ///
+    /// let response = service.generate_npc_response_with_direction(request, Some(&notes)).await?;
+    /// ```
+    pub async fn generate_npc_response_with_direction(
+        &self,
+        request: GamePromptRequest,
+        directorial_notes: Option<&DirectorialNotes>,
+    ) -> Result<LLMGameResponse, LLMServiceError> {
+        let system_prompt = self.build_system_prompt_with_notes(
+            &request.scene_context,
+            &request.responding_character,
+            directorial_notes,
+            &request.active_challenges,
+        );
+        let user_message = self.build_user_message(&request);
+
+        let mut messages = self.build_conversation_history(&request.conversation_history);
+        messages.push(ChatMessage {
+            role: MessageRole::User,
+            content: user_message,
+        });
+
+        let llm_request = LlmRequest::new(messages)
+            .with_system_prompt(system_prompt)
+            .with_temperature(0.8); // Slightly creative for roleplay
+
+        let tools = self.get_game_tool_definitions();
+
+        let response = self
+            .ollama
+            .generate_with_tools(llm_request, tools)
+            .await
+            .map_err(|e| LLMServiceError::LlmError(e.to_string()))?;
+
+        self.parse_response(&response.content, &response.tool_calls)
+    }
+
     /// Build the system prompt that establishes the NPC's personality and context
     pub fn build_system_prompt(
         &self,
         context: &SceneContext,
         character: &CharacterContext,
+    ) -> String {
+        self.build_system_prompt_with_notes(context, character, None, &[])
+    }
+
+    /// Build system prompt with optional directorial notes
+    ///
+    /// This enhanced version integrates DirectorialNotes for better LLM guidance
+    /// on tone, pacing, and scene-specific guidance.
+    pub fn build_system_prompt_with_notes(
+        &self,
+        context: &SceneContext,
+        character: &CharacterContext,
+        directorial_notes: Option<&DirectorialNotes>,
+        active_challenges: &[ActiveChallengeContext],
     ) -> String {
         let mut prompt = String::new();
 
@@ -119,7 +194,33 @@ impl<L: LlmPort> LLMService<L> {
                 context.present_characters.join(", ")
             ));
         }
-        prompt.push('\n');
+        prompt.push_str("\n");
+
+        // Directorial notes - tone and pacing guidance
+        if let Some(notes) = directorial_notes {
+            prompt.push_str("=== DIRECTOR'S SCENE GUIDANCE ===\n");
+            prompt.push_str(&format!("Tone: {}\n", notes.tone.description()));
+            prompt.push_str(&format!("Pacing: {}\n", notes.pacing.description()));
+
+            if !notes.general_notes.is_empty() {
+                prompt.push_str(&format!("General Notes: {}\n", notes.general_notes));
+            }
+
+            if !notes.forbidden_topics.is_empty() {
+                prompt.push_str(&format!(
+                    "Avoid discussing: {}\n",
+                    notes.forbidden_topics.join(", ")
+                ));
+            }
+
+            if !notes.suggested_beats.is_empty() {
+                prompt.push_str("Suggested narrative beats to work toward:\n");
+                for beat in &notes.suggested_beats {
+                    prompt.push_str(&format!("  - {}\n", beat));
+                }
+            }
+            prompt.push_str("\n");
+        }
 
         // Character details
         if let Some(mood) = &character.current_mood {
@@ -127,7 +228,7 @@ impl<L: LlmPort> LLMService<L> {
         }
 
         if !character.wants.is_empty() {
-            prompt.push_str("YOUR MOTIVATIONS:\n");
+            prompt.push_str("YOUR MOTIVATIONS AND DESIRES:\n");
             for want in &character.wants {
                 prompt.push_str(&format!("- {}\n", want));
             }
@@ -140,6 +241,34 @@ impl<L: LlmPort> LLMService<L> {
             ));
         }
 
+        // Active challenges - potential things that might be triggered
+        if !active_challenges.is_empty() {
+            prompt.push_str("## Active Challenges\n");
+            prompt.push_str("The following challenges may be triggered based on player actions:\n\n");
+            for (idx, challenge) in active_challenges.iter().enumerate() {
+                prompt.push_str(&format!(
+                    "{}. \"{}\" ({} {})\n",
+                    idx + 1,
+                    challenge.name,
+                    challenge.skill_name,
+                    challenge.difficulty_display
+                ));
+                prompt.push_str(&format!(
+                    "   Triggers: {}\n",
+                    challenge.trigger_hints.join(", ")
+                ));
+                prompt.push_str(&format!(
+                    "   Description: {}\n\n",
+                    challenge.description
+                ));
+            }
+
+            prompt.push_str("If a player's action matches a trigger condition, include a challenge suggestion in your response using:\n");
+            prompt.push_str("<challenge_suggestion>\n");
+            prompt.push_str("{\"challenge_id\": \"...\", \"confidence\": \"high|medium|low\", \"reasoning\": \"...\"}\n");
+            prompt.push_str("</challenge_suggestion>\n\n");
+        }
+
         // Response format instructions
         prompt.push_str(r#"
 
@@ -148,21 +277,24 @@ You must respond in the following format:
 
 <reasoning>
 Your internal thoughts about how to respond. Consider:
-- What does your character know?
-- How does your character feel about this situation?
-- What are your character's goals in this conversation?
-- Should any game mechanics be triggered?
-This section is hidden from the player but shown to the Game Master.
+- What does your character know about the situation?
+- How does your character feel about this moment?
+- What are your character's immediate goals in this conversation?
+- Are any game mechanics or tool calls dramatically appropriate?
+- How do the directorial notes influence your response?
+- Could the player's action trigger any of the active challenges?
+This section is hidden from the player but shown to the Game Master for review.
 </reasoning>
 
 <dialogue>
 Your character's spoken response. Stay in character.
-Write naturally as the character would speak.
+Write naturally as the character would speak. Use appropriate dialect or speech patterns.
+Keep responses concise but meaningful (1-3 sentences typically).
 </dialogue>
 
 <suggested_beats>
 Optional narrative suggestions for the Game Master, one per line.
-These help shape the story direction.
+These help shape the story direction and are only suggestions.
 </suggested_beats>
 
 AVAILABLE TOOLS:
@@ -371,11 +503,19 @@ Only propose tool calls when dramatically appropriate. The Game Master will appr
 
         let proposed_tool_calls = self.parse_tool_calls_from_response(tool_calls);
 
+        // Parse challenge suggestion if present
+        let challenge_suggestion = self
+            .extract_tag_content(content, "challenge_suggestion")
+            .and_then(|suggestion_text| {
+                serde_json::from_str::<ChallengeSuggestion>(&suggestion_text).ok()
+            });
+
         Ok(LLMGameResponse {
             npc_dialogue: dialogue.trim().to_string(),
             internal_reasoning: reasoning.trim().to_string(),
             proposed_tool_calls,
             suggested_beats,
+            challenge_suggestion,
         })
     }
 
@@ -487,6 +627,183 @@ Only propose tool calls when dramatically appropriate. The Game Master will appr
             _ => format!("Call {} with provided arguments", name),
         }
     }
+
+
+    /// Parse a single tool call into a GameTool
+    fn parse_single_tool(
+        &self,
+        name: &str,
+        arguments: &serde_json::Value,
+    ) -> Result<GameTool, LLMServiceError> {
+        match name {
+            "give_item" => {
+                let item_name = arguments
+                    .get("item_name")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| {
+                        LLMServiceError::ParseError("Missing item_name in give_item".to_string())
+                    })?
+                    .to_string();
+
+                let description = arguments
+                    .get("description")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| {
+                        LLMServiceError::ParseError("Missing description in give_item".to_string())
+                    })?
+                    .to_string();
+
+                Ok(GameTool::GiveItem {
+                    item_name,
+                    description,
+                })
+            }
+            "reveal_info" => {
+                let info_type = arguments
+                    .get("info_type")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| {
+                        LLMServiceError::ParseError("Missing info_type in reveal_info".to_string())
+                    })?
+                    .to_string();
+
+                let content = arguments
+                    .get("content")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| {
+                        LLMServiceError::ParseError("Missing content in reveal_info".to_string())
+                    })?
+                    .to_string();
+
+                let importance_str = arguments
+                    .get("importance")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| {
+                        LLMServiceError::ParseError("Missing importance in reveal_info".to_string())
+                    })?;
+
+                let importance = match importance_str {
+                    "minor" => InfoImportance::Minor,
+                    "major" => InfoImportance::Major,
+                    "critical" => InfoImportance::Critical,
+                    _ => return Err(LLMServiceError::ParseError(
+                        format!("Invalid importance level: {}", importance_str),
+                    )),
+                };
+
+                Ok(GameTool::RevealInfo {
+                    info_type,
+                    content,
+                    importance,
+                })
+            }
+            "change_relationship" => {
+                let change_str = arguments
+                    .get("change")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| {
+                        LLMServiceError::ParseError(
+                            "Missing change in change_relationship".to_string(),
+                        )
+                    })?;
+
+                let change = match change_str {
+                    "improve" => RelationshipChange::Improve,
+                    "worsen" => RelationshipChange::Worsen,
+                    _ => {
+                        return Err(LLMServiceError::ParseError(
+                            format!("Invalid change direction: {}", change_str),
+                        ))
+                    }
+                };
+
+                let amount_str = arguments
+                    .get("amount")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| {
+                        LLMServiceError::ParseError("Missing amount in change_relationship".to_string())
+                    })?;
+
+                let amount = match amount_str {
+                    "slight" => ChangeAmount::Slight,
+                    "moderate" => ChangeAmount::Moderate,
+                    "significant" => ChangeAmount::Significant,
+                    _ => {
+                        return Err(LLMServiceError::ParseError(
+                            format!("Invalid change amount: {}", amount_str),
+                        ))
+                    }
+                };
+
+                let reason = arguments
+                    .get("reason")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| {
+                        LLMServiceError::ParseError("Missing reason in change_relationship".to_string())
+                    })?
+                    .to_string();
+
+                Ok(GameTool::ChangeRelationship {
+                    change,
+                    amount,
+                    reason,
+                })
+            }
+            "trigger_event" => {
+                let event_type = arguments
+                    .get("event_type")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| {
+                        LLMServiceError::ParseError("Missing event_type in trigger_event".to_string())
+                    })?
+                    .to_string();
+
+                let description = arguments
+                    .get("description")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| {
+                        LLMServiceError::ParseError(
+                            "Missing description in trigger_event".to_string(),
+                        )
+                    })?
+                    .to_string();
+
+                Ok(GameTool::TriggerEvent {
+                    event_type,
+                    description,
+                })
+            }
+            unknown => Err(LLMServiceError::ParseError(
+                format!("Unknown tool: {}", unknown),
+            )),
+        }
+    }
+
+    /// Validate tool calls against allowed tools from DirectorialNotes
+    ///
+    /// Filters tool calls to only include those that are allowed in the current scene.
+    /// Returns a vector of valid tools and any validation errors.
+    pub fn validate_tool_calls(
+        &self,
+        tools: &[GameTool],
+        allowed_tools: &[String],
+    ) -> (Vec<GameTool>, Vec<String>) {
+        let mut valid = Vec::new();
+        let mut invalid = Vec::new();
+
+        for tool in tools {
+            if tool.is_allowed(allowed_tools) {
+                valid.push(tool.clone());
+            } else {
+                invalid.push(format!(
+                    "Tool '{}' is not allowed in this scene",
+                    tool.name()
+                ));
+            }
+        }
+
+        (valid, invalid)
+    }
 }
 
 /// Request for generating an NPC response
@@ -502,6 +819,8 @@ pub struct GamePromptRequest {
     pub conversation_history: Vec<ConversationTurn>,
     /// The NPC who is responding
     pub responding_character: CharacterContext,
+    /// Active challenges that could be triggered
+    pub active_challenges: Vec<ActiveChallengeContext>,
 }
 
 /// Context about the player's action
@@ -552,6 +871,43 @@ pub struct ConversationTurn {
     pub text: String,
 }
 
+/// Context about an active challenge that may be triggered
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActiveChallengeContext {
+    /// Unique identifier for the challenge
+    pub id: String,
+    /// Display name of the challenge
+    pub name: String,
+    /// Full description of the challenge
+    pub description: String,
+    /// Name of the skill required
+    pub skill_name: String,
+    /// Human-readable difficulty display (e.g. "DC 15", "Hard")
+    pub difficulty_display: String,
+    /// Keywords/phrases that trigger this challenge
+    pub trigger_hints: Vec<String>,
+}
+
+/// Suggested challenge from the LLM
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChallengeSuggestion {
+    /// ID of the suggested challenge
+    pub challenge_id: String,
+    /// Confidence level of the suggestion
+    pub confidence: SuggestionConfidence,
+    /// Why the LLM suggests this challenge
+    pub reasoning: String,
+}
+
+/// Confidence level for a challenge suggestion
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SuggestionConfidence {
+    High,
+    Medium,
+    Low,
+}
+
 /// Response from the LLM service for a game prompt
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LLMGameResponse {
@@ -563,6 +919,8 @@ pub struct LLMGameResponse {
     pub proposed_tool_calls: Vec<ProposedToolCall>,
     /// Narrative suggestions for the DM
     pub suggested_beats: Vec<String>,
+    /// Optional suggested challenge from the LLM
+    pub challenge_suggestion: Option<ChallengeSuggestion>,
 }
 
 /// A proposed tool call that requires DM approval
@@ -726,5 +1084,147 @@ Hello, traveler! What brings you here?
         let calls = service.parse_tool_calls(response);
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].tool_name, "give_item");
+    }
+
+    #[test]
+    fn test_parse_single_tool_give_item() {
+        struct MockLlm;
+
+        #[async_trait::async_trait]
+        impl LlmPort for MockLlm {
+            type Error = std::io::Error;
+
+            async fn generate(
+                &self,
+                _request: LlmRequest,
+            ) -> Result<crate::application::ports::outbound::LlmResponse, Self::Error> {
+                unimplemented!()
+            }
+
+            async fn generate_with_tools(
+                &self,
+                _request: LlmRequest,
+                _tools: Vec<ToolDefinition>,
+            ) -> Result<crate::application::ports::outbound::LlmResponse, Self::Error> {
+                unimplemented!()
+            }
+        }
+
+        let service = LLMService::new(MockLlm);
+
+        let arguments = serde_json::json!({
+            "item_name": "Mysterious Key",
+            "description": "An ornate bronze key"
+        });
+
+        let result = service.parse_single_tool("give_item", &arguments);
+        assert!(result.is_ok());
+
+        match result.unwrap() {
+            GameTool::GiveItem {
+                item_name,
+                description,
+            } => {
+                assert_eq!(item_name, "Mysterious Key");
+                assert_eq!(description, "An ornate bronze key");
+            }
+            _ => panic!("Expected GiveItem tool"),
+        }
+    }
+
+    #[test]
+    fn test_validate_tool_calls() {
+        struct MockLlm;
+
+        #[async_trait::async_trait]
+        impl LlmPort for MockLlm {
+            type Error = std::io::Error;
+
+            async fn generate(
+                &self,
+                _request: LlmRequest,
+            ) -> Result<crate::application::ports::outbound::LlmResponse, Self::Error> {
+                unimplemented!()
+            }
+
+            async fn generate_with_tools(
+                &self,
+                _request: LlmRequest,
+                _tools: Vec<ToolDefinition>,
+            ) -> Result<crate::application::ports::outbound::LlmResponse, Self::Error> {
+                unimplemented!()
+            }
+        }
+
+        let service = LLMService::new(MockLlm);
+
+        let tools = vec![
+            GameTool::GiveItem {
+                item_name: "Sword".to_string(),
+                description: "A sharp blade".to_string(),
+            },
+            GameTool::TriggerEvent {
+                event_type: "combat".to_string(),
+                description: "Battle!".to_string(),
+            },
+        ];
+
+        let allowed = vec!["give_item".to_string(), "reveal_info".to_string()];
+        let (valid, invalid) = service.validate_tool_calls(&tools, &allowed);
+
+        assert_eq!(valid.len(), 1);
+        assert_eq!(invalid.len(), 1);
+        assert!(invalid[0].contains("trigger_event"));
+    }
+
+    #[test]
+    fn test_parse_single_tool_missing_field() {
+        struct MockLlm;
+
+        #[async_trait::async_trait]
+        impl LlmPort for MockLlm {
+            type Error = std::io::Error;
+
+            async fn generate(
+                &self,
+                _request: LlmRequest,
+            ) -> Result<crate::application::ports::outbound::LlmResponse, Self::Error> {
+                unimplemented!()
+            }
+
+            async fn generate_with_tools(
+                &self,
+                _request: LlmRequest,
+                _tools: Vec<ToolDefinition>,
+            ) -> Result<crate::application::ports::outbound::LlmResponse, Self::Error> {
+                unimplemented!()
+            }
+        }
+
+        let service = LLMService::new(MockLlm);
+
+        let arguments = serde_json::json!({
+            "item_name": "Sword"
+            // Missing "description"
+        });
+
+        let result = service.parse_single_tool("give_item", &arguments);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_game_tool_names() {
+        let give_item = GameTool::GiveItem {
+            item_name: "Key".to_string(),
+            description: "A key".to_string(),
+        };
+        assert_eq!(give_item.name(), "give_item");
+
+        let reveal = GameTool::RevealInfo {
+            info_type: "lore".to_string(),
+            content: "History".to_string(),
+            importance: InfoImportance::Minor,
+        };
+        assert_eq!(reveal.name(), "reveal_info");
     }
 }
