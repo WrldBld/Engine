@@ -7,8 +7,12 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use tracing::{debug, info, instrument};
 
+use crate::application::ports::outbound::WorldRepositoryPort;
 use crate::domain::entities::{Act, MonomythStage, World};
 use crate::domain::value_objects::{RuleSystemConfig, WorldId};
+
+// TODO: These infrastructure imports should be moved behind a port trait
+// This is a known architecture violation that will be addressed in Phase 3
 use crate::infrastructure::export::{PlayerWorldSnapshot, WorldSnapshotBuilder};
 use crate::infrastructure::persistence::Neo4jRepository;
 

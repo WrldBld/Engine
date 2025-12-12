@@ -1,9 +1,11 @@
 //! Asset repository implementation for Neo4j
 
 use anyhow::Result;
+use async_trait::async_trait;
 use neo4rs::{query, Row};
 
 use super::connection::Neo4jConnection;
+use crate::application::ports::outbound::AssetRepositoryPort;
 use crate::domain::entities::{
     AssetType, BatchStatus, EntityType, GalleryAsset, GenerationBatch, GenerationMetadata,
 };
@@ -546,5 +548,45 @@ fn parse_entity_type(s: &str) -> EntityType {
         "Location" => EntityType::Location,
         "Item" => EntityType::Item,
         _ => EntityType::Character, // Default fallback
+    }
+}
+
+// =============================================================================
+// AssetRepositoryPort Implementation
+// =============================================================================
+
+#[async_trait]
+impl AssetRepositoryPort for Neo4jAssetRepository {
+    async fn create(&self, asset: &GalleryAsset) -> Result<()> {
+        Neo4jAssetRepository::create_asset(self, asset).await
+    }
+
+    async fn get(&self, id: AssetId) -> Result<Option<GalleryAsset>> {
+        Neo4jAssetRepository::get_asset(self, id).await
+    }
+
+    async fn list_for_entity(&self, entity_type: &str, entity_id: &str) -> Result<Vec<GalleryAsset>> {
+        let entity_type = parse_entity_type(entity_type);
+        Neo4jAssetRepository::list_by_entity(self, entity_type, entity_id).await
+    }
+
+    async fn activate(&self, id: AssetId) -> Result<()> {
+        Neo4jAssetRepository::activate_asset(self, id).await
+    }
+
+    async fn delete(&self, id: AssetId) -> Result<()> {
+        Neo4jAssetRepository::delete_asset(self, id).await
+    }
+
+    async fn create_batch(&self, batch: &GenerationBatch) -> Result<()> {
+        Neo4jAssetRepository::create_batch(self, batch).await
+    }
+
+    async fn get_batch(&self, id: BatchId) -> Result<Option<GenerationBatch>> {
+        Neo4jAssetRepository::get_batch(self, id).await
+    }
+
+    async fn update_batch_status(&self, id: BatchId, status: &BatchStatus) -> Result<()> {
+        Neo4jAssetRepository::update_batch_status(self, id, status).await
     }
 }

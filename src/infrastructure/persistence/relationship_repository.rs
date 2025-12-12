@@ -1,9 +1,11 @@
 //! Relationship repository implementation for Neo4j
 
 use anyhow::Result;
+use async_trait::async_trait;
 use neo4rs::{query, Row};
 
 use super::connection::Neo4jConnection;
+use crate::application::ports::outbound::RelationshipRepositoryPort;
 use crate::domain::value_objects::{
     CharacterId, Relationship, RelationshipEvent, RelationshipId, RelationshipType,
 };
@@ -508,4 +510,31 @@ pub struct CharacterWithSentiment {
     pub character: CharacterNode,
     pub sentiment: f32,
     pub relationship_type: String,
+}
+
+// =============================================================================
+// RelationshipRepositoryPort Implementation
+// =============================================================================
+
+#[async_trait]
+impl RelationshipRepositoryPort for Neo4jRelationshipRepository {
+    async fn create(&self, relationship: &Relationship) -> Result<()> {
+        Neo4jRelationshipRepository::create(self, relationship).await
+    }
+
+    async fn get(&self, id: RelationshipId) -> Result<Option<Relationship>> {
+        Neo4jRelationshipRepository::get(self, id).await
+    }
+
+    async fn get_for_character(&self, character_id: CharacterId) -> Result<Vec<Relationship>> {
+        Neo4jRelationshipRepository::get_for_character(self, character_id).await
+    }
+
+    async fn update(&self, relationship: &Relationship) -> Result<()> {
+        Neo4jRelationshipRepository::update(self, relationship).await
+    }
+
+    async fn delete(&self, id: RelationshipId) -> Result<()> {
+        Neo4jRelationshipRepository::delete(self, id).await
+    }
 }

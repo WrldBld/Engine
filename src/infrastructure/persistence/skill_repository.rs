@@ -1,9 +1,11 @@
 //! Skill repository implementation for Neo4j
 
 use anyhow::Result;
+use async_trait::async_trait;
 use neo4rs::{query, Row};
 
 use super::connection::Neo4jConnection;
+use crate::application::ports::outbound::SkillRepositoryPort;
 use crate::domain::entities::{Skill, SkillCategory};
 use crate::domain::value_objects::{SkillId, WorldId};
 
@@ -190,5 +192,32 @@ fn parse_skill_category(s: &str) -> SkillCategory {
         "Aspect" => SkillCategory::Aspect,
         "Custom" => SkillCategory::Custom,
         _ => SkillCategory::Other,
+    }
+}
+
+// =============================================================================
+// SkillRepositoryPort Implementation
+// =============================================================================
+
+#[async_trait]
+impl SkillRepositoryPort for Neo4jSkillRepository {
+    async fn create(&self, skill: &Skill) -> Result<()> {
+        Neo4jSkillRepository::create(self, skill).await
+    }
+
+    async fn get(&self, id: SkillId) -> Result<Option<Skill>> {
+        Neo4jSkillRepository::get(self, id).await
+    }
+
+    async fn list(&self, world_id: WorldId) -> Result<Vec<Skill>> {
+        Neo4jSkillRepository::list_by_world(self, world_id).await
+    }
+
+    async fn update(&self, skill: &Skill) -> Result<()> {
+        Neo4jSkillRepository::update(self, skill).await
+    }
+
+    async fn delete(&self, id: SkillId) -> Result<()> {
+        Neo4jSkillRepository::delete(self, id).await
     }
 }

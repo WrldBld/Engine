@@ -7,10 +7,14 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use tracing::{debug, info, instrument};
 
+use crate::application::ports::outbound::LocationRepositoryPort;
 use crate::domain::entities::{
     BackdropRegion, Location, LocationConnection, LocationType, SpatialRelationship,
 };
 use crate::domain::value_objects::{GridMapId, LocationId, WorldId};
+
+// TODO: This infrastructure import should be moved behind a port trait
+// This is a known architecture violation that will be addressed in Phase 3
 use crate::infrastructure::persistence::Neo4jRepository;
 
 /// Request to create a new location

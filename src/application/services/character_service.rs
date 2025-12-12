@@ -7,10 +7,14 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use tracing::{debug, info, instrument};
 
+use crate::application::ports::outbound::CharacterRepositoryPort;
 use crate::domain::entities::{Character, StatBlock};
 use crate::domain::value_objects::{
     CampbellArchetype, CharacterId, Relationship, Want, WantId, WorldId,
 };
+
+// TODO: This infrastructure import should be moved behind a port trait
+// This is a known architecture violation that will be addressed in Phase 3
 use crate::infrastructure::persistence::Neo4jRepository;
 
 /// Request to create a new character

@@ -7,8 +7,12 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use tracing::{debug, info, instrument};
 
+use crate::application::ports::outbound::SceneRepositoryPort;
 use crate::domain::entities::{Character, Location, Scene, SceneCondition, TimeContext};
 use crate::domain::value_objects::{ActId, CharacterId, LocationId, SceneId};
+
+// TODO: This infrastructure import should be moved behind a port trait
+// This is a known architecture violation that will be addressed in Phase 3
 use crate::infrastructure::persistence::Neo4jRepository;
 
 /// Request to create a new scene

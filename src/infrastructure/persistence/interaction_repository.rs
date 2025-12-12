@@ -1,9 +1,11 @@
 //! Neo4j repository for InteractionTemplate entities
 
 use anyhow::Result;
+use async_trait::async_trait;
 use neo4rs::{query, Row};
 
 use super::connection::Neo4jConnection;
+use crate::application::ports::outbound::InteractionRepositoryPort;
 use crate::domain::entities::{
     InteractionCondition, InteractionTarget, InteractionTemplate, InteractionType,
 };
@@ -206,4 +208,31 @@ fn row_to_interaction(row: Row) -> Result<InteractionTemplate> {
         is_available,
         order: order as u32,
     })
+}
+
+// =============================================================================
+// InteractionRepositoryPort Implementation
+// =============================================================================
+
+#[async_trait]
+impl InteractionRepositoryPort for Neo4jInteractionRepository {
+    async fn create(&self, interaction: &InteractionTemplate) -> Result<()> {
+        Neo4jInteractionRepository::create(self, interaction).await
+    }
+
+    async fn get(&self, id: InteractionId) -> Result<Option<InteractionTemplate>> {
+        Neo4jInteractionRepository::get(self, id).await
+    }
+
+    async fn list_by_scene(&self, scene_id: SceneId) -> Result<Vec<InteractionTemplate>> {
+        Neo4jInteractionRepository::list_by_scene(self, scene_id).await
+    }
+
+    async fn update(&self, interaction: &InteractionTemplate) -> Result<()> {
+        Neo4jInteractionRepository::update(self, interaction).await
+    }
+
+    async fn delete(&self, id: InteractionId) -> Result<()> {
+        Neo4jInteractionRepository::delete(self, id).await
+    }
 }

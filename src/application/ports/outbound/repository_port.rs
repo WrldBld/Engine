@@ -11,7 +11,8 @@ use crate::domain::entities::{
     LocationConnection, Scene, Skill, World,
 };
 use crate::domain::value_objects::{
-    ActId, AssetId, BatchId, CharacterId, GridMapId, LocationId, Relationship, SceneId, WorldId,
+    ActId, AssetId, BatchId, CharacterId, GridMapId, InteractionId, LocationId, Relationship,
+    RelationshipId, SceneId, SkillId, WorldId,
 };
 
 // =============================================================================
@@ -141,13 +142,16 @@ pub trait InteractionRepositoryPort: Send + Sync {
     async fn create(&self, interaction: &InteractionTemplate) -> Result<()>;
 
     /// Get an interaction template by ID
-    async fn get(&self, id: &str) -> Result<Option<InteractionTemplate>>;
+    async fn get(&self, id: InteractionId) -> Result<Option<InteractionTemplate>>;
 
     /// List interaction templates in a scene
     async fn list_by_scene(&self, scene_id: SceneId) -> Result<Vec<InteractionTemplate>>;
 
+    /// Update an interaction template
+    async fn update(&self, interaction: &InteractionTemplate) -> Result<()>;
+
     /// Delete an interaction template
-    async fn delete(&self, id: &str) -> Result<()>;
+    async fn delete(&self, id: InteractionId) -> Result<()>;
 }
 
 // =============================================================================
@@ -157,14 +161,20 @@ pub trait InteractionRepositoryPort: Send + Sync {
 /// Repository port for Relationship (graph edge) operations
 #[async_trait]
 pub trait RelationshipRepositoryPort: Send + Sync {
-    /// Save a relationship between characters
-    async fn save(&self, relationship: &Relationship) -> Result<()>;
+    /// Create a relationship between characters
+    async fn create(&self, relationship: &Relationship) -> Result<()>;
 
-    /// Get all relationships for a character
+    /// Get a relationship by ID
+    async fn get(&self, id: RelationshipId) -> Result<Option<Relationship>>;
+
+    /// Get all relationships for a character (outgoing)
     async fn get_for_character(&self, character_id: CharacterId) -> Result<Vec<Relationship>>;
 
-    /// Delete a relationship between two characters
-    async fn delete(&self, from: CharacterId, to: CharacterId) -> Result<()>;
+    /// Update a relationship
+    async fn update(&self, relationship: &Relationship) -> Result<()>;
+
+    /// Delete a relationship by ID
+    async fn delete(&self, id: RelationshipId) -> Result<()>;
 }
 
 // =============================================================================
@@ -192,19 +202,19 @@ pub trait GridMapRepositoryPort: Send + Sync {
 #[async_trait]
 pub trait SkillRepositoryPort: Send + Sync {
     /// Create a skill
-    async fn create(&self, skill: &Skill) -> Result<Skill>;
+    async fn create(&self, skill: &Skill) -> Result<()>;
 
     /// Get a skill by ID
-    async fn get(&self, id: &str) -> Result<Option<Skill>>;
+    async fn get(&self, id: SkillId) -> Result<Option<Skill>>;
 
     /// List skills for a world
     async fn list(&self, world_id: WorldId) -> Result<Vec<Skill>>;
 
     /// Update a skill
-    async fn update(&self, skill: &Skill) -> Result<Skill>;
+    async fn update(&self, skill: &Skill) -> Result<()>;
 
     /// Delete a skill
-    async fn delete(&self, id: &str) -> Result<()>;
+    async fn delete(&self, id: SkillId) -> Result<()>;
 }
 
 // =============================================================================
@@ -215,7 +225,7 @@ pub trait SkillRepositoryPort: Send + Sync {
 #[async_trait]
 pub trait AssetRepositoryPort: Send + Sync {
     /// Create an asset
-    async fn create(&self, asset: &GalleryAsset) -> Result<GalleryAsset>;
+    async fn create(&self, asset: &GalleryAsset) -> Result<()>;
 
     /// Get an asset by ID
     async fn get(&self, id: AssetId) -> Result<Option<GalleryAsset>>;
@@ -223,20 +233,24 @@ pub trait AssetRepositoryPort: Send + Sync {
     /// List assets for an entity
     async fn list_for_entity(&self, entity_type: &str, entity_id: &str) -> Result<Vec<GalleryAsset>>;
 
-    /// Update an asset
-    async fn update(&self, asset: &GalleryAsset) -> Result<GalleryAsset>;
+    /// Activate an asset (set as current for its slot)
+    async fn activate(&self, id: AssetId) -> Result<()>;
 
     /// Delete an asset
     async fn delete(&self, id: AssetId) -> Result<()>;
 
     /// Create a generation batch
-    async fn create_batch(&self, batch: &GenerationBatch) -> Result<GenerationBatch>;
+    async fn create_batch(&self, batch: &GenerationBatch) -> Result<()>;
 
     /// Get a batch by ID
     async fn get_batch(&self, id: BatchId) -> Result<Option<GenerationBatch>>;
 
-    /// Update a batch
-    async fn update_batch(&self, batch: &GenerationBatch) -> Result<GenerationBatch>;
+    /// Update batch status
+    async fn update_batch_status(
+        &self,
+        id: BatchId,
+        status: &crate::domain::entities::BatchStatus,
+    ) -> Result<()>;
 }
 
 // =============================================================================
