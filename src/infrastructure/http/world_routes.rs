@@ -9,6 +9,10 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use uuid::Uuid;
 
+use crate::application::services::{
+    CreateActRequest as ServiceCreateActRequest, CreateWorldRequest as ServiceCreateWorldRequest,
+    UpdateWorldRequest as ServiceUpdateWorldRequest, WorldService,
+};
 use crate::domain::entities::{Act, MonomythStage, World};
 use crate::domain::value_objects::{RuleSystemConfig, RuleSystemVariant, WorldId};
 use crate::infrastructure::state::AppState;
@@ -81,9 +85,8 @@ pub async fn list_worlds(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Vec<WorldResponse>>, (StatusCode, String)> {
     let worlds = state
-        .repository
-        .worlds()
-        .list()
+        .world_service
+        .list_worlds()
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -95,16 +98,15 @@ pub async fn create_world(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CreateWorldRequest>,
 ) -> Result<(StatusCode, Json<WorldResponse>), (StatusCode, String)> {
-    let mut world = World::new(&req.name, &req.description);
+    let service_request = ServiceCreateWorldRequest {
+        name: req.name,
+        description: req.description,
+        rule_system: req.rule_system.map(|r| r.into_config()),
+    };
 
-    if let Some(rule_system_input) = req.rule_system {
-        world = world.with_rule_system(rule_system_input.into_config());
-    }
-
-    state
-        .repository
-        .worlds()
-        .create(&world)
+    let world = state
+        .world_service
+        .create_world(service_request)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -120,9 +122,8 @@ pub async fn get_world(
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid world ID".to_string()))?;
 
     let world = state
-        .repository
-        .worlds()
-        .get(WorldId::from_uuid(uuid))
+        .world_service
+        .get_world(WorldId::from_uuid(uuid))
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .ok_or_else(|| (StatusCode::NOT_FOUND, "World not found".to_string()))?;
@@ -139,24 +140,23 @@ pub async fn update_world(
     let uuid = Uuid::parse_str(&id)
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid world ID".to_string()))?;
 
-    let mut world = state
-        .repository
-        .worlds()
-        .get(WorldId::from_uuid(uuid))
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or_else(|| (StatusCode::NOT_FOUND, "World not found".to_string()))?;
+    let service_request = ServiceUpdateWorldRequest {
+        name: Some(req.name),
+        description: Some(req.description),
+        rule_system: Some(req.rule_system),
+    };
 
-    world.update_name(&req.name);
-    world.update_description(&req.description);
-    world.rule_system = req.rule_system;
-
-    state
-        .repository
-        .worlds()
-        .update(&world)
+    let world = state
+        .world_service
+        .update_world(WorldId::from_uuid(uuid), service_request)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|e| {
+            if e.to_string().contains("not found") {
+                (StatusCode::NOT_FOUND, "World not found".to_string())
+            } else {
+                (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+            }
+        })?;
 
     Ok(Json(WorldResponse::from(world)))
 }
@@ -170,11 +170,16 @@ pub async fn delete_world(
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid world ID".to_string()))?;
 
     state
-        .repository
-        .worlds()
-        .delete(WorldId::from_uuid(uuid))
+        .world_service
+        .delete_world(WorldId::from_uuid(uuid))
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|e| {
+            if e.to_string().contains("not found") {
+                (StatusCode::NOT_FOUND, "World not found".to_string())
+            } else {
+                (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+            }
+        })?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -222,8 +227,7 @@ pub async fn list_acts(
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid world ID".to_string()))?;
 
     let acts = state
-        .repository
-        .worlds()
+        .world_service
         .get_acts(WorldId::from_uuid(uuid))
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -241,16 +245,20 @@ pub async fn create_act(
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid world ID".to_string()))?;
 
     let stage = parse_monomyth_stage(&req.stage);
-    let mut act = Act::new(WorldId::from_uuid(uuid), &req.name, stage, req.order);
+    let service_request = ServiceCreateActRequest {
+        name: req.name,
+        stage,
+        description: if req.description.is_empty() {
+            None
+        } else {
+            Some(req.description)
+        },
+        order: req.order,
+    };
 
-    if !req.description.is_empty() {
-        act = act.with_description(&req.description);
-    }
-
-    state
-        .repository
-        .worlds()
-        .create_act(&act)
+    let act = state
+        .world_service
+        .create_act(WorldId::from_uuid(uuid), service_request)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 

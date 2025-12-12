@@ -25,26 +25,26 @@ pub use llm_service::{
 // Re-export world service types
 #[allow(unused_imports)]
 pub use world_service::{
-    CreateActRequest, CreateWorldRequest, UpdateWorldRequest, WorldService,
+    CreateActRequest, CreateWorldRequest, UpdateWorldRequest, WorldService, WorldServiceImpl,
 };
 
 // Re-export scene service types
 #[allow(unused_imports)]
 pub use scene_service::{
-    CreateSceneRequest, SceneService, UpdateSceneRequest,
+    CreateSceneRequest, SceneService, SceneServiceImpl, UpdateSceneRequest,
 };
 
 // Re-export character service types
 #[allow(unused_imports)]
 pub use character_service::{
-    ChangeArchetypeRequest, CharacterService,
+    ChangeArchetypeRequest, CharacterService, CharacterServiceImpl,
     CreateCharacterRequest, UpdateCharacterRequest,
 };
 
 // Re-export location service types
 #[allow(unused_imports)]
 pub use location_service::{
-    CreateConnectionRequest, CreateLocationRequest, LocationService,
+    CreateConnectionRequest, CreateLocationRequest, LocationService, LocationServiceImpl,
     UpdateLocationRequest,
 };
 
