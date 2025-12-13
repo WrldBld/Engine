@@ -12,6 +12,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
+use crate::application::ports::outbound::GameSessionPort;
 use crate::domain::entities::{Character, Location, Scene, World};
 use crate::domain::value_objects::{SessionId, WorldId};
 use crate::infrastructure::websocket::{ParticipantRole, ServerMessage, ProposedTool};
@@ -579,6 +580,22 @@ impl SessionManager {
 impl Default for SessionManager {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Implement GameSessionPort for GameSession
+///
+/// This implementation allows the application layer to interact with game sessions
+/// through the port interface, maintaining hexagonal architecture boundaries.
+impl GameSessionPort for GameSession {
+    fn add_npc_response(&mut self, speaker: &str, text: &str) {
+        // Delegate to the existing implementation
+        self.add_npc_response(speaker, text)
+    }
+
+    fn history_length(&self) -> usize {
+        // Delegate to the existing implementation
+        self.history_length()
     }
 }
 

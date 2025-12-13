@@ -1,7 +1,6 @@
 //! Scene entity - Complete storytelling unit (location + time + events)
 
 use serde::{Deserialize, Serialize};
-
 use crate::domain::value_objects::{ActId, CharacterId, LocationId, SceneId};
 
 /// A scene - a complete unit of storytelling

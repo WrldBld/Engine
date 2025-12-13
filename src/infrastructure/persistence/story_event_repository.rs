@@ -1,11 +1,13 @@
 //! StoryEvent repository implementation for Neo4j
 
 use anyhow::Result;
+use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use neo4rs::{query, Row};
 use uuid::Uuid;
 
 use super::connection::Neo4jConnection;
+use crate::application::ports::outbound::StoryEventRepositoryPort;
 use crate::domain::entities::{StoryEvent, StoryEventType};
 use crate::domain::value_objects::{
     CharacterId, LocationId, NarrativeEventId, SceneId, SessionId, StoryEventId, WorldId,
@@ -20,9 +22,12 @@ impl Neo4jStoryEventRepository {
     pub fn new(connection: Neo4jConnection) -> Self {
         Self { connection }
     }
+}
 
+#[async_trait]
+impl StoryEventRepositoryPort for Neo4jStoryEventRepository {
     /// Create a new story event
-    pub async fn create(&self, event: &StoryEvent) -> Result<()> {
+    async fn create(&self, event: &StoryEvent) -> Result<()> {
         let event_type_json = serde_json::to_string(&event.event_type)?;
         let involved_chars: Vec<String> = event
             .involved_characters
@@ -119,7 +124,7 @@ impl Neo4jStoryEventRepository {
     }
 
     /// Get a story event by ID
-    pub async fn get(&self, id: StoryEventId) -> Result<Option<StoryEvent>> {
+    async fn get(&self, id: StoryEventId) -> Result<Option<StoryEvent>> {
         let q = query(
             "MATCH (e:StoryEvent {id: $id})
             RETURN e",
@@ -136,7 +141,7 @@ impl Neo4jStoryEventRepository {
     }
 
     /// List story events for a session
-    pub async fn list_by_session(&self, session_id: SessionId) -> Result<Vec<StoryEvent>> {
+    async fn list_by_session(&self, session_id: SessionId) -> Result<Vec<StoryEvent>> {
         let q = query(
             "MATCH (e:StoryEvent {session_id: $session_id})
             RETURN e
@@ -155,7 +160,7 @@ impl Neo4jStoryEventRepository {
     }
 
     /// List story events for a world
-    pub async fn list_by_world(&self, world_id: WorldId) -> Result<Vec<StoryEvent>> {
+    async fn list_by_world(&self, world_id: WorldId) -> Result<Vec<StoryEvent>> {
         let q = query(
             "MATCH (w:World {id: $world_id})-[:HAS_STORY_EVENT]->(e:StoryEvent)
             RETURN e
@@ -174,7 +179,7 @@ impl Neo4jStoryEventRepository {
     }
 
     /// List story events for a world with pagination
-    pub async fn list_by_world_paginated(
+    async fn list_by_world_paginated(
         &self,
         world_id: WorldId,
         limit: u32,
@@ -202,7 +207,7 @@ impl Neo4jStoryEventRepository {
     }
 
     /// List visible (non-hidden) story events for a world
-    pub async fn list_visible(&self, world_id: WorldId, limit: u32) -> Result<Vec<StoryEvent>> {
+    async fn list_visible(&self, world_id: WorldId, limit: u32) -> Result<Vec<StoryEvent>> {
         let q = query(
             "MATCH (w:World {id: $world_id})-[:HAS_STORY_EVENT]->(e:StoryEvent)
             WHERE e.is_hidden = false
@@ -224,7 +229,7 @@ impl Neo4jStoryEventRepository {
     }
 
     /// Search story events by tags
-    pub async fn search_by_tags(
+    async fn search_by_tags(
         &self,
         world_id: WorldId,
         tags: Vec<String>,
@@ -251,7 +256,7 @@ impl Neo4jStoryEventRepository {
     }
 
     /// Search story events by text in summary
-    pub async fn search_by_text(
+    async fn search_by_text(
         &self,
         world_id: WorldId,
         search_text: &str,
@@ -276,7 +281,7 @@ impl Neo4jStoryEventRepository {
     }
 
     /// List events involving a specific character
-    pub async fn list_by_character(&self, character_id: CharacterId) -> Result<Vec<StoryEvent>> {
+    async fn list_by_character(&self, character_id: CharacterId) -> Result<Vec<StoryEvent>> {
         let q = query(
             "MATCH (c:Character {id: $char_id})-[:INVOLVED_IN]->(e:StoryEvent)
             RETURN e
@@ -295,7 +300,7 @@ impl Neo4jStoryEventRepository {
     }
 
     /// List events at a specific location
-    pub async fn list_by_location(&self, location_id: LocationId) -> Result<Vec<StoryEvent>> {
+    async fn list_by_location(&self, location_id: LocationId) -> Result<Vec<StoryEvent>> {
         let q = query(
             "MATCH (l:Location {id: $location_id})-[:HAS_EVENT]->(e:StoryEvent)
             RETURN e
@@ -314,7 +319,7 @@ impl Neo4jStoryEventRepository {
     }
 
     /// Update story event summary (DM editing)
-    pub async fn update_summary(&self, id: StoryEventId, summary: &str) -> Result<bool> {
+    async fn update_summary(&self, id: StoryEventId, summary: &str) -> Result<bool> {
         let q = query(
             "MATCH (e:StoryEvent {id: $id})
             SET e.summary = $summary
@@ -328,7 +333,7 @@ impl Neo4jStoryEventRepository {
     }
 
     /// Update event visibility
-    pub async fn set_hidden(&self, id: StoryEventId, is_hidden: bool) -> Result<bool> {
+    async fn set_hidden(&self, id: StoryEventId, is_hidden: bool) -> Result<bool> {
         let q = query(
             "MATCH (e:StoryEvent {id: $id})
             SET e.is_hidden = $is_hidden
@@ -342,7 +347,7 @@ impl Neo4jStoryEventRepository {
     }
 
     /// Update event tags
-    pub async fn update_tags(&self, id: StoryEventId, tags: Vec<String>) -> Result<bool> {
+    async fn update_tags(&self, id: StoryEventId, tags: Vec<String>) -> Result<bool> {
         let tags_json = serde_json::to_string(&tags)?;
         let q = query(
             "MATCH (e:StoryEvent {id: $id})
@@ -357,7 +362,7 @@ impl Neo4jStoryEventRepository {
     }
 
     /// Delete a story event (rarely used - events are usually immutable)
-    pub async fn delete(&self, id: StoryEventId) -> Result<bool> {
+    async fn delete(&self, id: StoryEventId) -> Result<bool> {
         let q = query(
             "MATCH (e:StoryEvent {id: $id})
             DETACH DELETE e
@@ -375,7 +380,7 @@ impl Neo4jStoryEventRepository {
     }
 
     /// Count events for a world
-    pub async fn count_by_world(&self, world_id: WorldId) -> Result<u64> {
+    async fn count_by_world(&self, world_id: WorldId) -> Result<u64> {
         let q = query(
             "MATCH (w:World {id: $world_id})-[:HAS_STORY_EVENT]->(e:StoryEvent)
             RETURN count(e) as count",

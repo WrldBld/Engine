@@ -1,7 +1,6 @@
 //! Actantial model - Character wants and desires
 
 use serde::{Deserialize, Serialize};
-
 use super::{CharacterId, ItemId, WantId};
 
 /// A character's desire or goal (actantial model)

@@ -5,7 +5,9 @@
 //! scene transitions, and more.
 
 use anyhow::Result;
+use std::sync::Arc;
 
+use crate::application::ports::outbound::StoryEventRepositoryPort;
 use crate::domain::entities::{
     ChallengeEventOutcome, CombatEventType, CombatOutcome, DmMarkerType, InfoImportance, InfoType,
     ItemSource, MarkerImportance, StoryEvent, StoryEventType,
@@ -14,15 +16,14 @@ use crate::domain::value_objects::{
     ChallengeId, CharacterId, LocationId, NarrativeEventId, SceneId, SessionId, StoryEventId,
     WorldId,
 };
-use crate::infrastructure::persistence::Neo4jRepository;
 
 /// Service for recording gameplay events to the story timeline
 pub struct StoryEventService {
-    repository: Neo4jRepository,
+    repository: Arc<dyn StoryEventRepositoryPort>,
 }
 
 impl StoryEventService {
-    pub fn new(repository: Neo4jRepository) -> Self {
+    pub fn new(repository: Arc<dyn StoryEventRepositoryPort>) -> Self {
         Self { repository }
     }
 
@@ -66,7 +67,7 @@ impl StoryEventService {
         }
 
         let event_id = event.id;
-        self.repository.story_events().create(&event).await?;
+        self.repository.create(&event).await?;
 
         tracing::debug!("Recorded dialogue exchange event: {}", event_id);
         Ok(event_id)
@@ -123,7 +124,7 @@ impl StoryEventService {
         }
 
         let event_id = event.id;
-        self.repository.story_events().create(&event).await?;
+        self.repository.create(&event).await?;
 
         tracing::debug!("Recorded challenge event: {}", event_id);
         Ok(event_id)
@@ -162,7 +163,7 @@ impl StoryEventService {
         }
 
         let event_id = event.id;
-        self.repository.story_events().create(&event).await?;
+        self.repository.create(&event).await?;
 
         tracing::debug!("Recorded scene transition event: {}", event_id);
         Ok(event_id)
@@ -210,7 +211,7 @@ impl StoryEventService {
         }
 
         let event_id = event.id;
-        self.repository.story_events().create(&event).await?;
+        self.repository.create(&event).await?;
 
         tracing::debug!("Recorded DM marker event: {}", event_id);
         Ok(event_id)
@@ -256,7 +257,7 @@ impl StoryEventService {
         }
 
         let event_id = event.id;
-        self.repository.story_events().create(&event).await?;
+        self.repository.create(&event).await?;
 
         tracing::debug!("Recorded information revealed event: {}", event_id);
         Ok(event_id)
@@ -298,7 +299,7 @@ impl StoryEventService {
         }
 
         let event_id = event.id;
-        self.repository.story_events().create(&event).await?;
+        self.repository.create(&event).await?;
 
         tracing::debug!("Recorded relationship change event: {}", event_id);
         Ok(event_id)
@@ -341,7 +342,7 @@ impl StoryEventService {
         }
 
         let event_id = event.id;
-        self.repository.story_events().create(&event).await?;
+        self.repository.create(&event).await?;
 
         tracing::debug!("Recorded item acquired event: {}", event_id);
         Ok(event_id)
@@ -384,7 +385,7 @@ impl StoryEventService {
         }
 
         let event_id = event.id;
-        self.repository.story_events().create(&event).await?;
+        self.repository.create(&event).await?;
 
         tracing::debug!("Recorded narrative event triggered: {}", event_id);
         Ok(event_id)
@@ -409,7 +410,7 @@ impl StoryEventService {
             .with_summary(format!("Session {} started", session_number));
 
         let event_id = event.id;
-        self.repository.story_events().create(&event).await?;
+        self.repository.create(&event).await?;
 
         tracing::debug!("Recorded session started event: {}", event_id);
         Ok(event_id)
@@ -431,7 +432,7 @@ impl StoryEventService {
         let event = StoryEvent::new(world_id, session_id, event_type).with_summary(summary);
 
         let event_id = event.id;
-        self.repository.story_events().create(&event).await?;
+        self.repository.create(&event).await?;
 
         tracing::debug!("Recorded session ended event: {}", event_id);
         Ok(event_id)

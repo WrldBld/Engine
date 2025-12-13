@@ -1,7 +1,6 @@
 //! Location entity - Physical or conceptual places in the world
 
 use serde::{Deserialize, Serialize};
-
 use crate::domain::value_objects::{GridMapId, LocationId, WorldId};
 
 /// A location in the world
@@ -209,7 +208,7 @@ impl LocationConnection {
 }
 
 /// Spatial relationship between locations
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub enum SpatialRelationship {
     /// Standard connection (door, path, road)
     #[default]

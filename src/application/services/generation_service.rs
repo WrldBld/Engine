@@ -7,17 +7,17 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use anyhow::Result;
 use chrono::Utc;
 use tokio::sync::{mpsc, RwLock};
 
+use crate::application::ports::outbound::{AssetRepositoryPort, ComfyUIPort};
 use crate::domain::entities::{
     AssetType, BatchStatus, EntityType, GalleryAsset, GenerationBatch, GenerationMetadata,
 };
 use crate::domain::value_objects::{AssetId, BatchId};
-use crate::infrastructure::comfyui::ComfyUIClient;
-use crate::infrastructure::persistence::Neo4jAssetRepository;
 
 /// Events emitted by the generation service
 #[derive(Debug, Clone)]
@@ -47,9 +47,9 @@ pub struct GenerationRequest {
 /// Generation service for managing asset generation
 pub struct GenerationService {
     /// ComfyUI client for sending generation requests
-    comfyui_client: ComfyUIClient,
+    comfyui_client: Arc<dyn ComfyUIPort>,
     /// Asset repository for persisting results
-    repository: Neo4jAssetRepository,
+    repository: Arc<dyn AssetRepositoryPort>,
     /// Directory to save generated assets
     output_dir: PathBuf,
     /// Active batches being processed
@@ -70,8 +70,8 @@ struct BatchTracker {
 impl GenerationService {
     /// Create a new generation service
     pub fn new(
-        comfyui_client: ComfyUIClient,
-        repository: Neo4jAssetRepository,
+        comfyui_client: Arc<dyn ComfyUIPort>,
+        repository: Arc<dyn AssetRepositoryPort>,
         output_dir: PathBuf,
         workflow_dir: PathBuf,
         event_sender: mpsc::UnboundedSender<GenerationEvent>,
@@ -331,7 +331,7 @@ impl GenerationService {
         asset.id = asset_id;
 
         // Persist the asset
-        self.repository.create_asset(&asset).await?;
+        self.repository.create(&asset).await?;
 
         Ok(asset)
     }

@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use uuid::Uuid;
 
+use crate::application::ports::outbound::StoryEventRepositoryPort;
 use crate::domain::entities::{
     DmMarkerType, ItemSource, MarkerImportance, StoryEvent, StoryEventType,
 };

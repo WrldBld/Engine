@@ -7,10 +7,10 @@
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, instrument};
 
+use crate::application::ports::outbound::GameSessionPort;
 use crate::domain::value_objects::{
     ChangeAmount, GameTool, InfoImportance, RelationshipChange,
 };
-use crate::infrastructure::session::GameSession;
 
 /// Result of executing a tool
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -103,7 +103,7 @@ impl ToolExecutionService {
     pub async fn execute_tool(
         &self,
         tool: &GameTool,
-        session: &mut GameSession,
+        session: &mut impl GameSessionPort,
     ) -> Result<ToolExecutionResult, ToolExecutionError> {
         match tool {
             GameTool::GiveItem { item_name, description } => {
@@ -137,7 +137,7 @@ impl ToolExecutionService {
         &self,
         item_name: &str,
         description: &str,
-        session: &mut GameSession,
+        session: &mut impl GameSessionPort,
     ) -> Result<ToolExecutionResult, ToolExecutionError> {
         // Get the player character from the session
         // For now, we log the item transfer without modifying inventory
@@ -175,7 +175,7 @@ impl ToolExecutionService {
         info_type: &str,
         content: &str,
         importance: &InfoImportance,
-        session: &mut GameSession,
+        session: &mut impl GameSessionPort,
     ) -> Result<ToolExecutionResult, ToolExecutionError> {
         let description_msg = format!(
             "Revealed {} {} information",
@@ -209,7 +209,7 @@ impl ToolExecutionService {
         change: &RelationshipChange,
         amount: &ChangeAmount,
         reason: &str,
-        session: &mut GameSession,
+        session: &mut impl GameSessionPort,
     ) -> Result<ToolExecutionResult, ToolExecutionError> {
         // Calculate sentiment delta based on amount
         let delta = match amount {
@@ -271,7 +271,7 @@ impl ToolExecutionService {
         &self,
         event_type: &str,
         description: &str,
-        session: &mut GameSession,
+        session: &mut impl GameSessionPort,
     ) -> Result<ToolExecutionResult, ToolExecutionError> {
         let description_msg = format!("Triggered {} event: {}", event_type, description);
 
@@ -309,7 +309,7 @@ mod tests {
     use crate::domain::value_objects::{
         RuleSystemConfig, WorldId,
     };
-    use crate::infrastructure::session::WorldSnapshot;
+    use crate::infrastructure::session::{GameSession, WorldSnapshot};
 
     fn create_test_session() -> GameSession {
         let world = World {

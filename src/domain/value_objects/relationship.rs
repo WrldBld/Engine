@@ -1,7 +1,6 @@
 //! Character relationships for social network modeling
 
 use serde::{Deserialize, Serialize};
-
 use super::{CharacterId, RelationshipId};
 
 /// A relationship between two characters
@@ -47,7 +46,7 @@ impl Relationship {
 }
 
 /// Types of relationships between characters
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RelationshipType {
     Family(FamilyRelation),
     Romantic,
@@ -60,7 +59,7 @@ pub enum RelationshipType {
 }
 
 /// Family relationship subtypes
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FamilyRelation {
     Parent,
     Child,

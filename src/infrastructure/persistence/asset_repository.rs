@@ -589,4 +589,20 @@ impl AssetRepositoryPort for Neo4jAssetRepository {
     async fn update_batch_status(&self, id: BatchId, status: &BatchStatus) -> Result<()> {
         Neo4jAssetRepository::update_batch_status(self, id, status).await
     }
+
+    async fn update_batch_assets(&self, id: BatchId, assets: &[AssetId]) -> Result<()> {
+        Neo4jAssetRepository::update_batch_assets(self, id, assets).await
+    }
+
+    async fn list_active_batches(&self) -> Result<Vec<GenerationBatch>> {
+        Neo4jAssetRepository::list_active_batches(self).await
+    }
+
+    async fn list_ready_batches(&self) -> Result<Vec<GenerationBatch>> {
+        Neo4jAssetRepository::list_ready_batches(self).await
+    }
+
+    async fn delete_batch(&self, id: BatchId) -> Result<()> {
+        Neo4jAssetRepository::delete_batch(self, id).await
+    }
 }

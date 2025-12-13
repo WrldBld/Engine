@@ -8,11 +8,11 @@ use async_trait::async_trait;
 
 use crate::domain::entities::{
     Act, Character, GalleryAsset, GenerationBatch, GridMap, InteractionTemplate, Location,
-    LocationConnection, Scene, Skill, World,
+    LocationConnection, Scene, Skill, StoryEvent, World,
 };
 use crate::domain::value_objects::{
     ActId, AssetId, BatchId, CharacterId, GridMapId, InteractionId, LocationId, Relationship,
-    RelationshipId, SceneId, SkillId, WorldId,
+    RelationshipId, SceneId, SessionId, SkillId, StoryEventId, WorldId,
 };
 
 // =============================================================================
@@ -251,6 +251,76 @@ pub trait AssetRepositoryPort: Send + Sync {
         id: BatchId,
         status: &crate::domain::entities::BatchStatus,
     ) -> Result<()>;
+
+    /// Update the assets associated with a batch
+    async fn update_batch_assets(&self, id: BatchId, assets: &[AssetId]) -> Result<()>;
+
+    /// List all active (queued or generating) batches
+    async fn list_active_batches(&self) -> Result<Vec<GenerationBatch>>;
+
+    /// List batches ready for selection
+    async fn list_ready_batches(&self) -> Result<Vec<GenerationBatch>>;
+
+    /// Delete a batch
+    async fn delete_batch(&self, id: BatchId) -> Result<()>;
+}
+
+// =============================================================================
+// StoryEvent Repository Port
+// =============================================================================
+
+/// Repository port for StoryEvent operations
+#[async_trait]
+pub trait StoryEventRepositoryPort: Send + Sync {
+    /// Create a new story event
+    async fn create(&self, event: &StoryEvent) -> Result<()>;
+
+    /// Get a story event by ID
+    async fn get(&self, id: StoryEventId) -> Result<Option<StoryEvent>>;
+
+    /// List story events for a session
+    async fn list_by_session(&self, session_id: SessionId) -> Result<Vec<StoryEvent>>;
+
+    /// List story events for a world
+    async fn list_by_world(&self, world_id: WorldId) -> Result<Vec<StoryEvent>>;
+
+    /// List story events for a world with pagination
+    async fn list_by_world_paginated(
+        &self,
+        world_id: WorldId,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<StoryEvent>>;
+
+    /// List visible (non-hidden) story events for a world
+    async fn list_visible(&self, world_id: WorldId, limit: u32) -> Result<Vec<StoryEvent>>;
+
+    /// Search story events by tags
+    async fn search_by_tags(&self, world_id: WorldId, tags: Vec<String>) -> Result<Vec<StoryEvent>>;
+
+    /// Search story events by text in summary
+    async fn search_by_text(&self, world_id: WorldId, search_text: &str) -> Result<Vec<StoryEvent>>;
+
+    /// List events involving a specific character
+    async fn list_by_character(&self, character_id: CharacterId) -> Result<Vec<StoryEvent>>;
+
+    /// List events at a specific location
+    async fn list_by_location(&self, location_id: LocationId) -> Result<Vec<StoryEvent>>;
+
+    /// Update story event summary
+    async fn update_summary(&self, id: StoryEventId, summary: &str) -> Result<bool>;
+
+    /// Update event visibility
+    async fn set_hidden(&self, id: StoryEventId, is_hidden: bool) -> Result<bool>;
+
+    /// Update event tags
+    async fn update_tags(&self, id: StoryEventId, tags: Vec<String>) -> Result<bool>;
+
+    /// Delete a story event
+    async fn delete(&self, id: StoryEventId) -> Result<bool>;
+
+    /// Count events for a world
+    async fn count_by_world(&self, world_id: WorldId) -> Result<u64>;
 }
 
 // =============================================================================

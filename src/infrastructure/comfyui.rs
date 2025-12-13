@@ -1,8 +1,15 @@
 //! ComfyUI client for AI asset generation
 
+use anyhow::Result;
+use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+
+use crate::application::ports::outbound::{
+    ComfyUIPort, GeneratedImage, HistoryResponse as PortHistoryResponse, NodeOutput as PortNodeOutput,
+    PromptHistory as PortPromptHistory, PromptStatus as PortPromptStatus, QueuePromptResponse,
+};
 
 /// Client for ComfyUI API
 pub struct ComfyUIClient {
@@ -227,5 +234,66 @@ impl GenerationRequest {
             height: 512,
             seed: None,
         }
+    }
+}
+
+// =============================================================================
+// ComfyUIPort Implementation
+// =============================================================================
+
+#[async_trait]
+impl ComfyUIPort for ComfyUIClient {
+    async fn queue_prompt(&self, workflow: serde_json::Value) -> Result<QueuePromptResponse> {
+        // Call the inherent method using ComfyUIClient:: syntax to avoid recursion
+        let response = ComfyUIClient::queue_prompt(self, workflow).await?;
+        Ok(QueuePromptResponse {
+            prompt_id: response.prompt_id,
+        })
+    }
+
+    async fn get_history(&self, prompt_id: &str) -> Result<PortHistoryResponse> {
+        // Call the inherent method using ComfyUIClient:: syntax to avoid recursion
+        let response = ComfyUIClient::get_history(self, prompt_id).await?;
+
+        // Convert infrastructure types to port types
+        let prompts = response
+            .prompts
+            .into_iter()
+            .map(|(id, history)| {
+                let port_history = PortPromptHistory {
+                    status: PortPromptStatus {
+                        completed: history.status.completed,
+                    },
+                    outputs: history
+                        .outputs
+                        .into_iter()
+                        .map(|(node_id, output)| {
+                            let port_output = PortNodeOutput {
+                                images: output.images.map(|images| {
+                                    images
+                                        .into_iter()
+                                        .map(|img| GeneratedImage {
+                                            filename: img.filename,
+                                            subfolder: img.subfolder,
+                                            r#type: img.r#type,
+                                        })
+                                        .collect()
+                                }),
+                            };
+                            (node_id, port_output)
+                        })
+                        .collect(),
+                };
+                (id, port_history)
+            })
+            .collect();
+
+        Ok(PortHistoryResponse { prompts })
+    }
+
+    async fn get_image(&self, filename: &str, subfolder: &str, folder_type: &str) -> Result<Vec<u8>> {
+        // Call the inherent method using ComfyUIClient:: syntax to avoid recursion
+        let image_data = ComfyUIClient::get_image(self, filename, subfolder, folder_type).await?;
+        Ok(image_data)
     }
 }
