@@ -1,9 +1,11 @@
 //! Challenge repository implementation for Neo4j
 
 use anyhow::Result;
+use async_trait::async_trait;
 use neo4rs::{query, Row};
 
 use super::connection::Neo4jConnection;
+use crate::application::ports::outbound::ChallengeRepositoryPort;
 use crate::domain::entities::{
     Challenge, ChallengeType,
 };
@@ -376,5 +378,52 @@ fn parse_challenge_type(s: &str) -> ChallengeType {
         "OpposedCheck" => ChallengeType::OpposedCheck,
         "ComplexChallenge" => ChallengeType::ComplexChallenge,
         _ => ChallengeType::SkillCheck,
+    }
+}
+
+// =============================================================================
+// ChallengeRepositoryPort Implementation
+// =============================================================================
+
+#[async_trait]
+impl ChallengeRepositoryPort for Neo4jChallengeRepository {
+    async fn create(&self, challenge: &Challenge) -> Result<()> {
+        self.create(challenge).await
+    }
+
+    async fn get(&self, id: ChallengeId) -> Result<Option<Challenge>> {
+        self.get(id).await
+    }
+
+    async fn list_by_world(&self, world_id: WorldId) -> Result<Vec<Challenge>> {
+        self.list_by_world(world_id).await
+    }
+
+    async fn list_by_scene(&self, scene_id: SceneId) -> Result<Vec<Challenge>> {
+        self.list_by_scene(scene_id).await
+    }
+
+    async fn list_active(&self, world_id: WorldId) -> Result<Vec<Challenge>> {
+        self.list_active(world_id).await
+    }
+
+    async fn list_favorites(&self, world_id: WorldId) -> Result<Vec<Challenge>> {
+        self.list_favorites(world_id).await
+    }
+
+    async fn update(&self, challenge: &Challenge) -> Result<()> {
+        self.update(challenge).await
+    }
+
+    async fn delete(&self, id: ChallengeId) -> Result<()> {
+        self.delete(id).await
+    }
+
+    async fn set_active(&self, id: ChallengeId, active: bool) -> Result<()> {
+        self.set_active(id, active).await
+    }
+
+    async fn toggle_favorite(&self, id: ChallengeId) -> Result<bool> {
+        self.toggle_favorite(id).await
     }
 }

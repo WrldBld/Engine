@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use uuid::Uuid;
 
+use crate::application::services::InteractionService;
 use crate::domain::entities::{
     InteractionTarget, InteractionTemplate, InteractionType,
 };
@@ -71,9 +72,8 @@ pub async fn list_interactions(
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid scene ID".to_string()))?;
 
     let interactions = state
-        .repository
-        .interactions()
-        .list_by_scene(SceneId::from_uuid(uuid))
+        .interaction_service
+        .list_interactions(SceneId::from_uuid(uuid))
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -119,9 +119,8 @@ pub async fn create_interaction(
     interaction = interaction.with_order(req.order);
 
     state
-        .repository
-        .interactions()
-        .create(&interaction)
+        .interaction_service
+        .create_interaction(&interaction)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -144,9 +143,8 @@ pub async fn get_interaction(
     })?;
 
     let interaction = state
-        .repository
-        .interactions()
-        .get(InteractionId::from_uuid(uuid))
+        .interaction_service
+        .get_interaction(InteractionId::from_uuid(uuid))
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .ok_or_else(|| (StatusCode::NOT_FOUND, "Interaction not found".to_string()))?;
@@ -168,9 +166,8 @@ pub async fn update_interaction(
     })?;
 
     let mut interaction = state
-        .repository
-        .interactions()
-        .get(InteractionId::from_uuid(uuid))
+        .interaction_service
+        .get_interaction(InteractionId::from_uuid(uuid))
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .ok_or_else(|| (StatusCode::NOT_FOUND, "Interaction not found".to_string()))?;
@@ -187,9 +184,8 @@ pub async fn update_interaction(
     interaction.order = req.order;
 
     state
-        .repository
-        .interactions()
-        .update(&interaction)
+        .interaction_service
+        .update_interaction(&interaction)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -209,9 +205,8 @@ pub async fn delete_interaction(
     })?;
 
     state
-        .repository
-        .interactions()
-        .delete(InteractionId::from_uuid(uuid))
+        .interaction_service
+        .delete_interaction(InteractionId::from_uuid(uuid))
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -237,9 +232,8 @@ pub async fn set_interaction_availability(
     })?;
 
     state
-        .repository
-        .interactions()
-        .set_availability(InteractionId::from_uuid(uuid), req.available)
+        .interaction_service
+        .set_interaction_availability(InteractionId::from_uuid(uuid), req.available)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 

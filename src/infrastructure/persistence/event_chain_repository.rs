@@ -1,11 +1,13 @@
 //! EventChain repository implementation for Neo4j
 
 use anyhow::Result;
+use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use neo4rs::{query, Row};
 use uuid::Uuid;
 
 use super::connection::Neo4jConnection;
+use crate::application::ports::outbound::EventChainRepositoryPort;
 use crate::domain::entities::{ChainStatus, EventChain};
 use crate::domain::value_objects::{ActId, EventChainId, NarrativeEventId, WorldId};
 
@@ -440,4 +442,75 @@ fn row_to_event_chain(row: Row) -> Result<EventChain> {
         created_at: DateTime::parse_from_rfc3339(&created_at_str)?.with_timezone(&Utc),
         updated_at: DateTime::parse_from_rfc3339(&updated_at_str)?.with_timezone(&Utc),
     })
+}
+
+// =============================================================================
+// EventChainRepositoryPort Implementation
+// =============================================================================
+
+#[async_trait]
+impl EventChainRepositoryPort for Neo4jEventChainRepository {
+    async fn create(&self, chain: &EventChain) -> Result<()> {
+        self.create(chain).await
+    }
+
+    async fn get(&self, id: EventChainId) -> Result<Option<EventChain>> {
+        self.get(id).await
+    }
+
+    async fn update(&self, chain: &EventChain) -> Result<bool> {
+        self.update(chain).await
+    }
+
+    async fn list_by_world(&self, world_id: WorldId) -> Result<Vec<EventChain>> {
+        self.list_by_world(world_id).await
+    }
+
+    async fn list_active(&self, world_id: WorldId) -> Result<Vec<EventChain>> {
+        self.list_active(world_id).await
+    }
+
+    async fn list_favorites(&self, world_id: WorldId) -> Result<Vec<EventChain>> {
+        self.list_favorites(world_id).await
+    }
+
+    async fn get_chains_for_event(&self, event_id: NarrativeEventId) -> Result<Vec<EventChain>> {
+        self.get_chains_for_event(event_id).await
+    }
+
+    async fn add_event_to_chain(&self, chain_id: EventChainId, event_id: NarrativeEventId) -> Result<bool> {
+        self.add_event_to_chain(chain_id, event_id).await
+    }
+
+    async fn remove_event_from_chain(&self, chain_id: EventChainId, event_id: NarrativeEventId) -> Result<bool> {
+        self.remove_event_from_chain(chain_id, event_id).await
+    }
+
+    async fn complete_event(&self, chain_id: EventChainId, event_id: NarrativeEventId) -> Result<bool> {
+        self.complete_event(chain_id, event_id).await
+    }
+
+    async fn toggle_favorite(&self, id: EventChainId) -> Result<bool> {
+        self.toggle_favorite(id).await
+    }
+
+    async fn set_active(&self, id: EventChainId, is_active: bool) -> Result<bool> {
+        self.set_active(id, is_active).await
+    }
+
+    async fn reset(&self, id: EventChainId) -> Result<bool> {
+        self.reset(id).await
+    }
+
+    async fn delete(&self, id: EventChainId) -> Result<bool> {
+        self.delete(id).await
+    }
+
+    async fn get_status(&self, id: EventChainId) -> Result<Option<ChainStatus>> {
+        self.get_status(id).await
+    }
+
+    async fn list_statuses(&self, world_id: WorldId) -> Result<Vec<ChainStatus>> {
+        self.list_statuses(world_id).await
+    }
 }

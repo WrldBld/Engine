@@ -27,9 +27,7 @@ pub use event_chain_repository::Neo4jEventChainRepository;
 pub use interaction_repository::Neo4jInteractionRepository;
 pub use location_repository::Neo4jLocationRepository;
 pub use narrative_event_repository::Neo4jNarrativeEventRepository;
-pub use relationship_repository::{
-    Neo4jRelationshipRepository, SocialNetwork,
-};
+pub use relationship_repository::Neo4jRelationshipRepository;
 pub use scene_repository::Neo4jSceneRepository;
 pub use sheet_template_repository::Neo4jSheetTemplateRepository;
 pub use skill_repository::Neo4jSkillRepository;

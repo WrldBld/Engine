@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use uuid::Uuid;
 
+use crate::application::services::{EventChainService, WorldService};
 use crate::domain::entities::{ChainStatus, EventChain};
 use crate::domain::value_objects::{ActId, EventChainId, NarrativeEventId, WorldId};
 use crate::infrastructure::state::AppState;
@@ -156,9 +157,8 @@ pub async fn list_event_chains(
     let world_id = WorldId::from_uuid(uuid);
 
     let chains = state
-        .repository
-        .event_chains()
-        .list_by_world(world_id)
+        .event_chain_service
+        .list_event_chains(world_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -177,8 +177,7 @@ pub async fn list_active_chains(
     let world_id = WorldId::from_uuid(uuid);
 
     let chains = state
-        .repository
-        .event_chains()
+        .event_chain_service
         .list_active(world_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -198,8 +197,7 @@ pub async fn list_favorite_chains(
     let world_id = WorldId::from_uuid(uuid);
 
     let chains = state
-        .repository
-        .event_chains()
+        .event_chain_service
         .list_favorites(world_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -219,8 +217,7 @@ pub async fn list_chain_statuses(
     let world_id = WorldId::from_uuid(uuid);
 
     let statuses = state
-        .repository
-        .event_chains()
+        .event_chain_service
         .list_statuses(world_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -240,9 +237,8 @@ pub async fn get_event_chain(
     let chain_id = EventChainId::from_uuid(uuid);
 
     let chain = state
-        .repository
-        .event_chains()
-        .get(chain_id)
+        .event_chain_service
+        .get_event_chain(chain_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .ok_or_else(|| (StatusCode::NOT_FOUND, "Event chain not found".to_string()))?;
@@ -262,9 +258,8 @@ pub async fn create_event_chain(
 
     // Verify world exists
     let _ = state
-        .repository
-        .worlds()
-        .get(world_id)
+        .world_service
+        .get_world(world_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .ok_or_else(|| (StatusCode::NOT_FOUND, "World not found".to_string()))?;
@@ -296,15 +291,14 @@ pub async fn create_event_chain(
     chain.color = req.color;
     chain.is_active = req.is_active;
 
-    // Save to repository
-    state
-        .repository
-        .event_chains()
-        .create(&chain)
+    // Save via service
+    let created_chain = state
+        .event_chain_service
+        .create_event_chain(chain)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    Ok((StatusCode::CREATED, Json(EventChainResponse::from(chain))))
+    Ok((StatusCode::CREATED, Json(EventChainResponse::from(created_chain))))
 }
 
 /// Update an event chain
@@ -319,9 +313,8 @@ pub async fn update_event_chain(
 
     // Get existing chain
     let mut chain = state
-        .repository
-        .event_chains()
-        .get(chain_id)
+        .event_chain_service
+        .get_event_chain(chain_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .ok_or_else(|| (StatusCode::NOT_FOUND, "Event chain not found".to_string()))?;
@@ -361,14 +354,13 @@ pub async fn update_event_chain(
     }
 
     // Save updates
-    state
-        .repository
-        .event_chains()
-        .update(&chain)
+    let updated_chain = state
+        .event_chain_service
+        .update_event_chain(chain)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    Ok(Json(EventChainResponse::from(chain)))
+    Ok(Json(EventChainResponse::from(updated_chain)))
 }
 
 /// Delete an event chain
@@ -380,20 +372,10 @@ pub async fn delete_event_chain(
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid chain ID".to_string()))?;
     let chain_id = EventChainId::from_uuid(uuid);
 
-    // Verify chain exists
-    let _ = state
-        .repository
-        .event_chains()
-        .get(chain_id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or_else(|| (StatusCode::NOT_FOUND, "Event chain not found".to_string()))?;
-
-    // Delete it
+    // Delete via service (which will verify existence)
     state
-        .repository
-        .event_chains()
-        .delete(chain_id)
+        .event_chain_service
+        .delete_event_chain(chain_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -410,8 +392,7 @@ pub async fn toggle_favorite(
     let chain_id = EventChainId::from_uuid(uuid);
 
     let is_favorite = state
-        .repository
-        .event_chains()
+        .event_chain_service
         .toggle_favorite(chain_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -430,8 +411,7 @@ pub async fn set_active(
     let chain_id = EventChainId::from_uuid(uuid);
 
     state
-        .repository
-        .event_chains()
+        .event_chain_service
         .set_active(chain_id, is_active)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -449,9 +429,8 @@ pub async fn reset_chain(
     let chain_id = EventChainId::from_uuid(uuid);
 
     state
-        .repository
-        .event_chains()
-        .reset(chain_id)
+        .event_chain_service
+        .reset_chain(chain_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -475,9 +454,8 @@ pub async fn add_event_to_chain(
     // If position is specified, we need to get the chain and insert at position
     if let Some(position) = req.position {
         let mut chain = state
-            .repository
-            .event_chains()
-            .get(chain_id)
+            .event_chain_service
+            .get_event_chain(chain_id)
             .await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
             .ok_or_else(|| (StatusCode::NOT_FOUND, "Event chain not found".to_string()))?;
@@ -485,16 +463,14 @@ pub async fn add_event_to_chain(
         chain.insert_event(position, event_id);
 
         state
-            .repository
-            .event_chains()
-            .update(&chain)
+            .event_chain_service
+            .update_event_chain(chain)
             .await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     } else {
         // Just append to the end
         state
-            .repository
-            .event_chains()
+            .event_chain_service
             .add_event_to_chain(chain_id, event_id)
             .await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -517,8 +493,7 @@ pub async fn remove_event_from_chain(
     let event_id = NarrativeEventId::from_uuid(event_uuid);
 
     state
-        .repository
-        .event_chains()
+        .event_chain_service
         .remove_event_from_chain(chain_id, event_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -540,8 +515,7 @@ pub async fn complete_event_in_chain(
     let event_id = NarrativeEventId::from_uuid(event_uuid);
 
     state
-        .repository
-        .event_chains()
+        .event_chain_service
         .complete_event(chain_id, event_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;

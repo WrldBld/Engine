@@ -19,10 +19,12 @@ pub use llm_port::{
 };
 
 pub use repository_port::{
-    AssetRepositoryPort, CharacterRepositoryPort, GridMapRepositoryPort,
-    InteractionRepositoryPort, LocationRepositoryPort, RelationshipRepositoryPort,
-    RepositoryProvider, SceneRepositoryPort, SkillRepositoryPort, StoryEventRepositoryPort,
-    WorldRepositoryPort,
+    AssetRepositoryPort, ChallengeRepositoryPort, CharacterNode, CharacterRepositoryPort,
+    EventChainRepositoryPort, GridMapRepositoryPort, InteractionRepositoryPort,
+    LocationRepositoryPort, NarrativeEventRepositoryPort, RelationshipEdge,
+    RelationshipRepositoryPort, RepositoryProvider, SceneRepositoryPort,
+    SheetTemplateRepositoryPort, SkillRepositoryPort, SocialNetwork, StoryEventRepositoryPort,
+    WorkflowRepositoryPort, WorldRepositoryPort,
 };
 
 pub use world_exporter_port::{

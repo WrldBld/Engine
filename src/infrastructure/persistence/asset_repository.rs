@@ -574,6 +574,10 @@ impl AssetRepositoryPort for Neo4jAssetRepository {
         Neo4jAssetRepository::activate_asset(self, id).await
     }
 
+    async fn update_label(&self, id: AssetId, label: Option<String>) -> Result<()> {
+        Neo4jAssetRepository::update_label(self, id, label).await
+    }
+
     async fn delete(&self, id: AssetId) -> Result<()> {
         Neo4jAssetRepository::delete_asset(self, id).await
     }

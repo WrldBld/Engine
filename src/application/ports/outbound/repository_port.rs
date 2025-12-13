@@ -5,15 +5,47 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 
 use crate::domain::entities::{
-    Act, Character, GalleryAsset, GenerationBatch, GridMap, InteractionTemplate, Location,
-    LocationConnection, Scene, Skill, StoryEvent, World,
+    Act, ChainStatus, Challenge, Character, CharacterSheetTemplate, EventChain, GalleryAsset,
+    GenerationBatch, GridMap, InteractionTemplate, Location, LocationConnection, NarrativeEvent,
+    Scene, SheetTemplateId, Skill, StoryEvent, World, WorkflowConfiguration,
 };
 use crate::domain::value_objects::{
-    ActId, AssetId, BatchId, CharacterId, GridMapId, InteractionId, LocationId, Relationship,
-    RelationshipId, SceneId, SessionId, SkillId, StoryEventId, WorldId,
+    ActId, AssetId, BatchId, ChallengeId, CharacterId, EventChainId, GridMapId, InteractionId,
+    LocationId, NarrativeEventId, Relationship, RelationshipId, SceneId, SessionId, SkillId,
+    StoryEventId, WorldId,
 };
+use crate::domain::entities::WorkflowSlot;
+
+// =============================================================================
+// Social Network DTOs
+// =============================================================================
+
+/// Representation of the social network graph
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SocialNetwork {
+    pub characters: Vec<CharacterNode>,
+    pub relationships: Vec<RelationshipEdge>,
+}
+
+/// A node in the social network (character)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CharacterNode {
+    pub id: String,
+    pub name: String,
+    pub archetype: String,
+}
+
+/// An edge in the social network (relationship)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RelationshipEdge {
+    pub from_id: String,
+    pub to_id: String,
+    pub relationship_type: String,
+    pub sentiment: f32,
+}
 
 // =============================================================================
 // World Repository Port
@@ -175,6 +207,9 @@ pub trait RelationshipRepositoryPort: Send + Sync {
 
     /// Delete a relationship by ID
     async fn delete(&self, id: RelationshipId) -> Result<()>;
+
+    /// Get the social network graph for a world
+    async fn get_social_network(&self, world_id: WorldId) -> Result<SocialNetwork>;
 }
 
 // =============================================================================
@@ -236,6 +271,9 @@ pub trait AssetRepositoryPort: Send + Sync {
     /// Activate an asset (set as current for its slot)
     async fn activate(&self, id: AssetId) -> Result<()>;
 
+    /// Update an asset's label
+    async fn update_label(&self, id: AssetId, label: Option<String>) -> Result<()>;
+
     /// Delete an asset
     async fn delete(&self, id: AssetId) -> Result<()>;
 
@@ -263,6 +301,44 @@ pub trait AssetRepositoryPort: Send + Sync {
 
     /// Delete a batch
     async fn delete_batch(&self, id: BatchId) -> Result<()>;
+}
+
+// =============================================================================
+// Challenge Repository Port
+// =============================================================================
+
+/// Repository port for Challenge operations
+#[async_trait]
+pub trait ChallengeRepositoryPort: Send + Sync {
+    /// Create a new challenge
+    async fn create(&self, challenge: &Challenge) -> Result<()>;
+
+    /// Get a challenge by ID
+    async fn get(&self, id: ChallengeId) -> Result<Option<Challenge>>;
+
+    /// List all challenges for a world
+    async fn list_by_world(&self, world_id: WorldId) -> Result<Vec<Challenge>>;
+
+    /// List challenges for a specific scene
+    async fn list_by_scene(&self, scene_id: SceneId) -> Result<Vec<Challenge>>;
+
+    /// List active challenges for a world (for LLM context)
+    async fn list_active(&self, world_id: WorldId) -> Result<Vec<Challenge>>;
+
+    /// List favorite challenges for quick access
+    async fn list_favorites(&self, world_id: WorldId) -> Result<Vec<Challenge>>;
+
+    /// Update a challenge
+    async fn update(&self, challenge: &Challenge) -> Result<()>;
+
+    /// Delete a challenge
+    async fn delete(&self, id: ChallengeId) -> Result<()>;
+
+    /// Set active status for a challenge
+    async fn set_active(&self, id: ChallengeId, active: bool) -> Result<()>;
+
+    /// Toggle favorite status
+    async fn toggle_favorite(&self, id: ChallengeId) -> Result<bool>;
 }
 
 // =============================================================================
@@ -321,6 +397,158 @@ pub trait StoryEventRepositoryPort: Send + Sync {
 
     /// Count events for a world
     async fn count_by_world(&self, world_id: WorldId) -> Result<u64>;
+}
+
+// =============================================================================
+// NarrativeEvent Repository Port
+// =============================================================================
+
+/// Repository port for NarrativeEvent operations
+#[async_trait]
+pub trait NarrativeEventRepositoryPort: Send + Sync {
+    /// Create a new narrative event
+    async fn create(&self, event: &NarrativeEvent) -> Result<()>;
+
+    /// Get a narrative event by ID
+    async fn get(&self, id: NarrativeEventId) -> Result<Option<NarrativeEvent>>;
+
+    /// Update a narrative event
+    async fn update(&self, event: &NarrativeEvent) -> Result<bool>;
+
+    /// List all narrative events for a world
+    async fn list_by_world(&self, world_id: WorldId) -> Result<Vec<NarrativeEvent>>;
+
+    /// List active narrative events for a world
+    async fn list_active(&self, world_id: WorldId) -> Result<Vec<NarrativeEvent>>;
+
+    /// List favorite narrative events for a world
+    async fn list_favorites(&self, world_id: WorldId) -> Result<Vec<NarrativeEvent>>;
+
+    /// List untriggered active events (for LLM context)
+    async fn list_pending(&self, world_id: WorldId) -> Result<Vec<NarrativeEvent>>;
+
+    /// Toggle favorite status
+    async fn toggle_favorite(&self, id: NarrativeEventId) -> Result<bool>;
+
+    /// Set active status
+    async fn set_active(&self, id: NarrativeEventId, is_active: bool) -> Result<bool>;
+
+    /// Mark event as triggered
+    async fn mark_triggered(&self, id: NarrativeEventId, outcome_name: Option<String>) -> Result<bool>;
+
+    /// Reset triggered status (for repeatable events)
+    async fn reset_triggered(&self, id: NarrativeEventId) -> Result<bool>;
+
+    /// Delete a narrative event
+    async fn delete(&self, id: NarrativeEventId) -> Result<bool>;
+}
+
+// =============================================================================
+// EventChain Repository Port
+// =============================================================================
+
+/// Repository port for EventChain operations
+#[async_trait]
+pub trait EventChainRepositoryPort: Send + Sync {
+    /// Create a new event chain
+    async fn create(&self, chain: &EventChain) -> Result<()>;
+
+    /// Get an event chain by ID
+    async fn get(&self, id: EventChainId) -> Result<Option<EventChain>>;
+
+    /// Update an event chain
+    async fn update(&self, chain: &EventChain) -> Result<bool>;
+
+    /// List all event chains for a world
+    async fn list_by_world(&self, world_id: WorldId) -> Result<Vec<EventChain>>;
+
+    /// List active event chains for a world
+    async fn list_active(&self, world_id: WorldId) -> Result<Vec<EventChain>>;
+
+    /// List favorite event chains for a world
+    async fn list_favorites(&self, world_id: WorldId) -> Result<Vec<EventChain>>;
+
+    /// Get chains containing a specific narrative event
+    async fn get_chains_for_event(&self, event_id: NarrativeEventId) -> Result<Vec<EventChain>>;
+
+    /// Add an event to a chain
+    async fn add_event_to_chain(&self, chain_id: EventChainId, event_id: NarrativeEventId) -> Result<bool>;
+
+    /// Remove an event from a chain
+    async fn remove_event_from_chain(&self, chain_id: EventChainId, event_id: NarrativeEventId) -> Result<bool>;
+
+    /// Mark an event as completed in a chain
+    async fn complete_event(&self, chain_id: EventChainId, event_id: NarrativeEventId) -> Result<bool>;
+
+    /// Toggle favorite status
+    async fn toggle_favorite(&self, id: EventChainId) -> Result<bool>;
+
+    /// Set active status
+    async fn set_active(&self, id: EventChainId, is_active: bool) -> Result<bool>;
+
+    /// Reset chain progress
+    async fn reset(&self, id: EventChainId) -> Result<bool>;
+
+    /// Delete an event chain
+    async fn delete(&self, id: EventChainId) -> Result<bool>;
+
+    /// Get chain status summary
+    async fn get_status(&self, id: EventChainId) -> Result<Option<ChainStatus>>;
+
+    /// Get all chain statuses for a world
+    async fn list_statuses(&self, world_id: WorldId) -> Result<Vec<ChainStatus>>;
+}
+
+// =============================================================================
+// SheetTemplate Repository Port
+// =============================================================================
+
+/// Repository port for CharacterSheetTemplate operations
+#[async_trait]
+pub trait SheetTemplateRepositoryPort: Send + Sync {
+    /// Create a new sheet template
+    async fn create(&self, template: &CharacterSheetTemplate) -> Result<()>;
+
+    /// Get a sheet template by ID
+    async fn get(&self, id: &SheetTemplateId) -> Result<Option<CharacterSheetTemplate>>;
+
+    /// Get the default template for a world
+    async fn get_default_for_world(&self, world_id: &WorldId) -> Result<Option<CharacterSheetTemplate>>;
+
+    /// List all templates for a world
+    async fn list_by_world(&self, world_id: &WorldId) -> Result<Vec<CharacterSheetTemplate>>;
+
+    /// Update a sheet template
+    async fn update(&self, template: &CharacterSheetTemplate) -> Result<()>;
+
+    /// Delete a sheet template
+    async fn delete(&self, id: &SheetTemplateId) -> Result<()>;
+
+    /// Delete all templates for a world
+    async fn delete_all_for_world(&self, world_id: &WorldId) -> Result<()>;
+
+    /// Check if a world has any templates
+    async fn has_templates(&self, world_id: &WorldId) -> Result<bool>;
+}
+
+// =============================================================================
+// Workflow Repository Port
+// =============================================================================
+
+/// Repository port for WorkflowConfiguration operations
+#[async_trait]
+pub trait WorkflowRepositoryPort: Send + Sync {
+    /// Save a workflow configuration (create or update)
+    async fn save(&self, config: &WorkflowConfiguration) -> Result<()>;
+
+    /// Get a workflow configuration by slot
+    async fn get_by_slot(&self, slot: WorkflowSlot) -> Result<Option<WorkflowConfiguration>>;
+
+    /// Delete a workflow configuration by slot
+    async fn delete_by_slot(&self, slot: WorkflowSlot) -> Result<bool>;
+
+    /// List all workflow configurations
+    async fn list_all(&self) -> Result<Vec<WorkflowConfiguration>>;
 }
 
 // =============================================================================

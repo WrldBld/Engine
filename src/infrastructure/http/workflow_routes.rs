@@ -140,8 +140,7 @@ pub async fn list_workflow_slots(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<WorkflowSlotsResponse>, (StatusCode, String)> {
     let configs = state
-        .repository
-        .workflows()
+        .workflow_config_service
         .list_all()
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -188,8 +187,7 @@ pub async fn get_workflow_config(
         .ok_or_else(|| (StatusCode::BAD_REQUEST, format!("Invalid slot: {}", slot)))?;
 
     let config = state
-        .repository
-        .workflows()
+        .workflow_config_service
         .get_by_slot(workflow_slot)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -218,8 +216,7 @@ pub async fn save_workflow_config(
 
     // Check if we're updating or creating
     let existing = state
-        .repository
-        .workflows()
+        .workflow_config_service
         .get_by_slot(workflow_slot)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -244,8 +241,7 @@ pub async fn save_workflow_config(
     };
 
     state
-        .repository
-        .workflows()
+        .workflow_config_service
         .save(&config)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -268,8 +264,7 @@ pub async fn delete_workflow_config(
         .ok_or_else(|| (StatusCode::BAD_REQUEST, format!("Invalid slot: {}", slot)))?;
 
     let deleted = state
-        .repository
-        .workflows()
+        .workflow_config_service
         .delete_by_slot(workflow_slot)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -315,8 +310,7 @@ pub async fn export_workflows(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let configs = state
-        .repository
-        .workflows()
+        .workflow_config_service
         .list_all()
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -345,8 +339,7 @@ pub async fn import_workflows(
 
     for config in configs {
         let existing = state
-            .repository
-            .workflows()
+            .workflow_config_service
             .get_by_slot(config.slot)
             .await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -357,8 +350,7 @@ pub async fn import_workflows(
         }
 
         state
-            .repository
-            .workflows()
+            .workflow_config_service
             .save(&config)
             .await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -392,8 +384,7 @@ pub async fn test_workflow(
         .ok_or_else(|| (StatusCode::BAD_REQUEST, format!("Invalid slot: {}", slot)))?;
 
     let config = state
-        .repository
-        .workflows()
+        .workflow_config_service
         .get_by_slot(workflow_slot)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?

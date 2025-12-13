@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use uuid::Uuid;
 
+use crate::application::services::{NarrativeEventService, WorldService};
 use crate::domain::entities::NarrativeEvent;
 use crate::domain::value_objects::{NarrativeEventId, WorldId};
 use crate::infrastructure::state::AppState;
@@ -162,8 +163,7 @@ pub async fn list_narrative_events(
     let world_id = WorldId::from_uuid(uuid);
 
     let events = state
-        .repository
-        .narrative_events()
+        .narrative_event_service
         .list_by_world(world_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -183,8 +183,7 @@ pub async fn list_active_events(
     let world_id = WorldId::from_uuid(uuid);
 
     let events = state
-        .repository
-        .narrative_events()
+        .narrative_event_service
         .list_active(world_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -204,8 +203,7 @@ pub async fn list_favorite_events(
     let world_id = WorldId::from_uuid(uuid);
 
     let events = state
-        .repository
-        .narrative_events()
+        .narrative_event_service
         .list_favorites(world_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -225,8 +223,7 @@ pub async fn list_pending_events(
     let world_id = WorldId::from_uuid(uuid);
 
     let events = state
-        .repository
-        .narrative_events()
+        .narrative_event_service
         .list_pending(world_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -246,8 +243,7 @@ pub async fn get_narrative_event(
     let event_id = NarrativeEventId::from_uuid(uuid);
 
     let event = state
-        .repository
-        .narrative_events()
+        .narrative_event_service
         .get(event_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -268,9 +264,8 @@ pub async fn create_narrative_event(
 
     // Verify world exists
     let _ = state
-        .repository
-        .worlds()
-        .get(world_id)
+        .world_service
+        .get_world(world_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .ok_or_else(|| (StatusCode::NOT_FOUND, "World not found".to_string()))?;
@@ -287,11 +282,10 @@ pub async fn create_narrative_event(
     event.is_active = req.is_active;
     event.tags = req.tags;
 
-    // Save to repository
-    state
-        .repository
-        .narrative_events()
-        .create(&event)
+    // Save via service
+    let event = state
+        .narrative_event_service
+        .create(event)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -313,8 +307,7 @@ pub async fn update_narrative_event(
 
     // Get existing event
     let mut event = state
-        .repository
-        .narrative_events()
+        .narrative_event_service
         .get(event_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -353,10 +346,9 @@ pub async fn update_narrative_event(
     }
 
     // Save updates
-    state
-        .repository
-        .narrative_events()
-        .update(&event)
+    let event = state
+        .narrative_event_service
+        .update(event)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -374,8 +366,7 @@ pub async fn delete_narrative_event(
 
     // Verify event exists
     let _ = state
-        .repository
-        .narrative_events()
+        .narrative_event_service
         .get(event_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -383,8 +374,7 @@ pub async fn delete_narrative_event(
 
     // Delete it
     state
-        .repository
-        .narrative_events()
+        .narrative_event_service
         .delete(event_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -402,8 +392,7 @@ pub async fn toggle_favorite(
     let event_id = NarrativeEventId::from_uuid(uuid);
 
     let is_favorite = state
-        .repository
-        .narrative_events()
+        .narrative_event_service
         .toggle_favorite(event_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -422,8 +411,7 @@ pub async fn set_active(
     let event_id = NarrativeEventId::from_uuid(uuid);
 
     state
-        .repository
-        .narrative_events()
+        .narrative_event_service
         .set_active(event_id, is_active)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -441,8 +429,7 @@ pub async fn mark_triggered(
     let event_id = NarrativeEventId::from_uuid(uuid);
 
     state
-        .repository
-        .narrative_events()
+        .narrative_event_service
         .mark_triggered(event_id, None)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -460,8 +447,7 @@ pub async fn reset_triggered(
     let event_id = NarrativeEventId::from_uuid(uuid);
 
     state
-        .repository
-        .narrative_events()
+        .narrative_event_service
         .reset_triggered(event_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;

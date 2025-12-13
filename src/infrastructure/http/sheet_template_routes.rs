@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use uuid::Uuid;
 
+use crate::application::services::WorldService;
 use crate::domain::entities::{
     CharacterSheetTemplate, FieldType, SectionLayout, SheetField, SheetSection, SheetTemplateId,
 };
@@ -108,8 +109,7 @@ pub async fn get_template(
 
     // Try to get existing template
     if let Some(template) = state
-        .repository
-        .sheet_templates()
+        .sheet_template_service
         .get_default_for_world(&world_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -119,9 +119,8 @@ pub async fn get_template(
 
     // No template exists, generate from rule system
     let world = state
-        .repository
-        .worlds()
-        .get(world_id)
+        .world_service
+        .get_world(world_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .ok_or_else(|| (StatusCode::NOT_FOUND, "World not found".to_string()))?;
@@ -143,17 +142,15 @@ pub async fn list_templates(
 
     // Check world exists
     let world = state
-        .repository
-        .worlds()
-        .get(world_id)
+        .world_service
+        .get_world(world_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .ok_or_else(|| (StatusCode::NOT_FOUND, "World not found".to_string()))?;
 
     // Get existing templates
     let templates = state
-        .repository
-        .sheet_templates()
+        .sheet_template_service
         .list_by_world(&world_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -182,8 +179,7 @@ pub async fn get_template_by_id(
     let template_id = SheetTemplateId::from_string(template_id);
 
     let template = state
-        .repository
-        .sheet_templates()
+        .sheet_template_service
         .get(&template_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -213,17 +209,15 @@ pub async fn initialize_template(
 
     // Get the world
     let world = state
-        .repository
-        .worlds()
-        .get(world_id)
+        .world_service
+        .get_world(world_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .ok_or_else(|| (StatusCode::NOT_FOUND, "World not found".to_string()))?;
 
     // Check if template already exists
     if state
-        .repository
-        .sheet_templates()
+        .sheet_template_service
         .has_templates(&world_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -240,8 +234,7 @@ pub async fn initialize_template(
 
     // Save it
     state
-        .repository
-        .sheet_templates()
+        .sheet_template_service
         .create(&template)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -262,8 +255,7 @@ pub async fn add_section(
 
     // Get existing template
     let mut template = state
-        .repository
-        .sheet_templates()
+        .sheet_template_service
         .get(&template_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -302,8 +294,7 @@ pub async fn add_section(
 
     // Save updates
     state
-        .repository
-        .sheet_templates()
+        .sheet_template_service
         .update(&template)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -324,8 +315,7 @@ pub async fn add_field(
 
     // Get existing template
     let mut template = state
-        .repository
-        .sheet_templates()
+        .sheet_template_service
         .get(&template_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -368,8 +358,7 @@ pub async fn add_field(
 
     // Save updates
     state
-        .repository
-        .sheet_templates()
+        .sheet_template_service
         .update(&template)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -389,8 +378,7 @@ pub async fn delete_template(
 
     // Get existing template
     let template = state
-        .repository
-        .sheet_templates()
+        .sheet_template_service
         .get(&template_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -406,8 +394,7 @@ pub async fn delete_template(
 
     // Delete
     state
-        .repository
-        .sheet_templates()
+        .sheet_template_service
         .delete(&template_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;

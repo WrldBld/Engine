@@ -11,7 +11,11 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::domain::entities::{default_skills_for_variant, Skill, SkillCategory};
+use crate::application::services::{
+    CreateSkillRequest as ServiceCreateRequest, SkillService,
+    UpdateSkillRequest as ServiceUpdateRequest,
+};
+use crate::domain::entities::{Skill, SkillCategory};
 use crate::domain::value_objects::{SkillId, WorldId};
 use crate::infrastructure::state::AppState;
 
@@ -83,29 +87,11 @@ pub async fn list_skills(
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid world ID".to_string()))?;
     let world_id = WorldId::from_uuid(uuid);
 
-    // Get the world to check its rule system
-    let world = state
-        .repository
-        .worlds()
-        .get(world_id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or_else(|| (StatusCode::NOT_FOUND, "World not found".to_string()))?;
-
-    // Try to get skills from repository
     let skills = state
-        .repository
-        .skills()
-        .list_by_world(world_id)
+        .skill_service
+        .list_skills(world_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    // If no skills exist, generate default skills based on rule system variant
-    let skills = if skills.is_empty() {
-        default_skills_for_variant(world_id, &world.rule_system.variant)
-    } else {
-        skills
-    };
 
     Ok(Json(skills.into_iter().map(SkillResponse::from).collect()))
 }
@@ -120,28 +106,17 @@ pub async fn create_skill(
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid world ID".to_string()))?;
     let world_id = WorldId::from_uuid(uuid);
 
-    // Verify world exists
-    let _ = state
-        .repository
-        .worlds()
-        .get(world_id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or_else(|| (StatusCode::NOT_FOUND, "World not found".to_string()))?;
+    // Convert HTTP request to service request
+    let service_req = ServiceCreateRequest {
+        name: req.name,
+        description: req.description,
+        category: req.category,
+        base_attribute: req.base_attribute,
+    };
 
-    // Create the custom skill
-    let mut skill = Skill::custom(world_id, &req.name, req.category)
-        .with_description(&req.description);
-
-    if let Some(attr) = req.base_attribute {
-        skill = skill.with_base_attribute(attr);
-    }
-
-    // Save to repository
-    state
-        .repository
-        .skills()
-        .create(&skill)
+    let skill = state
+        .skill_service
+        .create_skill(world_id, service_req)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -162,45 +137,35 @@ pub async fn update_skill(
     let world_id = WorldId::from_uuid(world_uuid);
     let skill_id = SkillId::from_uuid(skill_uuid);
 
-    // Get existing skill
-    let mut skill = state
-        .repository
-        .skills()
-        .get(skill_id)
+    // Get existing skill to verify ownership
+    let existing_skill = state
+        .skill_service
+        .get_skill(skill_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .ok_or_else(|| (StatusCode::NOT_FOUND, "Skill not found".to_string()))?;
 
     // Verify skill belongs to the world
-    if skill.world_id != world_id {
-        return Err((StatusCode::FORBIDDEN, "Skill does not belong to this world".to_string()));
+    if existing_skill.world_id != world_id {
+        return Err((
+            StatusCode::FORBIDDEN,
+            "Skill does not belong to this world".to_string(),
+        ));
     }
 
-    // Apply updates
-    if let Some(name) = req.name {
-        skill.name = name;
-    }
-    if let Some(description) = req.description {
-        skill.description = description;
-    }
-    if let Some(category) = req.category {
-        skill.category = category;
-    }
-    if let Some(base_attribute) = req.base_attribute {
-        skill.base_attribute = Some(base_attribute);
-    }
-    if let Some(is_hidden) = req.is_hidden {
-        skill.is_hidden = is_hidden;
-    }
-    if let Some(order) = req.order {
-        skill.order = order;
-    }
+    // Convert HTTP request to service request
+    let service_req = ServiceUpdateRequest {
+        name: req.name,
+        description: req.description,
+        category: req.category,
+        base_attribute: req.base_attribute,
+        is_hidden: req.is_hidden,
+        order: req.order,
+    };
 
-    // Save updates
-    state
-        .repository
-        .skills()
-        .update(&skill)
+    let skill = state
+        .skill_service
+        .update_skill(skill_id, service_req)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -220,30 +185,26 @@ pub async fn delete_skill(
     let world_id = WorldId::from_uuid(world_uuid);
     let skill_id = SkillId::from_uuid(skill_uuid);
 
-    // Get the skill to verify it exists and is custom
+    // Get the skill to verify it exists and belongs to this world
     let skill = state
-        .repository
-        .skills()
-        .get(skill_id)
+        .skill_service
+        .get_skill(skill_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .ok_or_else(|| (StatusCode::NOT_FOUND, "Skill not found".to_string()))?;
 
     // Verify skill belongs to the world
     if skill.world_id != world_id {
-        return Err((StatusCode::FORBIDDEN, "Skill does not belong to this world".to_string()));
+        return Err((
+            StatusCode::FORBIDDEN,
+            "Skill does not belong to this world".to_string(),
+        ));
     }
 
-    // Only allow deleting custom skills
-    if !skill.is_custom {
-        return Err((StatusCode::FORBIDDEN, "Cannot delete default skills. Hide them instead.".to_string()));
-    }
-
-    // Delete the skill
+    // Delete the skill (service will validate it's custom)
     state
-        .repository
-        .skills()
-        .delete(skill_id)
+        .skill_service
+        .delete_skill(skill_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -262,27 +223,11 @@ pub async fn initialize_skills(
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid world ID".to_string()))?;
     let world_id = WorldId::from_uuid(uuid);
 
-    // Get the world
-    let world = state
-        .repository
-        .worlds()
-        .get(world_id)
+    let skills = state
+        .skill_service
+        .initialize_defaults(world_id)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or_else(|| (StatusCode::NOT_FOUND, "World not found".to_string()))?;
-
-    // Generate default skills
-    let skills = default_skills_for_variant(world_id, &world.rule_system.variant);
-
-    // Save all skills
-    for skill in &skills {
-        state
-            .repository
-            .skills()
-            .create(skill)
-            .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    }
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     Ok(Json(skills.into_iter().map(SkillResponse::from).collect()))
 }

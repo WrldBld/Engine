@@ -437,4 +437,89 @@ impl StoryEventService {
         tracing::debug!("Recorded session ended event: {}", event_id);
         Ok(event_id)
     }
+
+    // =========================================================================
+    // Query Methods (used by HTTP routes)
+    // =========================================================================
+
+    /// Get a single story event by ID
+    pub async fn get_event(&self, event_id: StoryEventId) -> Result<Option<StoryEvent>> {
+        self.repository.get(event_id).await
+    }
+
+    /// List story events for a session
+    pub async fn list_by_session(&self, session_id: SessionId) -> Result<Vec<StoryEvent>> {
+        self.repository.list_by_session(session_id).await
+    }
+
+    /// List story events for a world
+    pub async fn list_by_world(&self, world_id: WorldId) -> Result<Vec<StoryEvent>> {
+        self.repository.list_by_world(world_id).await
+    }
+
+    /// List story events for a world with pagination
+    pub async fn list_by_world_paginated(
+        &self,
+        world_id: WorldId,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<StoryEvent>> {
+        self.repository
+            .list_by_world_paginated(world_id, limit, offset)
+            .await
+    }
+
+    /// List visible (non-hidden) story events for a world
+    pub async fn list_visible(&self, world_id: WorldId, limit: u32) -> Result<Vec<StoryEvent>> {
+        self.repository.list_visible(world_id, limit).await
+    }
+
+    /// Search story events by tags
+    pub async fn search_by_tags(
+        &self,
+        world_id: WorldId,
+        tags: Vec<String>,
+    ) -> Result<Vec<StoryEvent>> {
+        self.repository.search_by_tags(world_id, tags).await
+    }
+
+    /// Search story events by text in summary
+    pub async fn search_by_text(&self, world_id: WorldId, search_text: &str) -> Result<Vec<StoryEvent>> {
+        self.repository.search_by_text(world_id, search_text).await
+    }
+
+    /// List events involving a specific character
+    pub async fn list_by_character(&self, character_id: CharacterId) -> Result<Vec<StoryEvent>> {
+        self.repository.list_by_character(character_id).await
+    }
+
+    /// List events at a specific location
+    pub async fn list_by_location(&self, location_id: LocationId) -> Result<Vec<StoryEvent>> {
+        self.repository.list_by_location(location_id).await
+    }
+
+    /// Update story event summary
+    pub async fn update_summary(&self, event_id: StoryEventId, summary: &str) -> Result<bool> {
+        self.repository.update_summary(event_id, summary).await
+    }
+
+    /// Update event visibility
+    pub async fn set_hidden(&self, event_id: StoryEventId, is_hidden: bool) -> Result<bool> {
+        self.repository.set_hidden(event_id, is_hidden).await
+    }
+
+    /// Update event tags
+    pub async fn update_tags(&self, event_id: StoryEventId, tags: Vec<String>) -> Result<bool> {
+        self.repository.update_tags(event_id, tags).await
+    }
+
+    /// Delete a story event
+    pub async fn delete(&self, event_id: StoryEventId) -> Result<bool> {
+        self.repository.delete(event_id).await
+    }
+
+    /// Count events for a world
+    pub async fn count_by_world(&self, world_id: WorldId) -> Result<u64> {
+        self.repository.count_by_world(world_id).await
+    }
 }

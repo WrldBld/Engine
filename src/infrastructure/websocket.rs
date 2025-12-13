@@ -15,8 +15,9 @@ use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
+use crate::application::ports::outbound::PlayerWorldSnapshot;
+use crate::application::services::WorldService;
 use crate::domain::value_objects::{ActionId, SessionId, WorldId};
-use crate::infrastructure::export::{load_world_snapshot, PlayerWorldSnapshot};
 use crate::infrastructure::session::{ClientId, SessionError, WorldSnapshot};
 use crate::infrastructure::state::AppState;
 use crate::application::services::llm_service::{
@@ -832,10 +833,12 @@ async fn join_or_create_session(
         // Create new session for this world
         drop(sessions); // Release lock for database access
 
-        // Load world data from database using the export module
-        let player_snapshot = load_world_snapshot(wid, None, &state.repository)
+        // Load world data from database using the world service
+        let player_snapshot = state
+            .world_service
+            .export_world_snapshot(wid)
             .await
-            .map_err(SessionError::Database)?;
+            .map_err(|e| SessionError::Database(e))?;
 
         // Convert PlayerWorldSnapshot to internal WorldSnapshot for session storage
         let internal_snapshot = convert_to_internal_snapshot(&player_snapshot);

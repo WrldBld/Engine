@@ -1,11 +1,13 @@
 //! NarrativeEvent repository implementation for Neo4j
 
 use anyhow::Result;
+use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use neo4rs::{query, Row};
 use uuid::Uuid;
 
 use super::connection::Neo4jConnection;
+use crate::application::ports::outbound::NarrativeEventRepositoryPort;
 use crate::domain::entities::{
     EventOutcome, NarrativeEvent, NarrativeTrigger, TriggerLogic,
 };
@@ -567,4 +569,59 @@ fn row_to_narrative_event(row: Row) -> Result<NarrativeEvent> {
         created_at: DateTime::parse_from_rfc3339(&created_at_str)?.with_timezone(&Utc),
         updated_at: DateTime::parse_from_rfc3339(&updated_at_str)?.with_timezone(&Utc),
     })
+}
+
+// =============================================================================
+// Trait Implementation
+// =============================================================================
+
+#[async_trait]
+impl NarrativeEventRepositoryPort for Neo4jNarrativeEventRepository {
+    async fn create(&self, event: &NarrativeEvent) -> Result<()> {
+        self.create(event).await
+    }
+
+    async fn get(&self, id: NarrativeEventId) -> Result<Option<NarrativeEvent>> {
+        self.get(id).await
+    }
+
+    async fn update(&self, event: &NarrativeEvent) -> Result<bool> {
+        self.update(event).await
+    }
+
+    async fn list_by_world(&self, world_id: WorldId) -> Result<Vec<NarrativeEvent>> {
+        self.list_by_world(world_id).await
+    }
+
+    async fn list_active(&self, world_id: WorldId) -> Result<Vec<NarrativeEvent>> {
+        self.list_active(world_id).await
+    }
+
+    async fn list_favorites(&self, world_id: WorldId) -> Result<Vec<NarrativeEvent>> {
+        self.list_favorites(world_id).await
+    }
+
+    async fn list_pending(&self, world_id: WorldId) -> Result<Vec<NarrativeEvent>> {
+        self.list_pending(world_id).await
+    }
+
+    async fn toggle_favorite(&self, id: NarrativeEventId) -> Result<bool> {
+        self.toggle_favorite(id).await
+    }
+
+    async fn set_active(&self, id: NarrativeEventId, is_active: bool) -> Result<bool> {
+        self.set_active(id, is_active).await
+    }
+
+    async fn mark_triggered(&self, id: NarrativeEventId, outcome_name: Option<String>) -> Result<bool> {
+        self.mark_triggered(id, outcome_name).await
+    }
+
+    async fn reset_triggered(&self, id: NarrativeEventId) -> Result<bool> {
+        self.reset_triggered(id).await
+    }
+
+    async fn delete(&self, id: NarrativeEventId) -> Result<bool> {
+        self.delete(id).await
+    }
 }

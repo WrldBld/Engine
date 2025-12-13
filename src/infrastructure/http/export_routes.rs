@@ -9,8 +9,9 @@ use serde::Deserialize;
 use std::sync::Arc;
 use uuid::Uuid;
 
+use crate::application::ports::outbound::PlayerWorldSnapshot;
+use crate::application::services::WorldService;
 use crate::domain::value_objects::WorldId;
-use crate::infrastructure::export::{JsonExporter, WorldSnapshot};
 use crate::infrastructure::state::AppState;
 
 #[derive(Debug, Deserialize)]
@@ -24,16 +25,13 @@ pub async fn export_world(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
     Query(_query): Query<ExportQuery>,
-) -> Result<Json<WorldSnapshot>, (StatusCode, String)> {
+) -> Result<Json<PlayerWorldSnapshot>, (StatusCode, String)> {
     let uuid = Uuid::parse_str(&id)
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid world ID".to_string()))?;
 
-    // Clone the repository for the exporter
-    // Note: In production, you might want to share a reference instead
-    let exporter = JsonExporter::new(state.repository.clone());
-
-    let snapshot = exporter
-        .export_world(WorldId::from_uuid(uuid))
+    let snapshot = state
+        .world_service
+        .export_world_snapshot(WorldId::from_uuid(uuid))
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -49,15 +47,15 @@ pub async fn export_world_raw(
     let uuid = Uuid::parse_str(&id)
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid world ID".to_string()))?;
 
-    let exporter = JsonExporter::new(state.repository.clone());
+    let snapshot = state
+        .world_service
+        .export_world_snapshot(WorldId::from_uuid(uuid))
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let json = match query.format.as_deref() {
-        Some("compressed") => {
-            exporter
-                .export_to_json_compressed(WorldId::from_uuid(uuid))
-                .await
-        }
-        _ => exporter.export_to_json(WorldId::from_uuid(uuid)).await,
+        Some("compressed") => serde_json::to_string(&snapshot),
+        _ => serde_json::to_string_pretty(&snapshot),
     }
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 

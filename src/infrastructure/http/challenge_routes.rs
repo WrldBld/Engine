@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use uuid::Uuid;
 
+use crate::application::services::{ChallengeService, WorldService};
 use crate::domain::entities::{
     Challenge, ChallengeOutcomes, ChallengeType, Difficulty, DifficultyDescriptor, Outcome,
     OutcomeTrigger, TriggerCondition, TriggerType,
@@ -428,9 +429,8 @@ pub async fn list_challenges(
     let world_id = WorldId::from_uuid(uuid);
 
     let challenges = state
-        .repository
-        .challenges()
-        .list_by_world(world_id)
+        .challenge_service
+        .list_challenges(world_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -447,8 +447,7 @@ pub async fn list_scene_challenges(
     let scene_id = SceneId::from_uuid(uuid);
 
     let challenges = state
-        .repository
-        .challenges()
+        .challenge_service
         .list_by_scene(scene_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -466,8 +465,7 @@ pub async fn list_active_challenges(
     let world_id = WorldId::from_uuid(uuid);
 
     let challenges = state
-        .repository
-        .challenges()
+        .challenge_service
         .list_active(world_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -485,8 +483,7 @@ pub async fn list_favorite_challenges(
     let world_id = WorldId::from_uuid(uuid);
 
     let challenges = state
-        .repository
-        .challenges()
+        .challenge_service
         .list_favorites(world_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -504,9 +501,8 @@ pub async fn get_challenge(
     let challenge_id = ChallengeId::from_uuid(uuid);
 
     let challenge = state
-        .repository
-        .challenges()
-        .get(challenge_id)
+        .challenge_service
+        .get_challenge(challenge_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .ok_or_else(|| (StatusCode::NOT_FOUND, "Challenge not found".to_string()))?;
@@ -526,9 +522,8 @@ pub async fn create_challenge(
 
     // Verify world exists
     let _ = state
-        .repository
-        .worlds()
-        .get(world_id)
+        .world_service
+        .get_world(world_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .ok_or_else(|| (StatusCode::NOT_FOUND, "World not found".to_string()))?;
@@ -578,11 +573,10 @@ pub async fn create_challenge(
         challenge = challenge.with_tag(tag);
     }
 
-    // Save to repository
-    state
-        .repository
-        .challenges()
-        .create(&challenge)
+    // Save via service
+    let challenge = state
+        .challenge_service
+        .create_challenge(challenge)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -601,9 +595,8 @@ pub async fn update_challenge(
 
     // Get existing challenge
     let mut challenge = state
-        .repository
-        .challenges()
-        .get(challenge_id)
+        .challenge_service
+        .get_challenge(challenge_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .ok_or_else(|| (StatusCode::NOT_FOUND, "Challenge not found".to_string()))?;
@@ -661,10 +654,9 @@ pub async fn update_challenge(
     }
 
     // Save updates
-    state
-        .repository
-        .challenges()
-        .update(&challenge)
+    let challenge = state
+        .challenge_service
+        .update_challenge(challenge)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -682,18 +674,16 @@ pub async fn delete_challenge(
 
     // Verify challenge exists
     let _ = state
-        .repository
-        .challenges()
-        .get(challenge_id)
+        .challenge_service
+        .get_challenge(challenge_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .ok_or_else(|| (StatusCode::NOT_FOUND, "Challenge not found".to_string()))?;
 
     // Delete it
     state
-        .repository
-        .challenges()
-        .delete(challenge_id)
+        .challenge_service
+        .delete_challenge(challenge_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -710,8 +700,7 @@ pub async fn toggle_favorite(
     let challenge_id = ChallengeId::from_uuid(uuid);
 
     let is_favorite = state
-        .repository
-        .challenges()
+        .challenge_service
         .toggle_favorite(challenge_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -730,8 +719,7 @@ pub async fn set_active(
     let challenge_id = ChallengeId::from_uuid(uuid);
 
     state
-        .repository
-        .challenges()
+        .challenge_service
         .set_active(challenge_id, active)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;

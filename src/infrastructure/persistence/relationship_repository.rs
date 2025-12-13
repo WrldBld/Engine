@@ -5,9 +5,9 @@ use async_trait::async_trait;
 use neo4rs::{query, Row};
 
 use super::connection::Neo4jConnection;
-use crate::application::ports::outbound::RelationshipRepositoryPort;
+use crate::application::ports::outbound::{RelationshipRepositoryPort, SocialNetwork, CharacterNode, RelationshipEdge};
 use crate::domain::value_objects::{
-    CharacterId, Relationship, RelationshipEvent, RelationshipId, RelationshipType,
+    CharacterId, Relationship, RelationshipEvent, RelationshipId, RelationshipType, WorldId,
 };
 
 /// Repository for Relationship (character social network) operations
@@ -122,7 +122,7 @@ impl Neo4jRelationshipRepository {
     /// Get the social network graph for a world
     pub async fn get_social_network(
         &self,
-        world_id: crate::domain::value_objects::WorldId,
+        world_id: WorldId,
     ) -> Result<SocialNetwork> {
         // Get all characters in the world
         let chars_q = query(
@@ -469,30 +469,6 @@ fn row_to_relationship(row: Row) -> Result<Relationship> {
     })
 }
 
-/// Representation of the social network graph
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct SocialNetwork {
-    pub characters: Vec<CharacterNode>,
-    pub relationships: Vec<RelationshipEdge>,
-}
-
-/// A node in the social network (character)
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct CharacterNode {
-    pub id: String,
-    pub name: String,
-    pub archetype: String,
-}
-
-/// An edge in the social network (relationship)
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct RelationshipEdge {
-    pub from_id: String,
-    pub to_id: String,
-    pub relationship_type: String,
-    pub sentiment: f32,
-}
-
 /// Path between two characters through their relationships
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RelationshipPath {
@@ -536,5 +512,9 @@ impl RelationshipRepositoryPort for Neo4jRelationshipRepository {
 
     async fn delete(&self, id: RelationshipId) -> Result<()> {
         Neo4jRelationshipRepository::delete(self, id).await
+    }
+
+    async fn get_social_network(&self, world_id: WorldId) -> Result<SocialNetwork> {
+        Neo4jRelationshipRepository::get_social_network(self, world_id).await
     }
 }

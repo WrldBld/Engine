@@ -11,14 +11,14 @@ use uuid::Uuid;
 
 use crate::application::services::{
     ChangeArchetypeRequest as ServiceChangeArchetypeRequest, CharacterService,
-    CreateCharacterRequest as ServiceCreateCharacterRequest,
+    CreateCharacterRequest as ServiceCreateCharacterRequest, RelationshipService,
     UpdateCharacterRequest as ServiceUpdateCharacterRequest,
 };
 use crate::domain::entities::Character;
 use crate::domain::value_objects::{
     CampbellArchetype, CharacterId, Relationship, RelationshipId, RelationshipType, WorldId,
 };
-use crate::infrastructure::persistence::SocialNetwork;
+use crate::application::ports::outbound::SocialNetwork;
 use crate::infrastructure::state::AppState;
 
 #[derive(Debug, Deserialize)]
@@ -249,8 +249,7 @@ pub async fn get_social_network(
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid world ID".to_string()))?;
 
     let network = state
-        .repository
-        .relationships()
+        .relationship_service
         .get_social_network(WorldId::from_uuid(uuid))
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -305,9 +304,8 @@ pub async fn create_relationship(
     }
 
     state
-        .repository
-        .relationships()
-        .create(&relationship)
+        .relationship_service
+        .create_relationship(&relationship)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -332,9 +330,8 @@ pub async fn delete_relationship(
     })?;
 
     state
-        .repository
-        .relationships()
-        .delete(RelationshipId::from_uuid(uuid))
+        .relationship_service
+        .delete_relationship(RelationshipId::from_uuid(uuid))
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 

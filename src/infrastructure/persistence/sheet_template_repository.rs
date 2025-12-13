@@ -1,9 +1,11 @@
 //! Character Sheet Template repository implementation for Neo4j
 
 use anyhow::Result;
+use async_trait::async_trait;
 use neo4rs::{query, Row};
 
 use super::connection::Neo4jConnection;
+use crate::application::ports::outbound::SheetTemplateRepositoryPort;
 use crate::domain::entities::{CharacterSheetTemplate, SheetTemplateId};
 use crate::domain::value_objects::WorldId;
 
@@ -176,4 +178,43 @@ fn row_to_template(row: Row) -> Result<CharacterSheetTemplate> {
     let template: CharacterSheetTemplate = serde_json::from_str(&template_data)?;
 
     Ok(template)
+}
+
+// =============================================================================
+// SheetTemplateRepositoryPort Implementation
+// =============================================================================
+
+#[async_trait]
+impl SheetTemplateRepositoryPort for Neo4jSheetTemplateRepository {
+    async fn create(&self, template: &CharacterSheetTemplate) -> Result<()> {
+        self.create(template).await
+    }
+
+    async fn get(&self, id: &SheetTemplateId) -> Result<Option<CharacterSheetTemplate>> {
+        self.get(id).await
+    }
+
+    async fn get_default_for_world(&self, world_id: &WorldId) -> Result<Option<CharacterSheetTemplate>> {
+        self.get_default_for_world(world_id).await
+    }
+
+    async fn list_by_world(&self, world_id: &WorldId) -> Result<Vec<CharacterSheetTemplate>> {
+        self.list_by_world(world_id).await
+    }
+
+    async fn update(&self, template: &CharacterSheetTemplate) -> Result<()> {
+        self.update(template).await
+    }
+
+    async fn delete(&self, id: &SheetTemplateId) -> Result<()> {
+        self.delete(id).await
+    }
+
+    async fn delete_all_for_world(&self, world_id: &WorldId) -> Result<()> {
+        self.delete_all_for_world(world_id).await
+    }
+
+    async fn has_templates(&self, world_id: &WorldId) -> Result<bool> {
+        self.has_templates(world_id).await
+    }
 }

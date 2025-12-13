@@ -1,10 +1,12 @@
 //! Neo4j repository for workflow configurations
 
 use anyhow::Result;
+use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use neo4rs::query;
 use uuid::Uuid;
 
+use crate::application::ports::outbound::WorkflowRepositoryPort;
 use crate::domain::entities::{
     InputDefault, PromptMapping, WorkflowConfiguration, WorkflowSlot,
 };
@@ -217,5 +219,28 @@ impl Neo4jWorkflowRepository {
             created_at,
             updated_at,
         })
+    }
+}
+
+// =============================================================================
+// Port Implementation
+// =============================================================================
+
+#[async_trait]
+impl WorkflowRepositoryPort for Neo4jWorkflowRepository {
+    async fn save(&self, config: &WorkflowConfiguration) -> Result<()> {
+        self.save(config).await
+    }
+
+    async fn get_by_slot(&self, slot: WorkflowSlot) -> Result<Option<WorkflowConfiguration>> {
+        self.get_by_slot(slot).await
+    }
+
+    async fn delete_by_slot(&self, slot: WorkflowSlot) -> Result<bool> {
+        self.delete_by_slot(slot).await
+    }
+
+    async fn list_all(&self) -> Result<Vec<WorkflowConfiguration>> {
+        self.list_all().await
     }
 }
