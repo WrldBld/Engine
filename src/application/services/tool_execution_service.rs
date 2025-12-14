@@ -304,32 +304,33 @@ impl Default for ToolExecutionService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Utc;
-    use crate::domain::entities::World;
-    use crate::domain::value_objects::{
-        RuleSystemConfig, WorldId,
-    };
-    use crate::infrastructure::session::{GameSession, WorldSnapshot};
 
-    fn create_test_session() -> GameSession {
-        let world = World {
-            id: WorldId::new(),
-            name: "Test World".to_string(),
-            description: "A test world".to_string(),
-            rule_system: RuleSystemConfig::default(),
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
-        };
+    /// Fake implementation of GameSessionPort for testing
+    /// This avoids depending on infrastructure types in application layer tests
+    struct FakeGameSession {
+        conversation_history: Vec<(String, String)>,
+    }
 
-        let snapshot = WorldSnapshot {
-            world,
-            locations: vec![],
-            characters: vec![],
-            scenes: vec![],
-            current_scene_id: None,
-        };
+    impl FakeGameSession {
+        fn new() -> Self {
+            Self {
+                conversation_history: Vec::new(),
+            }
+        }
+    }
 
-        GameSession::new(WorldId::new(), snapshot)
+    impl GameSessionPort for FakeGameSession {
+        fn add_npc_response(&mut self, speaker: &str, text: &str) {
+            self.conversation_history.push((speaker.to_string(), text.to_string()));
+        }
+
+        fn history_length(&self) -> usize {
+            self.conversation_history.len()
+        }
+    }
+
+    fn create_test_session() -> FakeGameSession {
+        FakeGameSession::new()
     }
 
     #[tokio::test]
