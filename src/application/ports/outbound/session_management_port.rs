@@ -107,18 +107,18 @@ pub enum SessionManagementError {
 ///
 /// # Design Notes
 ///
-/// - Operations are async to support potential distributed session storage
-/// - Client identification uses an opaque ID type to decouple from infrastructure
+/// - Operations are sync (session manager uses in-memory storage)
+/// - Client identification uses string IDs to decouple from infrastructure format
 /// - Messages are serialized to JSON at the boundary
 pub trait SessionManagementPort: Send + Sync {
     /// Get the session ID for a client, if they're in one
-    fn get_client_session(&self, client_id: u64) -> Option<SessionId>;
+    fn get_client_session(&self, client_id: &str) -> Option<SessionId>;
 
     /// Check if a client is the DM for their session
-    fn is_client_dm(&self, client_id: u64) -> bool;
+    fn is_client_dm(&self, client_id: &str) -> bool;
 
     /// Get the user ID for a client
-    fn get_client_user_id(&self, client_id: u64) -> Option<String>;
+    fn get_client_user_id(&self, client_id: &str) -> Option<String>;
 
     /// Get a pending approval by request ID
     fn get_pending_approval(
@@ -167,7 +167,7 @@ pub trait SessionManagementPort: Send + Sync {
         &self,
         session_id: SessionId,
         message: &BroadcastMessage,
-        exclude_client: u64,
+        exclude_client: &str,
     ) -> Result<(), SessionManagementError>;
 
     /// Add an NPC response to the session's conversation history

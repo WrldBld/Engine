@@ -12,7 +12,10 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
-use crate::application::ports::outbound::GameSessionPort;
+use crate::application::ports::outbound::{
+    BroadcastMessage, CharacterContextInfo, GameSessionPort, PendingApprovalInfo, ProposedToolInfo,
+    SessionManagementError, SessionManagementPort, SessionWorldContext,
+};
 use crate::domain::entities::{Character, Location, Scene, World};
 use crate::domain::value_objects::{SessionId, WorldId};
 use crate::infrastructure::websocket::{ParticipantRole, ServerMessage, ProposedTool};
@@ -583,6 +586,290 @@ impl SessionManager {
 impl Default for SessionManager {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Helper to parse a client ID string to ClientId
+fn parse_client_id(client_id_str: &str) -> Option<ClientId> {
+    uuid::Uuid::parse_str(client_id_str)
+        .ok()
+        .map(ClientId)
+}
+
+/// Convert BroadcastMessage to ServerMessage by deserializing the JSON
+fn broadcast_to_server_message(msg: &BroadcastMessage) -> Option<ServerMessage> {
+    serde_json::from_value(msg.content.clone()).ok()
+}
+
+/// Implement SessionManagementPort for SessionManager
+///
+/// This implementation bridges the application layer's abstract port interface
+/// to the concrete infrastructure implementation.
+impl SessionManagementPort for SessionManager {
+    fn get_client_session(&self, client_id: &str) -> Option<SessionId> {
+        let client_id = parse_client_id(client_id)?;
+        self.client_sessions.get(&client_id).copied()
+    }
+
+    fn is_client_dm(&self, client_id: &str) -> bool {
+        let Some(client_id) = parse_client_id(client_id) else {
+            return false;
+        };
+        let Some(session_id) = self.client_sessions.get(&client_id) else {
+            return false;
+        };
+        let Some(session) = self.sessions.get(session_id) else {
+            return false;
+        };
+        session
+            .get_dm()
+            .map(|dm| dm.client_id == client_id)
+            .unwrap_or(false)
+    }
+
+    fn get_client_user_id(&self, client_id: &str) -> Option<String> {
+        let client_id = parse_client_id(client_id)?;
+        let session_id = self.client_sessions.get(&client_id)?;
+        let session = self.sessions.get(session_id)?;
+        session
+            .participants
+            .get(&client_id)
+            .map(|p| p.user_id.clone())
+    }
+
+    fn get_pending_approval(
+        &self,
+        session_id: SessionId,
+        request_id: &str,
+    ) -> Option<PendingApprovalInfo> {
+        let session = self.sessions.get(&session_id)?;
+        let pending = session.pending_approvals.get(request_id)?;
+        Some(PendingApprovalInfo {
+            request_id: pending.request_id.clone(),
+            npc_name: pending.npc_name.clone(),
+            proposed_dialogue: pending.proposed_dialogue.clone(),
+            internal_reasoning: pending.internal_reasoning.clone(),
+            proposed_tools: pending
+                .proposed_tools
+                .iter()
+                .map(|t| ProposedToolInfo {
+                    id: t.id.clone(),
+                    name: t.name.clone(),
+                    description: t.description.clone(),
+                    arguments: t.arguments.clone(),
+                })
+                .collect(),
+            retry_count: pending.retry_count,
+        })
+    }
+
+    fn add_pending_approval(
+        &mut self,
+        session_id: SessionId,
+        approval: PendingApprovalInfo,
+    ) -> Result<(), SessionManagementError> {
+        let session = self
+            .sessions
+            .get_mut(&session_id)
+            .ok_or_else(|| SessionManagementError::SessionNotFound(session_id.to_string()))?;
+
+        let pending = PendingApproval {
+            request_id: approval.request_id,
+            npc_name: approval.npc_name,
+            proposed_dialogue: approval.proposed_dialogue,
+            internal_reasoning: approval.internal_reasoning,
+            proposed_tools: approval
+                .proposed_tools
+                .into_iter()
+                .map(|t| ProposedTool {
+                    id: t.id,
+                    name: t.name,
+                    description: t.description,
+                    arguments: t.arguments,
+                })
+                .collect(),
+            retry_count: approval.retry_count,
+            requested_at: Utc::now(),
+        };
+
+        session.add_pending_approval(pending);
+        Ok(())
+    }
+
+    fn remove_pending_approval(
+        &mut self,
+        session_id: SessionId,
+        request_id: &str,
+    ) -> Result<(), SessionManagementError> {
+        let session = self
+            .sessions
+            .get_mut(&session_id)
+            .ok_or_else(|| SessionManagementError::SessionNotFound(session_id.to_string()))?;
+
+        session
+            .remove_pending_approval(request_id)
+            .ok_or_else(|| SessionManagementError::ApprovalNotFound(request_id.to_string()))?;
+
+        Ok(())
+    }
+
+    fn increment_retry_count(
+        &mut self,
+        session_id: SessionId,
+        request_id: &str,
+    ) -> Result<u32, SessionManagementError> {
+        let session = self
+            .sessions
+            .get_mut(&session_id)
+            .ok_or_else(|| SessionManagementError::SessionNotFound(session_id.to_string()))?;
+
+        let pending = session
+            .get_pending_approval_mut(request_id)
+            .ok_or_else(|| SessionManagementError::ApprovalNotFound(request_id.to_string()))?;
+
+        pending.retry_count += 1;
+        Ok(pending.retry_count)
+    }
+
+    fn broadcast_to_players(
+        &self,
+        session_id: SessionId,
+        message: &BroadcastMessage,
+    ) -> Result<(), SessionManagementError> {
+        let session = self
+            .sessions
+            .get(&session_id)
+            .ok_or_else(|| SessionManagementError::SessionNotFound(session_id.to_string()))?;
+
+        if let Some(server_msg) = broadcast_to_server_message(message) {
+            session.broadcast_to_players(&server_msg);
+        }
+        Ok(())
+    }
+
+    fn send_to_dm(
+        &self,
+        session_id: SessionId,
+        message: &BroadcastMessage,
+    ) -> Result<(), SessionManagementError> {
+        let session = self
+            .sessions
+            .get(&session_id)
+            .ok_or_else(|| SessionManagementError::SessionNotFound(session_id.to_string()))?;
+
+        if let Some(server_msg) = broadcast_to_server_message(message) {
+            session.send_to_dm(&server_msg);
+        }
+        Ok(())
+    }
+
+    fn broadcast_except(
+        &self,
+        session_id: SessionId,
+        message: &BroadcastMessage,
+        exclude_client: &str,
+    ) -> Result<(), SessionManagementError> {
+        let session = self
+            .sessions
+            .get(&session_id)
+            .ok_or_else(|| SessionManagementError::SessionNotFound(session_id.to_string()))?;
+
+        let exclude_id = parse_client_id(exclude_client)
+            .ok_or(SessionManagementError::ClientNotInSession)?;
+
+        if let Some(server_msg) = broadcast_to_server_message(message) {
+            session.broadcast_except(&server_msg, exclude_id);
+        }
+        Ok(())
+    }
+
+    fn add_to_conversation_history(
+        &mut self,
+        session_id: SessionId,
+        speaker: &str,
+        text: &str,
+    ) -> Result<(), SessionManagementError> {
+        let session = self
+            .sessions
+            .get_mut(&session_id)
+            .ok_or_else(|| SessionManagementError::SessionNotFound(session_id.to_string()))?;
+
+        session.add_npc_response(speaker, text);
+        Ok(())
+    }
+
+    fn session_has_dm(&self, session_id: SessionId) -> bool {
+        self.sessions
+            .get(&session_id)
+            .map(|s| s.has_dm())
+            .unwrap_or(false)
+    }
+
+    fn get_session_world_context(
+        &self,
+        session_id: SessionId,
+    ) -> Option<SessionWorldContext> {
+        let session = self.sessions.get(&session_id)?;
+        let snapshot = &session.world_snapshot;
+
+        // Get current scene
+        let current_scene = session
+            .current_scene_id
+            .as_ref()
+            .and_then(|scene_id| {
+                snapshot.scenes.iter().find(|s| s.id.to_string() == *scene_id)
+            })
+            .or_else(|| snapshot.scenes.first())?;
+
+        // Get location for the scene
+        let location = snapshot
+            .locations
+            .iter()
+            .find(|l| l.id == current_scene.location_id);
+
+        // Get present character names
+        let present_character_names: Vec<String> = current_scene
+            .featured_characters
+            .iter()
+            .filter_map(|char_id| {
+                snapshot
+                    .characters
+                    .iter()
+                    .find(|c| c.id == *char_id)
+                    .map(|c| c.name.clone())
+            })
+            .collect();
+
+        // Build character context map
+        let mut characters = std::collections::HashMap::new();
+        for character in &snapshot.characters {
+            characters.insert(
+                character.name.clone(),
+                CharacterContextInfo {
+                    name: character.name.clone(),
+                    archetype: format!("{:?}", character.current_archetype),
+                    wants: character
+                        .wants
+                        .iter()
+                        .map(|w| format!("{:?}", w))
+                        .collect(),
+                },
+            );
+        }
+
+        Some(SessionWorldContext {
+            scene_name: current_scene.name.clone(),
+            location_name: location.map(|l| l.name.clone()).unwrap_or_else(|| "Unknown".to_string()),
+            time_context: match &current_scene.time_context {
+                crate::domain::entities::TimeContext::Unspecified => "Unspecified".to_string(),
+                crate::domain::entities::TimeContext::TimeOfDay(tod) => format!("{:?}", tod),
+                crate::domain::entities::TimeContext::During(s) => s.clone(),
+                crate::domain::entities::TimeContext::Custom(s) => s.clone(),
+            },
+            present_character_names,
+            characters,
+            directorial_notes: current_scene.directorial_notes.clone(),
+        })
     }
 }
 

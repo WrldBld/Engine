@@ -124,7 +124,7 @@ impl ApprovalService {
         &self,
         session: &mut S,
         session_id: SessionId,
-        client_id: u64,
+        client_id: &str,
         request_id: &str,
         decision: ApprovalDecision,
     ) -> Result<ApprovalResult, ApprovalError> {
