@@ -7,94 +7,19 @@ use axum::{
     http::StatusCode,
     Json,
 };
-use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::application::services::WorldService;
+use crate::application::dto::{
+    CreateFieldRequestDto, CreateSectionRequestDto, SheetTemplateResponseDto, SheetTemplateSummaryDto,
+};
 use crate::domain::entities::{
-    CharacterSheetTemplate, FieldType, SectionLayout, SheetField, SheetSection, SheetTemplateId,
+    CharacterSheetTemplate, SheetField, SheetSection, SheetTemplateId,
 };
 use crate::domain::value_objects::WorldId;
 use crate::infrastructure::state::AppState;
-
-/// Response for a sheet template
-#[derive(Debug, Serialize)]
-pub struct SheetTemplateResponse {
-    pub id: String,
-    pub world_id: String,
-    pub name: String,
-    pub description: String,
-    pub variant: String,
-    pub sections: Vec<SheetSection>,
-    pub is_default: bool,
-}
-
-impl From<CharacterSheetTemplate> for SheetTemplateResponse {
-    fn from(template: CharacterSheetTemplate) -> Self {
-        Self {
-            id: template.id.0,
-            world_id: template.world_id.to_string(),
-            name: template.name,
-            description: template.description,
-            variant: format!("{:?}", template.variant),
-            sections: template.sections,
-            is_default: template.is_default,
-        }
-    }
-}
-
-/// Summary response (without sections)
-#[derive(Debug, Serialize)]
-pub struct SheetTemplateSummary {
-    pub id: String,
-    pub name: String,
-    pub description: String,
-    pub is_default: bool,
-    pub section_count: usize,
-    pub field_count: usize,
-}
-
-impl From<CharacterSheetTemplate> for SheetTemplateSummary {
-    fn from(template: CharacterSheetTemplate) -> Self {
-        let field_count: usize = template.sections.iter().map(|s| s.fields.len()).sum();
-        Self {
-            id: template.id.0,
-            name: template.name,
-            description: template.description,
-            is_default: template.is_default,
-            section_count: template.sections.len(),
-            field_count,
-        }
-    }
-}
-
-/// Request to create a custom section
-#[derive(Debug, Deserialize)]
-pub struct CreateSectionRequest {
-    pub name: String,
-    #[serde(default)]
-    pub description: Option<String>,
-    #[serde(default)]
-    pub layout: Option<SectionLayout>,
-    #[serde(default)]
-    pub collapsible: bool,
-    #[serde(default)]
-    pub collapsed_by_default: bool,
-}
-
-/// Request to create a custom field
-#[derive(Debug, Deserialize)]
-pub struct CreateFieldRequest {
-    pub name: String,
-    #[serde(default)]
-    pub description: Option<String>,
-    pub field_type: FieldType,
-    #[serde(default)]
-    pub required: bool,
-    #[serde(default)]
-    pub read_only: bool,
-}
+// NOTE: sheet template request/response DTOs live in `application/dto/sheet_template.rs`.
 
 /// Get the sheet template for a world
 ///
@@ -102,7 +27,7 @@ pub struct CreateFieldRequest {
 pub async fn get_template(
     State(state): State<Arc<AppState>>,
     Path(world_id): Path<String>,
-) -> Result<Json<SheetTemplateResponse>, (StatusCode, String)> {
+) -> Result<Json<SheetTemplateResponseDto>, (StatusCode, String)> {
     let uuid = Uuid::parse_str(&world_id)
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid world ID".to_string()))?;
     let world_id = WorldId::from_uuid(uuid);
@@ -114,7 +39,7 @@ pub async fn get_template(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     {
-        return Ok(Json(SheetTemplateResponse::from(template)));
+        return Ok(Json(SheetTemplateResponseDto::from(template)));
     }
 
     // No template exists, generate from rule system
@@ -128,14 +53,14 @@ pub async fn get_template(
     let template =
         CharacterSheetTemplate::default_for_variant(world_id, &world.rule_system.variant);
 
-    Ok(Json(SheetTemplateResponse::from(template)))
+    Ok(Json(SheetTemplateResponseDto::from(template)))
 }
 
 /// List all sheet templates for a world
 pub async fn list_templates(
     State(state): State<Arc<AppState>>,
     Path(world_id): Path<String>,
-) -> Result<Json<Vec<SheetTemplateSummary>>, (StatusCode, String)> {
+) -> Result<Json<Vec<SheetTemplateSummaryDto>>, (StatusCode, String)> {
     let uuid = Uuid::parse_str(&world_id)
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid world ID".to_string()))?;
     let world_id = WorldId::from_uuid(uuid);
@@ -159,11 +84,14 @@ pub async fn list_templates(
     if templates.is_empty() {
         let default =
             CharacterSheetTemplate::default_for_variant(world_id, &world.rule_system.variant);
-        return Ok(Json(vec![SheetTemplateSummary::from(default)]));
+        return Ok(Json(vec![SheetTemplateSummaryDto::from(default)]));
     }
 
     Ok(Json(
-        templates.into_iter().map(SheetTemplateSummary::from).collect(),
+        templates
+            .into_iter()
+            .map(SheetTemplateSummaryDto::from)
+            .collect(),
     ))
 }
 
@@ -171,7 +99,7 @@ pub async fn list_templates(
 pub async fn get_template_by_id(
     State(state): State<Arc<AppState>>,
     Path((world_id, template_id)): Path<(String, String)>,
-) -> Result<Json<SheetTemplateResponse>, (StatusCode, String)> {
+) -> Result<Json<SheetTemplateResponseDto>, (StatusCode, String)> {
     let world_uuid = Uuid::parse_str(&world_id)
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid world ID".to_string()))?;
     let world_id = WorldId::from_uuid(world_uuid);
@@ -193,7 +121,7 @@ pub async fn get_template_by_id(
         ));
     }
 
-    Ok(Json(SheetTemplateResponse::from(template)))
+    Ok(Json(SheetTemplateResponseDto::from(template)))
 }
 
 /// Initialize the default template for a world
@@ -202,7 +130,7 @@ pub async fn get_template_by_id(
 pub async fn initialize_template(
     State(state): State<Arc<AppState>>,
     Path(world_id): Path<String>,
-) -> Result<Json<SheetTemplateResponse>, (StatusCode, String)> {
+) -> Result<Json<SheetTemplateResponseDto>, (StatusCode, String)> {
     let uuid = Uuid::parse_str(&world_id)
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid world ID".to_string()))?;
     let world_id = WorldId::from_uuid(uuid);
@@ -239,15 +167,15 @@ pub async fn initialize_template(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    Ok(Json(SheetTemplateResponse::from(template)))
+    Ok(Json(SheetTemplateResponseDto::from(template)))
 }
 
 /// Add a custom section to a template
 pub async fn add_section(
     State(state): State<Arc<AppState>>,
     Path((world_id, template_id)): Path<(String, String)>,
-    Json(req): Json<CreateSectionRequest>,
-) -> Result<Json<SheetTemplateResponse>, (StatusCode, String)> {
+    Json(req): Json<CreateSectionRequestDto>,
+) -> Result<Json<SheetTemplateResponseDto>, (StatusCode, String)> {
     let world_uuid = Uuid::parse_str(&world_id)
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid world ID".to_string()))?;
     let world_id = WorldId::from_uuid(world_uuid);
@@ -299,15 +227,15 @@ pub async fn add_section(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    Ok(Json(SheetTemplateResponse::from(template)))
+    Ok(Json(SheetTemplateResponseDto::from(template)))
 }
 
 /// Add a custom field to a section
 pub async fn add_field(
     State(state): State<Arc<AppState>>,
     Path((world_id, template_id, section_id)): Path<(String, String, String)>,
-    Json(req): Json<CreateFieldRequest>,
-) -> Result<Json<SheetTemplateResponse>, (StatusCode, String)> {
+    Json(req): Json<CreateFieldRequestDto>,
+) -> Result<Json<SheetTemplateResponseDto>, (StatusCode, String)> {
     let world_uuid = Uuid::parse_str(&world_id)
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid world ID".to_string()))?;
     let world_id = WorldId::from_uuid(world_uuid);
@@ -363,7 +291,7 @@ pub async fn add_field(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    Ok(Json(SheetTemplateResponse::from(template)))
+    Ok(Json(SheetTemplateResponseDto::from(template)))
 }
 
 /// Delete a template
