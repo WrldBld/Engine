@@ -5,7 +5,6 @@ use axum::{
     http::StatusCode,
     Json,
 };
-use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -13,64 +12,16 @@ use crate::application::services::{
     CreateSceneRequest as ServiceCreateSceneRequest, SceneService,
     UpdateSceneRequest as ServiceUpdateSceneRequest,
 };
-use crate::domain::entities::{Scene, TimeContext};
+use crate::application::dto::{CreateSceneRequestDto, SceneResponseDto, UpdateNotesRequestDto};
+use crate::domain::entities::TimeContext;
 use crate::domain::value_objects::{ActId, CharacterId, LocationId, SceneId};
 use crate::infrastructure::state::AppState;
-
-#[derive(Debug, Deserialize)]
-pub struct CreateSceneRequest {
-    pub name: String,
-    pub location_id: String,
-    #[serde(default)]
-    pub time_context: Option<String>,
-    #[serde(default)]
-    pub backdrop_override: Option<String>,
-    #[serde(default)]
-    pub featured_characters: Vec<String>,
-    #[serde(default)]
-    pub directorial_notes: String,
-    #[serde(default)]
-    pub order: u32,
-}
-
-#[derive(Debug, Serialize)]
-pub struct SceneResponse {
-    pub id: String,
-    pub act_id: String,
-    pub name: String,
-    pub location_id: String,
-    pub time_context: String,
-    pub backdrop_override: Option<String>,
-    pub featured_characters: Vec<String>,
-    pub directorial_notes: String,
-    pub order: u32,
-}
-
-impl From<Scene> for SceneResponse {
-    fn from(s: Scene) -> Self {
-        Self {
-            id: s.id.to_string(),
-            act_id: s.act_id.to_string(),
-            name: s.name,
-            location_id: s.location_id.to_string(),
-            time_context: format!("{:?}", s.time_context),
-            backdrop_override: s.backdrop_override,
-            featured_characters: s
-                .featured_characters
-                .iter()
-                .map(|c| c.to_string())
-                .collect(),
-            directorial_notes: s.directorial_notes,
-            order: s.order,
-        }
-    }
-}
 
 /// List scenes in an act
 pub async fn list_scenes_by_act(
     State(state): State<Arc<AppState>>,
     Path(act_id): Path<String>,
-) -> Result<Json<Vec<SceneResponse>>, (StatusCode, String)> {
+) -> Result<Json<Vec<SceneResponseDto>>, (StatusCode, String)> {
     let uuid = Uuid::parse_str(&act_id)
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid act ID".to_string()))?;
 
@@ -80,15 +31,15 @@ pub async fn list_scenes_by_act(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    Ok(Json(scenes.into_iter().map(SceneResponse::from).collect()))
+    Ok(Json(scenes.into_iter().map(SceneResponseDto::from).collect()))
 }
 
 /// Create a scene
 pub async fn create_scene(
     State(state): State<Arc<AppState>>,
     Path(act_id): Path<String>,
-    Json(req): Json<CreateSceneRequest>,
-) -> Result<(StatusCode, Json<SceneResponse>), (StatusCode, String)> {
+    Json(req): Json<CreateSceneRequestDto>,
+) -> Result<(StatusCode, Json<SceneResponseDto>), (StatusCode, String)> {
     let act_uuid = Uuid::parse_str(&act_id)
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid act ID".to_string()))?;
     let location_uuid = Uuid::parse_str(&req.location_id)
@@ -124,14 +75,14 @@ pub async fn create_scene(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    Ok((StatusCode::CREATED, Json(SceneResponse::from(scene))))
+    Ok((StatusCode::CREATED, Json(SceneResponseDto::from(scene))))
 }
 
 /// Get a scene by ID
 pub async fn get_scene(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
-) -> Result<Json<SceneResponse>, (StatusCode, String)> {
+) -> Result<Json<SceneResponseDto>, (StatusCode, String)> {
     let uuid = Uuid::parse_str(&id)
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid scene ID".to_string()))?;
 
@@ -142,15 +93,15 @@ pub async fn get_scene(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .ok_or_else(|| (StatusCode::NOT_FOUND, "Scene not found".to_string()))?;
 
-    Ok(Json(SceneResponse::from(scene)))
+    Ok(Json(SceneResponseDto::from(scene)))
 }
 
 /// Update a scene
 pub async fn update_scene(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
-    Json(req): Json<CreateSceneRequest>,
-) -> Result<Json<SceneResponse>, (StatusCode, String)> {
+    Json(req): Json<CreateSceneRequestDto>,
+) -> Result<Json<SceneResponseDto>, (StatusCode, String)> {
     let uuid = Uuid::parse_str(&id)
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid scene ID".to_string()))?;
     let scene_id = SceneId::from_uuid(uuid);
@@ -199,7 +150,7 @@ pub async fn update_scene(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    Ok(Json(SceneResponse::from(scene)))
+    Ok(Json(SceneResponseDto::from(scene)))
 }
 
 /// Delete a scene
@@ -225,16 +176,11 @@ pub async fn delete_scene(
     Ok(StatusCode::NO_CONTENT)
 }
 
-#[derive(Debug, Deserialize)]
-pub struct UpdateNotesRequest {
-    pub notes: String,
-}
-
 /// Update directorial notes for a scene
 pub async fn update_directorial_notes(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
-    Json(req): Json<UpdateNotesRequest>,
+    Json(req): Json<UpdateNotesRequestDto>,
 ) -> Result<StatusCode, (StatusCode, String)> {
     let uuid = Uuid::parse_str(&id)
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid scene ID".to_string()))?;
