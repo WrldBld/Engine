@@ -4,7 +4,6 @@
 //! forming a complete timeline of the game session.
 
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
 
 use crate::domain::value_objects::{
     ChallengeId, CharacterId, LocationId, NarrativeEventId, SceneId, SessionId, StoryEventId,
@@ -12,7 +11,7 @@ use crate::domain::value_objects::{
 };
 
 /// A story event - an immutable record of something that happened
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct StoryEvent {
     pub id: StoryEventId,
     pub world_id: WorldId,
@@ -40,8 +39,7 @@ pub struct StoryEvent {
 }
 
 /// Categories of story events that occurred during gameplay
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq)]
 pub enum StoryEventType {
     /// Player character moved to a new location
     LocationChange {
@@ -204,7 +202,7 @@ pub enum StoryEventType {
 }
 
 /// Combat event subtypes
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CombatEventType {
     Started,
     RoundCompleted,
@@ -214,7 +212,7 @@ pub enum CombatEventType {
 }
 
 /// Combat outcome types
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CombatOutcome {
     Victory,
     Defeat,
@@ -225,7 +223,7 @@ pub enum CombatOutcome {
 }
 
 /// Challenge event outcome
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChallengeEventOutcome {
     CriticalSuccess,
     Success,
@@ -235,8 +233,7 @@ pub enum ChallengeEventOutcome {
 }
 
 /// Source of an acquired item
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(tag = "source_type", rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ItemSource {
     Found { location: String },
     Purchased { from: String, cost: Option<String> },
@@ -249,7 +246,7 @@ pub enum ItemSource {
 }
 
 /// Type of revealed information
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InfoType {
     Lore,
     Quest,
@@ -261,7 +258,7 @@ pub enum InfoType {
 }
 
 /// Importance level for revealed information
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InfoImportance {
     Minor,
     Notable,
@@ -270,7 +267,7 @@ pub enum InfoImportance {
 }
 
 /// Importance level for DM markers
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MarkerImportance {
     Minor,
     Notable,
@@ -279,7 +276,7 @@ pub enum MarkerImportance {
 }
 
 /// Types of DM markers
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DmMarkerType {
     Note,
     PlotPoint,

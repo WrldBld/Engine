@@ -1,10 +1,9 @@
 //! Character relationships for social network modeling
 
-use serde::{Deserialize, Serialize};
 use super::{CharacterId, RelationshipId};
 
 /// A relationship between two characters
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct Relationship {
     pub id: RelationshipId,
     pub from_character: CharacterId,
@@ -46,7 +45,7 @@ impl Relationship {
 }
 
 /// Types of relationships between characters
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RelationshipType {
     Family(FamilyRelation),
     Romantic,
@@ -59,7 +58,7 @@ pub enum RelationshipType {
 }
 
 /// Family relationship subtypes
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FamilyRelation {
     Parent,
     Child,
@@ -73,7 +72,7 @@ pub enum FamilyRelation {
 }
 
 /// An event that affected a relationship
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct RelationshipEvent {
     pub description: String,
     pub sentiment_change: f32,

@@ -3,11 +3,12 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use neo4rs::{query, Row};
+use serde::{Deserialize, Serialize};
 
 use super::connection::Neo4jConnection;
 use crate::application::ports::outbound::SceneRepositoryPort;
 use crate::domain::entities::{Scene, SceneCondition, TimeContext};
-use crate::domain::value_objects::{ActId, CharacterId, LocationId, SceneId};
+use crate::domain::value_objects::{ActId, CharacterId, ItemId, LocationId, SceneId};
 
 /// Repository for Scene operations
 pub struct Neo4jSceneRepository {
@@ -21,9 +22,23 @@ impl Neo4jSceneRepository {
 
     /// Create a new scene
     pub async fn create(&self, scene: &Scene) -> Result<()> {
-        let time_context_json = serde_json::to_string(&scene.time_context)?;
-        let entry_conditions_json = serde_json::to_string(&scene.entry_conditions)?;
-        let featured_characters_json = serde_json::to_string(&scene.featured_characters)?;
+        let time_context_json =
+            serde_json::to_string(&TimeContextStored::from(scene.time_context.clone()))?;
+        let entry_conditions_json = serde_json::to_string(
+            &scene
+                .entry_conditions
+                .iter()
+                .cloned()
+                .map(SceneConditionStored::try_from)
+                .collect::<Result<Vec<_>>>()?,
+        )?;
+        let featured_characters_json = serde_json::to_string(
+            &scene
+                .featured_characters
+                .iter()
+                .map(|id| id.to_string())
+                .collect::<Vec<_>>(),
+        )?;
 
         let q = query(
             "MATCH (a:Act {id: $act_id})
@@ -134,9 +149,23 @@ impl Neo4jSceneRepository {
 
     /// Update a scene
     pub async fn update(&self, scene: &Scene) -> Result<()> {
-        let time_context_json = serde_json::to_string(&scene.time_context)?;
-        let entry_conditions_json = serde_json::to_string(&scene.entry_conditions)?;
-        let featured_characters_json = serde_json::to_string(&scene.featured_characters)?;
+        let time_context_json =
+            serde_json::to_string(&TimeContextStored::from(scene.time_context.clone()))?;
+        let entry_conditions_json = serde_json::to_string(
+            &scene
+                .entry_conditions
+                .iter()
+                .cloned()
+                .map(SceneConditionStored::try_from)
+                .collect::<Result<Vec<_>>>()?,
+        )?;
+        let featured_characters_json = serde_json::to_string(
+            &scene
+                .featured_characters
+                .iter()
+                .map(|id| id.to_string())
+                .collect::<Vec<_>>(),
+        )?;
 
         let q = query(
             "MATCH (s:Scene {id: $id})
@@ -234,9 +263,18 @@ fn row_to_scene(row: Row) -> Result<Scene> {
     let id = uuid::Uuid::parse_str(&id_str)?;
     let act_id = uuid::Uuid::parse_str(&act_id_str)?;
     let location_id = uuid::Uuid::parse_str(&location_id_str)?;
-    let time_context: TimeContext = serde_json::from_str(&time_context_json)?;
-    let entry_conditions: Vec<SceneCondition> = serde_json::from_str(&entry_conditions_json)?;
-    let featured_characters: Vec<CharacterId> = serde_json::from_str(&featured_characters_json)?;
+    let time_context: TimeContext =
+        serde_json::from_str::<TimeContextStored>(&time_context_json)?.into();
+    let entry_conditions: Vec<SceneCondition> =
+        serde_json::from_str::<Vec<SceneConditionStored>>(&entry_conditions_json)?
+            .into_iter()
+            .map(TryInto::try_into)
+            .collect::<Result<Vec<_>>>()?;
+    let featured_characters: Vec<CharacterId> =
+        serde_json::from_str::<Vec<String>>(&featured_characters_json)?
+            .into_iter()
+            .filter_map(|s| uuid::Uuid::parse_str(&s).ok().map(CharacterId::from_uuid))
+            .collect();
 
     Ok(Scene {
         id: SceneId::from_uuid(id),
@@ -254,6 +292,127 @@ fn row_to_scene(row: Row) -> Result<Scene> {
         directorial_notes,
         order: order_num as u32,
     })
+}
+
+// ============================================================================
+// Persistence serde models (so domain doesn't require serde)
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+enum TimeContextStored {
+    Unspecified,
+    TimeOfDay(TimeOfDayStored),
+    During(String),
+    Custom(String),
+}
+
+impl From<TimeContext> for TimeContextStored {
+    fn from(value: TimeContext) -> Self {
+        match value {
+            TimeContext::Unspecified => Self::Unspecified,
+            TimeContext::TimeOfDay(t) => Self::TimeOfDay(t.into()),
+            TimeContext::During(s) => Self::During(s),
+            TimeContext::Custom(s) => Self::Custom(s),
+        }
+    }
+}
+
+impl From<TimeContextStored> for TimeContext {
+    fn from(value: TimeContextStored) -> Self {
+        match value {
+            TimeContextStored::Unspecified => Self::Unspecified,
+            TimeContextStored::TimeOfDay(t) => Self::TimeOfDay(t.into()),
+            TimeContextStored::During(s) => Self::During(s),
+            TimeContextStored::Custom(s) => Self::Custom(s),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+enum TimeOfDayStored {
+    Dawn,
+    Morning,
+    Midday,
+    Afternoon,
+    Evening,
+    Dusk,
+    Night,
+    Midnight,
+}
+
+impl From<crate::domain::entities::TimeOfDay> for TimeOfDayStored {
+    fn from(value: crate::domain::entities::TimeOfDay) -> Self {
+        use crate::domain::entities::TimeOfDay as T;
+        match value {
+            T::Dawn => Self::Dawn,
+            T::Morning => Self::Morning,
+            T::Midday => Self::Midday,
+            T::Afternoon => Self::Afternoon,
+            T::Evening => Self::Evening,
+            T::Dusk => Self::Dusk,
+            T::Night => Self::Night,
+            T::Midnight => Self::Midnight,
+        }
+    }
+}
+
+impl From<TimeOfDayStored> for crate::domain::entities::TimeOfDay {
+    fn from(value: TimeOfDayStored) -> Self {
+        use crate::domain::entities::TimeOfDay as T;
+        match value {
+            TimeOfDayStored::Dawn => T::Dawn,
+            TimeOfDayStored::Morning => T::Morning,
+            TimeOfDayStored::Midday => T::Midday,
+            TimeOfDayStored::Afternoon => T::Afternoon,
+            TimeOfDayStored::Evening => T::Evening,
+            TimeOfDayStored::Dusk => T::Dusk,
+            TimeOfDayStored::Night => T::Night,
+            TimeOfDayStored::Midnight => T::Midnight,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+enum SceneConditionStored {
+    CompletedScene(String),
+    HasItem(String),
+    KnowsCharacter(String),
+    FlagSet(String),
+    Custom(String),
+}
+
+impl TryFrom<SceneCondition> for SceneConditionStored {
+    type Error = anyhow::Error;
+
+    fn try_from(value: SceneCondition) -> Result<Self> {
+        Ok(match value {
+            SceneCondition::CompletedScene(id) => Self::CompletedScene(id.to_string()),
+            SceneCondition::HasItem(id) => Self::HasItem(id.to_string()),
+            SceneCondition::KnowsCharacter(id) => Self::KnowsCharacter(id.to_string()),
+            SceneCondition::FlagSet(s) => Self::FlagSet(s),
+            SceneCondition::Custom(s) => Self::Custom(s),
+        })
+    }
+}
+
+impl TryFrom<SceneConditionStored> for SceneCondition {
+    type Error = anyhow::Error;
+
+    fn try_from(value: SceneConditionStored) -> Result<Self> {
+        Ok(match value {
+            SceneConditionStored::CompletedScene(id) => SceneCondition::CompletedScene(
+                SceneId::from_uuid(uuid::Uuid::parse_str(&id)?),
+            ),
+            SceneConditionStored::HasItem(id) => {
+                SceneCondition::HasItem(ItemId::from_uuid(uuid::Uuid::parse_str(&id)?))
+            }
+            SceneConditionStored::KnowsCharacter(id) => SceneCondition::KnowsCharacter(
+                CharacterId::from_uuid(uuid::Uuid::parse_str(&id)?),
+            ),
+            SceneConditionStored::FlagSet(s) => SceneCondition::FlagSet(s),
+            SceneConditionStored::Custom(s) => SceneCondition::Custom(s),
+        })
+    }
 }
 
 // =============================================================================

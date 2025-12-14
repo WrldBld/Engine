@@ -918,7 +918,7 @@ fn convert_to_internal_snapshot(player_snapshot: &PlayerWorldSnapshot) -> WorldS
         id: world_id,
         name: player_snapshot.world.name.clone(),
         description: player_snapshot.world.description.clone(),
-        rule_system: player_snapshot.world.rule_system.clone(),
+        rule_system: player_snapshot.world.rule_system.clone().into(),
         created_at: now,
         updated_at: now,
     };

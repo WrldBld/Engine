@@ -3,12 +3,10 @@
 //! Challenges can be attached to scenes and triggered either manually by the DM
 //! or suggested by the LLM when trigger conditions are met.
 
-use serde::{Deserialize, Serialize};
-
 use crate::domain::value_objects::{ChallengeId, SceneId, SkillId, WorldId};
 
 /// A challenge that can be triggered during gameplay
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct Challenge {
     pub id: ChallengeId,
     pub world_id: WorldId,
@@ -103,8 +101,7 @@ impl Challenge {
 }
 
 /// Types of challenges
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChallengeType {
     /// Standard skill check against difficulty
     SkillCheck,
@@ -137,8 +134,7 @@ impl ChallengeType {
 }
 
 /// Challenge difficulty representation
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(tag = "type", content = "value", rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Difficulty {
     /// D20-style: roll + modifier >= DC
     DC(u32),
@@ -183,8 +179,7 @@ impl Difficulty {
 }
 
 /// Descriptive difficulty for narrative systems
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DifficultyDescriptor {
     Trivial,
     Easy,
@@ -219,7 +214,7 @@ impl DifficultyDescriptor {
 }
 
 /// Outcomes for a challenge
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default)]
 pub struct ChallengeOutcomes {
     pub success: Outcome,
     pub failure: Outcome,
@@ -259,7 +254,7 @@ impl ChallengeOutcomes {
 }
 
 /// A single outcome with narrative text and triggered effects
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default)]
 pub struct Outcome {
     /// Narrative description shown to players
     pub description: String,
@@ -282,8 +277,7 @@ impl Outcome {
 }
 
 /// Effects triggered by challenge outcomes
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[derive(Debug, Clone)]
 pub enum OutcomeTrigger {
     /// Reveal hidden information to the player
     RevealInformation {
@@ -355,7 +349,7 @@ impl OutcomeTrigger {
 }
 
 /// Condition that triggers LLM to suggest a challenge
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct TriggerCondition {
     pub condition_type: TriggerType,
     /// Human-readable description for DM reference
@@ -385,8 +379,7 @@ impl TriggerCondition {
 }
 
 /// Types of trigger conditions
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[derive(Debug, Clone)]
 pub enum TriggerType {
     /// Player interacts with specific object
     ObjectInteraction {
@@ -502,7 +495,7 @@ impl TriggerType {
 }
 
 /// Result of a challenge resolution
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct ChallengeResult {
     pub challenge_id: ChallengeId,
     pub roll: i32,
@@ -516,8 +509,7 @@ pub struct ChallengeResult {
 }
 
 /// Type of outcome achieved
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutcomeType {
     CriticalSuccess,
     Success,
@@ -543,7 +535,7 @@ impl OutcomeType {
 }
 
 /// Settings for complex (multi-roll) challenges
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct ComplexChallengeSettings {
     /// Number of successes required to complete
     pub required_successes: u32,

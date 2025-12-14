@@ -5,7 +5,8 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-use crate::domain::value_objects::{RuleSystemConfig, WorldId};
+use crate::application::dto::RuleSystemConfigDto;
+use crate::domain::value_objects::WorldId;
 use crate::infrastructure::persistence::Neo4jRepository;
 
 /// Complete snapshot of a world for export
@@ -41,7 +42,7 @@ pub struct WorldData {
     pub id: String,
     pub name: String,
     pub description: String,
-    pub rule_system: RuleSystemConfig,
+    pub rule_system: RuleSystemConfigDto,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -226,7 +227,7 @@ impl JsonExporter {
                 id: world.id.to_string(),
                 name: world.name,
                 description: world.description,
-                rule_system: world.rule_system,
+                rule_system: RuleSystemConfigDto::from(world.rule_system),
                 created_at: world.created_at.to_rfc3339(),
                 updated_at: world.updated_at.to_rfc3339(),
             },
@@ -277,7 +278,11 @@ impl JsonExporter {
                     portrait_asset: c.portrait_asset,
                     is_alive: c.is_alive,
                     is_active: c.is_active,
-                    stats: serde_json::to_value(&c.stats).unwrap_or_default(),
+                    stats: serde_json::json!({
+                        "stats": c.stats.stats,
+                        "current_hp": c.stats.current_hp,
+                        "max_hp": c.stats.max_hp,
+                    }),
                     wants: c
                         .wants
                         .into_iter()

@@ -5,6 +5,7 @@ use async_trait::async_trait;
 use neo4rs::{query, Row};
 
 use super::connection::Neo4jConnection;
+use crate::application::dto::{DifficultyRequestDto, OutcomesRequestDto, TriggerConditionRequestDto};
 use crate::application::ports::outbound::ChallengeRepositoryPort;
 use crate::domain::entities::{
     Challenge, ChallengeType,
@@ -24,8 +25,16 @@ impl Neo4jChallengeRepository {
     /// Create a new challenge
     pub async fn create(&self, challenge: &Challenge) -> Result<()> {
         // Serialize complex fields as JSON
-        let outcomes_json = serde_json::to_string(&challenge.outcomes)?;
-        let triggers_json = serde_json::to_string(&challenge.trigger_conditions)?;
+        let outcomes_json =
+            serde_json::to_string(&OutcomesRequestDto::from(challenge.outcomes.clone()))?;
+        let triggers_json = serde_json::to_string(
+            &challenge
+                .trigger_conditions
+                .iter()
+                .cloned()
+                .map(TriggerConditionRequestDto::from)
+                .collect::<Vec<_>>(),
+        )?;
         let prerequisites_json: Vec<String> = challenge
             .prerequisite_challenges
             .iter()
@@ -65,7 +74,10 @@ impl Neo4jChallengeRepository {
         .param("description", challenge.description.clone())
         .param("challenge_type", format!("{:?}", challenge.challenge_type))
         .param("skill_id", challenge.skill_id.to_string())
-        .param("difficulty_json", serde_json::to_string(&challenge.difficulty)?)
+        .param(
+            "difficulty_json",
+            serde_json::to_string(&DifficultyRequestDto::from(challenge.difficulty.clone()))?,
+        )
         .param("outcomes_json", outcomes_json)
         .param("triggers_json", triggers_json)
         .param("prerequisites", prerequisites_json)
@@ -187,8 +199,16 @@ impl Neo4jChallengeRepository {
 
     /// Update a challenge
     pub async fn update(&self, challenge: &Challenge) -> Result<()> {
-        let outcomes_json = serde_json::to_string(&challenge.outcomes)?;
-        let triggers_json = serde_json::to_string(&challenge.trigger_conditions)?;
+        let outcomes_json =
+            serde_json::to_string(&OutcomesRequestDto::from(challenge.outcomes.clone()))?;
+        let triggers_json = serde_json::to_string(
+            &challenge
+                .trigger_conditions
+                .iter()
+                .cloned()
+                .map(TriggerConditionRequestDto::from)
+                .collect::<Vec<_>>(),
+        )?;
         let prerequisites_json: Vec<String> = challenge
             .prerequisite_challenges
             .iter()
@@ -222,7 +242,10 @@ impl Neo4jChallengeRepository {
         )
         .param("challenge_type", format!("{:?}", challenge.challenge_type))
         .param("skill_id", challenge.skill_id.to_string())
-        .param("difficulty_json", serde_json::to_string(&challenge.difficulty)?)
+        .param(
+            "difficulty_json",
+            serde_json::to_string(&DifficultyRequestDto::from(challenge.difficulty.clone()))?,
+        )
         .param("outcomes_json", outcomes_json)
         .param("triggers_json", triggers_json)
         .param("prerequisites", prerequisites_json)
@@ -358,9 +381,12 @@ fn row_to_challenge(row: Row) -> Result<Challenge> {
         description,
         challenge_type: parse_challenge_type(&challenge_type_str),
         skill_id: SkillId::from_uuid(uuid::Uuid::parse_str(&skill_id_str)?),
-        difficulty: serde_json::from_str(&difficulty_json)?,
-        outcomes: serde_json::from_str(&outcomes_json)?,
-        trigger_conditions: serde_json::from_str(&triggers_json)?,
+        difficulty: serde_json::from_str::<DifficultyRequestDto>(&difficulty_json)?.into(),
+        outcomes: serde_json::from_str::<OutcomesRequestDto>(&outcomes_json)?.into(),
+        trigger_conditions: serde_json::from_str::<Vec<TriggerConditionRequestDto>>(&triggers_json)?
+            .into_iter()
+            .map(Into::into)
+            .collect(),
         active,
         prerequisite_challenges,
         order: order as u32,

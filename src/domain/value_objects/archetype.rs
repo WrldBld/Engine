@@ -1,9 +1,7 @@
 //! Campbell's character archetypes from "The Hero with a Thousand Faces"
 
-use serde::{Deserialize, Serialize};
-
 /// Character archetypes based on Joseph Campbell's monomyth
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CampbellArchetype {
     /// The protagonist of the story
     Hero,
@@ -111,7 +109,7 @@ impl std::fmt::Display for CampbellArchetype {
 }
 
 /// Record of an archetype change for a character
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct ArchetypeChange {
     pub from: CampbellArchetype,
     pub to: CampbellArchetype,

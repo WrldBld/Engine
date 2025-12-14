@@ -6,13 +6,12 @@
 //! - Derived values (calculated from other fields)
 //! - Layout hints for UI rendering
 
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use crate::domain::value_objects::{RuleSystemVariant, WorldId};
 
 /// Unique identifier for a sheet template
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SheetTemplateId(pub String);
 
 impl SheetTemplateId {
@@ -32,7 +31,7 @@ impl Default for SheetTemplateId {
 }
 
 /// A character sheet template defining the structure of character data
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct CharacterSheetTemplate {
     pub id: SheetTemplateId,
     pub world_id: WorldId,
@@ -92,7 +91,7 @@ impl CharacterSheetTemplate {
 }
 
 /// A section of the character sheet (e.g., "Attributes", "Skills", "Combat")
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct SheetSection {
     pub id: String,
     pub name: String,
@@ -156,7 +155,7 @@ impl SheetSection {
 }
 
 /// Layout hint for a section
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SectionLayout {
     /// Fields stack vertically
     Vertical,
@@ -169,7 +168,7 @@ pub enum SectionLayout {
 }
 
 /// A single field in the character sheet
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct SheetField {
     pub id: String,
     pub name: String,
@@ -219,8 +218,7 @@ impl SheetField {
 }
 
 /// The type of a field and its specific configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[derive(Debug, Clone)]
 pub enum FieldType {
     /// A numeric value (e.g., attribute score, HP)
     Number {
@@ -271,7 +269,7 @@ pub enum FieldType {
 }
 
 /// Option in a select field
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct SelectOption {
     pub value: String,
     pub label: String,
@@ -294,7 +292,7 @@ impl SelectOption {
 }
 
 /// Type of items in an item list field
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ItemListType {
     /// Inventory items
     Inventory,
@@ -307,7 +305,7 @@ pub enum ItemListType {
 }
 
 /// Character data that conforms to a template
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default)]
 pub struct CharacterSheetData {
     /// Map of field_id -> value
     pub values: HashMap<String, FieldValue>,
@@ -349,8 +347,7 @@ impl CharacterSheetData {
 }
 
 /// A value stored for a field
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", content = "value", rename_all = "snake_case")]
+#[derive(Debug, Clone)]
 pub enum FieldValue {
     Number(i32),
     Text(String),

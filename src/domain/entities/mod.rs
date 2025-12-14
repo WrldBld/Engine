@@ -29,14 +29,18 @@ pub use interaction::{
     InteractionCondition, InteractionTarget, InteractionTemplate, InteractionType,
 };
 pub use location::{
-    BackdropRegion, Location, LocationConnection, LocationType, RegionBounds, SpatialRelationship,
+    BackdropRegion, ConnectionRequirement, Location, LocationConnection, LocationType, RegionBounds,
+    SpatialRelationship,
 };
 pub use narrative_event::{
-    EventOutcome, NarrativeEvent, NarrativeTrigger, TriggerLogic,
+    ChainedEvent, EventEffect, EventOutcome, NarrativeEvent, NarrativeTrigger,
+    NarrativeTriggerType, OutcomeCondition, TriggerLogic,
 };
 pub use scene::{Scene, SceneCondition, TimeContext};
+pub use scene::TimeOfDay;
 pub use sheet_template::{
-    CharacterSheetTemplate, FieldType, SectionLayout, SheetField, SheetSection, SheetTemplateId,
+    CharacterSheetTemplate, FieldType, ItemListType, SectionLayout, SelectOption, SheetField,
+    SheetSection, SheetTemplateId,
 };
 pub use skill::{default_skills_for_variant, Skill, SkillCategory};
 pub use story_event::{

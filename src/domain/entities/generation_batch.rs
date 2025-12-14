@@ -1,13 +1,12 @@
 //! GenerationBatch entity - Tracks batches of AI-generated assets
 
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
 
 use super::gallery_asset::{AssetType, EntityType};
 use crate::domain::value_objects::{AssetId, BatchId};
 
 /// Status of a generation batch
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum BatchStatus {
     /// Waiting in queue to be processed
     Queued,
@@ -55,7 +54,7 @@ impl std::fmt::Display for BatchStatus {
 }
 
 /// A batch of assets being generated together
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct GenerationBatch {
     pub id: BatchId,
     /// Type of entity this batch is for
@@ -164,7 +163,7 @@ impl GenerationBatch {
 }
 
 /// Request to create a new generation batch
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct GenerationRequest {
     pub entity_type: EntityType,
     pub entity_id: String,
@@ -197,7 +196,7 @@ impl GenerationRequest {
 }
 
 /// Selection made from a completed batch
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct BatchSelection {
     pub batch_id: BatchId,
     /// Assets to add to gallery

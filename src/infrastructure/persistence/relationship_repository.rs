@@ -3,11 +3,13 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use neo4rs::{query, Row};
+use serde::{Deserialize, Serialize};
 
 use super::connection::Neo4jConnection;
 use crate::application::ports::outbound::{RelationshipRepositoryPort, SocialNetwork, CharacterNode, RelationshipEdge};
 use crate::domain::value_objects::{
-    CharacterId, Relationship, RelationshipEvent, RelationshipId, RelationshipType, WorldId,
+    CharacterId, FamilyRelation, Relationship, RelationshipEvent, RelationshipId, RelationshipType,
+    WorldId,
 };
 
 /// Repository for Relationship (character social network) operations
@@ -22,8 +24,16 @@ impl Neo4jRelationshipRepository {
 
     /// Create a relationship between two characters
     pub async fn create(&self, relationship: &Relationship) -> Result<()> {
-        let type_json = serde_json::to_string(&relationship.relationship_type)?;
-        let history_json = serde_json::to_string(&relationship.history)?;
+        let type_json =
+            serde_json::to_string(&RelationshipTypeStored::from(relationship.relationship_type.clone()))?;
+        let history_json = serde_json::to_string(
+            &relationship
+                .history
+                .iter()
+                .cloned()
+                .map(RelationshipEventStored::from)
+                .collect::<Vec<_>>(),
+        )?;
 
         let q = query(
             "MATCH (from:Character {id: $from_id})
@@ -178,8 +188,16 @@ impl Neo4jRelationshipRepository {
 
     /// Update a relationship
     pub async fn update(&self, relationship: &Relationship) -> Result<()> {
-        let type_json = serde_json::to_string(&relationship.relationship_type)?;
-        let history_json = serde_json::to_string(&relationship.history)?;
+        let type_json =
+            serde_json::to_string(&RelationshipTypeStored::from(relationship.relationship_type.clone()))?;
+        let history_json = serde_json::to_string(
+            &relationship
+                .history
+                .iter()
+                .cloned()
+                .map(RelationshipEventStored::from)
+                .collect::<Vec<_>>(),
+        )?;
 
         let q = query(
             "MATCH ()-[r:RELATES_TO {id: $id}]->()
@@ -455,8 +473,13 @@ fn row_to_relationship(row: Row) -> Result<Relationship> {
     let id = uuid::Uuid::parse_str(&id_str)?;
     let from_id = uuid::Uuid::parse_str(&from_id_str)?;
     let to_id = uuid::Uuid::parse_str(&to_id_str)?;
-    let relationship_type: RelationshipType = serde_json::from_str(&rel_type_json)?;
-    let history: Vec<RelationshipEvent> = serde_json::from_str(&history_json)?;
+    let relationship_type: RelationshipType =
+        serde_json::from_str::<RelationshipTypeStored>(&rel_type_json)?.into();
+    let history: Vec<RelationshipEvent> =
+        serde_json::from_str::<Vec<RelationshipEventStored>>(&history_json)?
+            .into_iter()
+            .map(Into::into)
+            .collect();
 
     Ok(Relationship {
         id: RelationshipId::from_uuid(id),
@@ -467,6 +490,127 @@ fn row_to_relationship(row: Row) -> Result<Relationship> {
         history,
         known_to_player,
     })
+}
+
+// ============================================================================
+// Persistence serde models (so domain doesn't require serde)
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+enum RelationshipTypeStored {
+    Family(FamilyRelationStored),
+    Romantic,
+    Professional,
+    Rivalry,
+    Friendship,
+    Mentorship,
+    Enmity,
+    Custom(String),
+}
+
+impl From<RelationshipType> for RelationshipTypeStored {
+    fn from(value: RelationshipType) -> Self {
+        match value {
+            RelationshipType::Family(fr) => Self::Family(fr.into()),
+            RelationshipType::Romantic => Self::Romantic,
+            RelationshipType::Professional => Self::Professional,
+            RelationshipType::Rivalry => Self::Rivalry,
+            RelationshipType::Friendship => Self::Friendship,
+            RelationshipType::Mentorship => Self::Mentorship,
+            RelationshipType::Enmity => Self::Enmity,
+            RelationshipType::Custom(s) => Self::Custom(s),
+        }
+    }
+}
+
+impl From<RelationshipTypeStored> for RelationshipType {
+    fn from(value: RelationshipTypeStored) -> Self {
+        match value {
+            RelationshipTypeStored::Family(fr) => Self::Family(fr.into()),
+            RelationshipTypeStored::Romantic => Self::Romantic,
+            RelationshipTypeStored::Professional => Self::Professional,
+            RelationshipTypeStored::Rivalry => Self::Rivalry,
+            RelationshipTypeStored::Friendship => Self::Friendship,
+            RelationshipTypeStored::Mentorship => Self::Mentorship,
+            RelationshipTypeStored::Enmity => Self::Enmity,
+            RelationshipTypeStored::Custom(s) => Self::Custom(s),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+enum FamilyRelationStored {
+    Parent,
+    Child,
+    Sibling,
+    Spouse,
+    Grandparent,
+    Grandchild,
+    AuntUncle,
+    NieceNephew,
+    Cousin,
+}
+
+impl From<FamilyRelation> for FamilyRelationStored {
+    fn from(value: FamilyRelation) -> Self {
+        match value {
+            FamilyRelation::Parent => Self::Parent,
+            FamilyRelation::Child => Self::Child,
+            FamilyRelation::Sibling => Self::Sibling,
+            FamilyRelation::Spouse => Self::Spouse,
+            FamilyRelation::Grandparent => Self::Grandparent,
+            FamilyRelation::Grandchild => Self::Grandchild,
+            FamilyRelation::AuntUncle => Self::AuntUncle,
+            FamilyRelation::NieceNephew => Self::NieceNephew,
+            FamilyRelation::Cousin => Self::Cousin,
+        }
+    }
+}
+
+impl From<FamilyRelationStored> for FamilyRelation {
+    fn from(value: FamilyRelationStored) -> Self {
+        match value {
+            FamilyRelationStored::Parent => Self::Parent,
+            FamilyRelationStored::Child => Self::Child,
+            FamilyRelationStored::Sibling => Self::Sibling,
+            FamilyRelationStored::Spouse => Self::Spouse,
+            FamilyRelationStored::Grandparent => Self::Grandparent,
+            FamilyRelationStored::Grandchild => Self::Grandchild,
+            FamilyRelationStored::AuntUncle => Self::AuntUncle,
+            FamilyRelationStored::NieceNephew => Self::NieceNephew,
+            FamilyRelationStored::Cousin => Self::Cousin,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RelationshipEventStored {
+    pub description: String,
+    pub sentiment_change: f32,
+    pub timestamp: String,
+}
+
+impl From<RelationshipEvent> for RelationshipEventStored {
+    fn from(value: RelationshipEvent) -> Self {
+        Self {
+            description: value.description,
+            sentiment_change: value.sentiment_change,
+            timestamp: value.timestamp.to_rfc3339(),
+        }
+    }
+}
+
+impl From<RelationshipEventStored> for RelationshipEvent {
+    fn from(value: RelationshipEventStored) -> Self {
+        let timestamp = chrono::DateTime::parse_from_rfc3339(&value.timestamp)
+            .map(|dt| dt.with_timezone(&chrono::Utc))
+            .unwrap_or_else(|_| chrono::Utc::now());
+        Self {
+            description: value.description,
+            sentiment_change: value.sentiment_change,
+            timestamp,
+        }
+    }
 }
 
 /// Path between two characters through their relationships

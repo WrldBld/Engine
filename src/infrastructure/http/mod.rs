@@ -18,7 +18,7 @@ mod workflow_routes;
 mod world_routes;
 
 use axum::{
-    routing::{delete, get, post, put},
+    routing::{delete, get, patch, post, put},
     Router,
 };
 use std::sync::Arc;
@@ -269,6 +269,10 @@ pub fn create_routes() -> Router<Arc<AppState>> {
         .route(
             "/api/workflows/{slot}",
             delete(workflow_routes::delete_workflow_config),
+        )
+        .route(
+            "/api/workflows/{slot}/defaults",
+            patch(workflow_routes::update_workflow_defaults),
         )
         .route(
             "/api/workflows/analyze",

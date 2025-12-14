@@ -3,8 +3,6 @@
 //! Defines the enum of game mechanics that NPCs can suggest through the LLM.
 //! Each tool represents a specific game action that requires DM approval.
 
-use serde::{Deserialize, Serialize};
-
 /// Available tools/actions that an NPC can suggest via the LLM
 ///
 /// These tools represent game mechanics that can be triggered by NPC behavior.
@@ -20,7 +18,7 @@ use serde::{Deserialize, Serialize};
 ///     description: "An ornate bronze key".to_string(),
 /// };
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum GameTool {
     /// Give an item to the player
     ///
@@ -112,8 +110,7 @@ impl GameTool {
 }
 
 /// Importance levels for revealed information
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum InfoImportance {
     /// Minor plot detail
     Minor,
@@ -134,8 +131,7 @@ impl InfoImportance {
 }
 
 /// Direction of relationship change
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RelationshipChange {
     /// Improve the relationship
     Improve,
@@ -153,8 +149,7 @@ impl RelationshipChange {
 }
 
 /// Magnitude of change
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ChangeAmount {
     /// Small change
     Slight,

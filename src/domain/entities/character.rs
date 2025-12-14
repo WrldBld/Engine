@@ -1,13 +1,11 @@
 //! Character entity - NPCs with Campbell archetypes and actantial wants
 
-use serde::{Deserialize, Serialize};
-
 use crate::domain::value_objects::{
     ArchetypeChange, CampbellArchetype, CharacterId, ItemId, Want, WorldId,
 };
 
 /// A character (NPC) in the world
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct Character {
     pub id: CharacterId,
     pub world_id: WorldId,
@@ -121,7 +119,7 @@ impl Character {
 }
 
 /// Character stats (system-agnostic)
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default)]
 pub struct StatBlock {
     /// Map of stat name to value
     pub stats: std::collections::HashMap<String, i32>,

@@ -1,13 +1,12 @@
 //! Location entity - Physical or conceptual places in the world
 
-use serde::{Deserialize, Serialize};
 use crate::domain::value_objects::{GridMapId, LocationId, WorldId};
 
 /// A location in the world
 ///
 /// Locations form a hierarchy - a Town contains a Bar, the Bar contains rooms.
 /// The parent_id field establishes this containment relationship.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct Location {
     pub id: LocationId,
     pub world_id: WorldId,
@@ -69,7 +68,7 @@ impl Location {
 ///
 /// Example: A town map might have regions for "Church", "Tavern", "Slums"
 /// each with a different backdrop image.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct BackdropRegion {
     pub id: String,
     pub name: String,
@@ -111,7 +110,7 @@ impl BackdropRegion {
 }
 
 /// Rectangular bounds for a region
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy)]
 pub struct RegionBounds {
     pub x: u32,
     pub y: u32,
@@ -120,7 +119,7 @@ pub struct RegionBounds {
 }
 
 /// The type of location
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LocationType {
     /// Indoor location (tavern, dungeon room, etc.)
     Interior,
@@ -131,7 +130,7 @@ pub enum LocationType {
 }
 
 /// A connection between two locations
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct LocationConnection {
     pub from_location: LocationId,
     pub to_location: LocationId,
@@ -208,7 +207,7 @@ impl LocationConnection {
 }
 
 /// Spatial relationship between locations
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum SpatialRelationship {
     /// Standard connection (door, path, road)
     #[default]
@@ -226,7 +225,7 @@ pub enum SpatialRelationship {
 }
 
 /// A requirement to use a location connection
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub enum ConnectionRequirement {
     /// Must have a specific item
     HasItem(crate::domain::value_objects::ItemId),

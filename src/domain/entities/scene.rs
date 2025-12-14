@@ -1,10 +1,9 @@
 //! Scene entity - Complete storytelling unit (location + time + events)
 
-use serde::{Deserialize, Serialize};
 use crate::domain::value_objects::{ActId, CharacterId, LocationId, SceneId};
 
 /// A scene - a complete unit of storytelling
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct Scene {
     pub id: SceneId,
     pub act_id: ActId,
@@ -61,7 +60,7 @@ impl Scene {
 }
 
 /// Time context for a scene
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub enum TimeContext {
     /// No specific time
     Unspecified,
@@ -74,7 +73,7 @@ pub enum TimeContext {
 }
 
 /// Time of day
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TimeOfDay {
     Dawn,
     Morning,
@@ -87,7 +86,7 @@ pub enum TimeOfDay {
 }
 
 /// Condition for entering a scene
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub enum SceneCondition {
     /// Must have completed another scene
     CompletedScene(SceneId),

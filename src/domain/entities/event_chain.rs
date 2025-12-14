@@ -4,12 +4,11 @@
 //! with branching paths and progression tracking.
 
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
 
 use crate::domain::value_objects::{ActId, EventChainId, NarrativeEventId, WorldId};
 
 /// A chain of connected narrative events forming a story arc
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct EventChain {
     pub id: EventChainId,
     pub world_id: WorldId,
@@ -184,7 +183,7 @@ impl EventChain {
 }
 
 /// Summary information about a chain's state
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct ChainStatus {
     pub chain_id: EventChainId,
     pub chain_name: String,

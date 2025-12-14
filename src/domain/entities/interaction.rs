@@ -2,12 +2,10 @@
 //!
 //! Defines available interactions within a scene that players can perform.
 
-use serde::{Deserialize, Serialize};
-
 use crate::domain::value_objects::{CharacterId, InteractionId, ItemId, SceneId};
 
 /// A template defining an available interaction within a scene
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct InteractionTemplate {
     pub id: InteractionId,
     pub scene_id: SceneId,
@@ -74,7 +72,7 @@ impl InteractionTemplate {
 }
 
 /// Types of interactions players can perform
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InteractionType {
     /// Talk to an NPC
     Dialogue,
@@ -95,7 +93,7 @@ pub enum InteractionType {
 }
 
 /// What the interaction targets
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub enum InteractionTarget {
     /// Target a specific character
     Character(CharacterId),
@@ -108,7 +106,7 @@ pub enum InteractionTarget {
 }
 
 /// Conditions for an interaction to be available
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub enum InteractionCondition {
     /// Player must have this item
     HasItem(ItemId),

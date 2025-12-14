@@ -3,11 +3,13 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use neo4rs::{query, Row};
+use serde::{Deserialize, Serialize};
 
 use super::connection::Neo4jConnection;
 use crate::application::ports::outbound::LocationRepositoryPort;
 use crate::domain::entities::{
-    BackdropRegion, Location, LocationConnection, LocationType, SpatialRelationship,
+    BackdropRegion, ConnectionRequirement, Location, LocationConnection, LocationType,
+    SpatialRelationship,
 };
 use crate::domain::value_objects::{GridMapId, LocationId, WorldId};
 
@@ -23,7 +25,14 @@ impl Neo4jLocationRepository {
 
     /// Create a new location
     pub async fn create(&self, location: &Location) -> Result<()> {
-        let backdrop_regions_json = serde_json::to_string(&location.backdrop_regions)?;
+        let backdrop_regions_json = serde_json::to_string(
+            &location
+                .backdrop_regions
+                .iter()
+                .cloned()
+                .map(BackdropRegionStored::from)
+                .collect::<Vec<_>>(),
+        )?;
 
         let q = query(
             "MATCH (w:World {id: $world_id})
@@ -109,7 +118,14 @@ impl Neo4jLocationRepository {
 
     /// Update a location
     pub async fn update(&self, location: &Location) -> Result<()> {
-        let backdrop_regions_json = serde_json::to_string(&location.backdrop_regions)?;
+        let backdrop_regions_json = serde_json::to_string(
+            &location
+                .backdrop_regions
+                .iter()
+                .cloned()
+                .map(BackdropRegionStored::from)
+                .collect::<Vec<_>>(),
+        )?;
 
         let q = query(
             "MATCH (l:Location {id: $id})
@@ -166,7 +182,14 @@ impl Neo4jLocationRepository {
 
     /// Create a connection between two locations
     pub async fn create_connection(&self, connection: &LocationConnection) -> Result<()> {
-        let requirements_json = serde_json::to_string(&connection.requirements)?;
+        let requirements_json = serde_json::to_string(
+            &connection
+                .requirements
+                .iter()
+                .cloned()
+                .map(ConnectionRequirementStored::try_from)
+                .collect::<Result<Vec<_>>>()?,
+        )?;
         let connection_type_str = format!("{:?}", connection.connection_type);
 
         let q = query(
@@ -312,7 +335,11 @@ fn row_to_location(row: Row) -> Result<Location> {
     };
 
     let backdrop_regions: Vec<BackdropRegion> =
-        serde_json::from_str(&backdrop_regions_json).unwrap_or_default();
+        serde_json::from_str::<Vec<BackdropRegionStored>>(&backdrop_regions_json)
+            .unwrap_or_default()
+            .into_iter()
+            .map(Into::into)
+            .collect();
 
     Ok(Location {
         id: LocationId::from_uuid(id),
@@ -344,7 +371,11 @@ fn row_to_connection(row: Row) -> Result<LocationConnection> {
 
     let from_id = uuid::Uuid::parse_str(&from_id_str)?;
     let to_id = uuid::Uuid::parse_str(&to_id_str)?;
-    let requirements = serde_json::from_str(&requirements_json)?;
+    let requirements: Vec<ConnectionRequirement> =
+        serde_json::from_str::<Vec<ConnectionRequirementStored>>(&requirements_json)?
+            .into_iter()
+            .map(TryInto::try_into)
+            .collect::<Result<Vec<_>>>()?;
 
     let connection_type = match connection_type_str.as_str() {
         "Enters" => SpatialRelationship::Enters,
@@ -367,6 +398,103 @@ fn row_to_connection(row: Row) -> Result<LocationConnection> {
             Some(travel_time as u32)
         },
     })
+}
+
+// ============================================================================
+// Persistence serde models (so domain doesn't require serde)
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RegionBoundsStored {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct BackdropRegionStored {
+    pub id: String,
+    pub name: String,
+    pub bounds: RegionBoundsStored,
+    pub backdrop_asset: String,
+    pub description: Option<String>,
+}
+
+impl From<BackdropRegion> for BackdropRegionStored {
+    fn from(value: BackdropRegion) -> Self {
+        Self {
+            id: value.id,
+            name: value.name,
+            bounds: RegionBoundsStored {
+                x: value.bounds.x,
+                y: value.bounds.y,
+                width: value.bounds.width,
+                height: value.bounds.height,
+            },
+            backdrop_asset: value.backdrop_asset,
+            description: value.description,
+        }
+    }
+}
+
+impl From<BackdropRegionStored> for BackdropRegion {
+    fn from(value: BackdropRegionStored) -> Self {
+        Self {
+            id: value.id,
+            name: value.name,
+            bounds: crate::domain::entities::RegionBounds {
+                x: value.bounds.x,
+                y: value.bounds.y,
+                width: value.bounds.width,
+                height: value.bounds.height,
+            },
+            backdrop_asset: value.backdrop_asset,
+            description: value.description,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+enum ConnectionRequirementStored {
+    HasItem(String),
+    CompletedScene(String),
+    SkillCheck { stat: String, difficulty: i32 },
+    Custom(String),
+}
+
+impl TryFrom<ConnectionRequirement> for ConnectionRequirementStored {
+    type Error = anyhow::Error;
+
+    fn try_from(value: ConnectionRequirement) -> Result<Self> {
+        Ok(match value {
+            ConnectionRequirement::HasItem(id) => Self::HasItem(id.to_string()),
+            ConnectionRequirement::CompletedScene(id) => Self::CompletedScene(id.to_string()),
+            ConnectionRequirement::SkillCheck { stat, difficulty } => {
+                Self::SkillCheck { stat, difficulty }
+            }
+            ConnectionRequirement::Custom(s) => Self::Custom(s),
+        })
+    }
+}
+
+impl TryFrom<ConnectionRequirementStored> for ConnectionRequirement {
+    type Error = anyhow::Error;
+
+    fn try_from(value: ConnectionRequirementStored) -> Result<Self> {
+        Ok(match value {
+            ConnectionRequirementStored::HasItem(id) => ConnectionRequirement::HasItem(
+                crate::domain::value_objects::ItemId::from_uuid(uuid::Uuid::parse_str(&id)?),
+            ),
+            ConnectionRequirementStored::CompletedScene(id) => ConnectionRequirement::CompletedScene(
+                crate::domain::value_objects::SceneId::from_uuid(uuid::Uuid::parse_str(&id)?),
+            ),
+            ConnectionRequirementStored::SkillCheck { stat, difficulty } => {
+                ConnectionRequirement::SkillCheck { stat, difficulty }
+            }
+            ConnectionRequirementStored::Custom(s) => ConnectionRequirement::Custom(s),
+        })
+    }
 }
 
 // =============================================================================

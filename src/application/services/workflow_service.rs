@@ -9,6 +9,7 @@
 use anyhow::{anyhow, Result};
 use rand::Rng;
 
+use crate::application::dto::WorkflowConfigExportDto;
 use crate::domain::entities::{
     InputDefault, InputType, PromptMapping, PromptMappingType, WorkflowAnalysis,
     WorkflowConfiguration, WorkflowInput,
@@ -307,10 +308,12 @@ impl WorkflowService {
 
     /// Export all workflow configurations to a single JSON for backup
     pub fn export_configs(configs: &[WorkflowConfiguration]) -> serde_json::Value {
+        let exported: Vec<WorkflowConfigExportDto> =
+            configs.iter().cloned().map(Into::into).collect();
         serde_json::json!({
             "version": "1.0",
             "exported_at": chrono::Utc::now().to_rfc3339(),
-            "workflows": configs,
+            "workflows": exported,
         })
     }
 
@@ -320,8 +323,13 @@ impl WorkflowService {
             .get("workflows")
             .ok_or_else(|| anyhow!("Missing 'workflows' field in import data"))?;
 
-        let configs: Vec<WorkflowConfiguration> = serde_json::from_value(workflows.clone())
+        let dtos: Vec<WorkflowConfigExportDto> = serde_json::from_value(workflows.clone())
             .map_err(|e| anyhow!("Failed to parse workflow configurations: {}", e))?;
+
+        let configs: Vec<WorkflowConfiguration> = dtos
+            .into_iter()
+            .map(TryInto::try_into)
+            .collect::<Result<Vec<_>>>()?;
 
         Ok(configs)
     }

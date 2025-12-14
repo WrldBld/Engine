@@ -205,7 +205,7 @@ pub async fn add_section(
         section = section.with_description(desc);
     }
     if let Some(layout) = req.layout {
-        section = section.with_layout(layout);
+        section = section.with_layout(layout.into());
     }
     if req.collapsible {
         section = section.collapsible();
@@ -266,7 +266,7 @@ pub async fn add_field(
 
     // Create the field
     let field_id = format!("custom_{}", uuid::Uuid::new_v4());
-    let mut field = SheetField::new(&field_id, &req.name, req.field_type);
+    let mut field = SheetField::new(&field_id, &req.name, req.field_type.into());
 
     if let Some(desc) = req.description {
         field = field.with_description(desc);

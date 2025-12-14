@@ -1,11 +1,9 @@
 //! Grid map for tactical combat
 
-use serde::{Deserialize, Serialize};
-
 use crate::domain::value_objects::{GridMapId, WorldId};
 
 /// A tactical grid map for combat
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct GridMap {
     pub id: GridMapId,
     pub world_id: WorldId,
@@ -78,7 +76,7 @@ impl GridMap {
 }
 
 /// A single tile on the grid map
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct Tile {
     pub terrain_type: TerrainType,
     /// Elevation level (supports height differences)
@@ -131,7 +129,7 @@ impl Tile {
 }
 
 /// Types of terrain
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum TerrainType {
     #[default]
     Ground,

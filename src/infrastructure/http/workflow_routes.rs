@@ -11,8 +11,9 @@ use crate::application::services::WorkflowService;
 use crate::application::dto::{
     parse_workflow_slot, AnalyzeWorkflowRequestDto, CreateWorkflowConfigRequestDto,
     ImportWorkflowsRequestDto, ImportWorkflowsResponseDto, TestWorkflowRequestDto,
-    TestWorkflowResponseDto, WorkflowAnalysisResponseDto, WorkflowConfigFullResponseDto,
-    WorkflowConfigResponseDto, WorkflowSlotCategoryDto, WorkflowSlotStatusDto, WorkflowSlotsResponseDto,
+    TestWorkflowResponseDto, UpdateWorkflowDefaultsRequestDto, WorkflowAnalysisResponseDto,
+    WorkflowConfigFullResponseDto, WorkflowConfigResponseDto, WorkflowSlotCategoryDto,
+    WorkflowSlotStatusDto, WorkflowSlotsResponseDto,
 };
 use crate::domain::entities::{WorkflowConfiguration, WorkflowSlot};
 use crate::infrastructure::state::AppState;
@@ -114,15 +115,15 @@ pub async fn save_workflow_config(
         // Update existing
         existing_config.name = req.name;
         existing_config.update_workflow(req.workflow_json);
-        existing_config.set_prompt_mappings(req.prompt_mappings);
-        existing_config.set_input_defaults(req.input_defaults);
+        existing_config.set_prompt_mappings(req.prompt_mappings.into_iter().map(Into::into).collect());
+        existing_config.set_input_defaults(req.input_defaults.into_iter().map(Into::into).collect());
         existing_config.set_locked_inputs(req.locked_inputs);
         existing_config
     } else {
         // Create new
         let mut config = WorkflowConfiguration::new(workflow_slot, req.name, req.workflow_json);
-        config.set_prompt_mappings(req.prompt_mappings);
-        config.set_input_defaults(req.input_defaults);
+        config.set_prompt_mappings(req.prompt_mappings.into_iter().map(Into::into).collect());
+        config.set_input_defaults(req.input_defaults.into_iter().map(Into::into).collect());
         config.set_locked_inputs(req.locked_inputs);
         config
     };
@@ -166,6 +167,39 @@ pub async fn delete_workflow_config(
     }
 }
 
+/// Update just the defaults of a workflow configuration (without re-uploading the workflow JSON)
+pub async fn update_workflow_defaults(
+    State(state): State<Arc<AppState>>,
+    Path(slot): Path<String>,
+    Json(req): Json<UpdateWorkflowDefaultsRequestDto>,
+) -> Result<Json<WorkflowConfigFullResponseDto>, (StatusCode, String)> {
+    let workflow_slot = parse_workflow_slot(&slot)
+        .map_err(|msg| (StatusCode::BAD_REQUEST, msg))?;
+
+    let mut config = state
+        .workflow_config_service
+        .get_by_slot(workflow_slot)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or_else(|| (StatusCode::NOT_FOUND, format!("No workflow configured for slot: {}", slot)))?;
+
+    // Update defaults
+    config.set_input_defaults(req.input_defaults.into_iter().map(Into::into).collect());
+
+    // Update locked inputs if provided
+    if let Some(locked) = req.locked_inputs {
+        config.set_locked_inputs(locked);
+    }
+
+    state
+        .workflow_config_service
+        .save(&config)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    Ok(Json(WorkflowConfigFullResponseDto::from(&config)))
+}
+
 /// Analyze a workflow JSON without saving
 pub async fn analyze_workflow(
     Json(req): Json<AnalyzeWorkflowRequestDto>,
@@ -180,8 +214,8 @@ pub async fn analyze_workflow(
 
     Ok(Json(WorkflowAnalysisResponseDto {
         is_valid: analysis.is_valid(),
-        analysis,
-        suggested_prompt_mappings: auto_mappings,
+        analysis: analysis.into(),
+        suggested_prompt_mappings: auto_mappings.into_iter().map(Into::into).collect(),
     }))
 }
 

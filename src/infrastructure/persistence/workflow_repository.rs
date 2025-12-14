@@ -7,6 +7,7 @@ use neo4rs::query;
 use uuid::Uuid;
 
 use crate::application::ports::outbound::WorkflowRepositoryPort;
+use crate::application::dto::{InputDefaultDto, PromptMappingDto};
 use crate::domain::entities::{
     InputDefault, PromptMapping, WorkflowConfiguration, WorkflowSlot,
 };
@@ -30,8 +31,22 @@ impl Neo4jWorkflowRepository {
         let slot = config.slot.as_str();
         let name = &config.name;
         let workflow_json = serde_json::to_string(&config.workflow_json)?;
-        let prompt_mappings = serde_json::to_string(&config.prompt_mappings)?;
-        let input_defaults = serde_json::to_string(&config.input_defaults)?;
+        let prompt_mappings = serde_json::to_string(
+            &config
+                .prompt_mappings
+                .iter()
+                .cloned()
+                .map(PromptMappingDto::from)
+                .collect::<Vec<_>>(),
+        )?;
+        let input_defaults = serde_json::to_string(
+            &config
+                .input_defaults
+                .iter()
+                .cloned()
+                .map(InputDefaultDto::from)
+                .collect::<Vec<_>>(),
+        )?;
         let locked_inputs = serde_json::to_string(&config.locked_inputs)?;
         let created_at = config.created_at.to_rfc3339();
         let updated_at = config.updated_at.to_rfc3339();
@@ -187,12 +202,22 @@ impl Neo4jWorkflowRepository {
             .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
 
         let prompt_mappings_str: String = row.get("prompt_mappings").unwrap_or_default();
-        let prompt_mappings: Vec<PromptMapping> =
-            serde_json::from_str(&prompt_mappings_str).unwrap_or_default();
+        let prompt_mappings: Vec<PromptMapping> = serde_json::from_str::<Vec<PromptMappingDto>>(
+            &prompt_mappings_str,
+        )
+        .unwrap_or_default()
+        .into_iter()
+        .map(Into::into)
+        .collect();
 
         let input_defaults_str: String = row.get("input_defaults").unwrap_or_default();
-        let input_defaults: Vec<InputDefault> =
-            serde_json::from_str(&input_defaults_str).unwrap_or_default();
+        let input_defaults: Vec<InputDefault> = serde_json::from_str::<Vec<InputDefaultDto>>(
+            &input_defaults_str,
+        )
+        .unwrap_or_default()
+        .into_iter()
+        .map(Into::into)
+        .collect();
 
         let locked_inputs_str: String = row.get("locked_inputs").unwrap_or_default();
         let locked_inputs: Vec<String> =

@@ -49,7 +49,7 @@ pub async fn load_world_snapshot(
         id: world.id.to_string(),
         name: world.name,
         description: world.description,
-        rule_system: world.rule_system,
+        rule_system: world.rule_system.into(),
         created_at: world.created_at.to_rfc3339(),
         updated_at: world.updated_at.to_rfc3339(),
     };
@@ -210,6 +210,7 @@ impl WorldExporterPort for Neo4jWorldExporter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::application::dto::RuleSystemConfigDto;
     use crate::domain::value_objects::RuleSystemConfig;
 
     #[test]
@@ -218,7 +219,7 @@ mod tests {
             id: "test-id".to_string(),
             name: "Test World".to_string(),
             description: "A test world".to_string(),
-            rule_system: RuleSystemConfig::default(),
+            rule_system: RuleSystemConfigDto::from(RuleSystemConfig::default()),
             created_at: "2025-01-01T00:00:00Z".to_string(),
             updated_at: "2025-01-01T00:00:00Z".to_string(),
         };
@@ -255,7 +256,7 @@ mod tests {
                 id: "world-1".to_string(),
                 name: "Fantasy Realm".to_string(),
                 description: "A magical world".to_string(),
-                rule_system: RuleSystemConfig::default(),
+                rule_system: RuleSystemConfigDto::from(RuleSystemConfig::default()),
                 created_at: "2025-01-01T00:00:00Z".to_string(),
                 updated_at: "2025-01-01T00:00:00Z".to_string(),
             },

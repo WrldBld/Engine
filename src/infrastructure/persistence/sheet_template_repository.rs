@@ -6,6 +6,7 @@ use neo4rs::{query, Row};
 
 use super::connection::Neo4jConnection;
 use crate::application::ports::outbound::SheetTemplateRepositoryPort;
+use crate::application::dto::SheetTemplateStorageDto;
 use crate::domain::entities::{CharacterSheetTemplate, SheetTemplateId};
 use crate::domain::value_objects::WorldId;
 
@@ -22,7 +23,7 @@ impl Neo4jSheetTemplateRepository {
     /// Create a new sheet template
     pub async fn create(&self, template: &CharacterSheetTemplate) -> Result<()> {
         // Serialize the template to JSON for storage
-        let template_json = serde_json::to_string(template)?;
+        let template_json = serde_json::to_string(&SheetTemplateStorageDto::from(template))?;
 
         let q = query(
             "MATCH (w:World {id: $world_id})
@@ -106,7 +107,7 @@ impl Neo4jSheetTemplateRepository {
 
     /// Update a sheet template
     pub async fn update(&self, template: &CharacterSheetTemplate) -> Result<()> {
-        let template_json = serde_json::to_string(template)?;
+        let template_json = serde_json::to_string(&SheetTemplateStorageDto::from(template))?;
 
         let q = query(
             "MATCH (t:SheetTemplate {id: $id})
@@ -175,7 +176,8 @@ fn row_to_template(row: Row) -> Result<CharacterSheetTemplate> {
     let node: neo4rs::Node = row.get("t")?;
 
     let template_data: String = node.get("template_data")?;
-    let template: CharacterSheetTemplate = serde_json::from_str(&template_data)?;
+    let stored: SheetTemplateStorageDto = serde_json::from_str(&template_data)?;
+    let template: CharacterSheetTemplate = stored.try_into()?;
 
     Ok(template)
 }

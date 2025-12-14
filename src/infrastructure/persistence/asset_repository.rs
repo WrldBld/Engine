@@ -3,6 +3,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use neo4rs::{query, Row};
+use serde::{Deserialize, Serialize};
 
 use super::connection::Neo4jConnection;
 use crate::application::ports::outbound::AssetRepositoryPort;
@@ -28,7 +29,7 @@ impl Neo4jAssetRepository {
         let generation_metadata_json = asset
             .generation_metadata
             .as_ref()
-            .map(|m| serde_json::to_string(m))
+            .map(|m| serde_json::to_string(&GenerationMetadataStored::from(m.clone())))
             .transpose()?
             .unwrap_or_default();
 
@@ -257,8 +258,10 @@ impl Neo4jAssetRepository {
 
     /// Create a new generation batch
     pub async fn create_batch(&self, batch: &GenerationBatch) -> Result<()> {
-        let assets_json = serde_json::to_string(&batch.assets)?;
-        let status_json = serde_json::to_string(&batch.status)?;
+        let assets_json = serde_json::to_string(
+            &batch.assets.iter().map(|id| id.to_string()).collect::<Vec<_>>(),
+        )?;
+        let status_json = serde_json::to_string(&BatchStatusStored::from(batch.status.clone()))?;
 
         let q = query(
             "CREATE (b:GenerationBatch {
@@ -393,7 +396,7 @@ impl Neo4jAssetRepository {
 
     /// Update batch status
     pub async fn update_batch_status(&self, id: BatchId, status: &BatchStatus) -> Result<()> {
-        let status_json = serde_json::to_string(status)?;
+        let status_json = serde_json::to_string(&BatchStatusStored::from(status.clone()))?;
         let completed_at = if status.is_terminal() {
             chrono::Utc::now().to_rfc3339()
         } else {
@@ -416,7 +419,9 @@ impl Neo4jAssetRepository {
 
     /// Update batch with generated assets
     pub async fn update_batch_assets(&self, id: BatchId, assets: &[AssetId]) -> Result<()> {
-        let assets_json = serde_json::to_string(assets)?;
+        let assets_json = serde_json::to_string(
+            &assets.iter().map(|id| id.to_string()).collect::<Vec<_>>(),
+        )?;
 
         let q = query(
             "MATCH (b:GenerationBatch {id: $id})
@@ -463,7 +468,9 @@ fn row_to_gallery_asset(row: Row) -> Result<GalleryAsset> {
     let generation_metadata: Option<GenerationMetadata> = if generation_metadata_json.is_empty() {
         None
     } else {
-        serde_json::from_str(&generation_metadata_json).ok()
+        serde_json::from_str::<GenerationMetadataStored>(&generation_metadata_json)
+            .ok()
+            .map(Into::into)
     };
     let created_at =
         chrono::DateTime::parse_from_rfc3339(&created_at_str)?.with_timezone(&chrono::Utc);
@@ -502,8 +509,11 @@ fn row_to_generation_batch(row: Row) -> Result<GenerationBatch> {
     let entity_type = parse_entity_type(&entity_type_str);
     let asset_type = AssetType::from_str(&asset_type_str)
         .ok_or_else(|| anyhow::anyhow!("Invalid asset type: {}", asset_type_str))?;
-    let status: BatchStatus = serde_json::from_str(&status_json)?;
-    let assets: Vec<AssetId> = serde_json::from_str(&assets_json)?;
+    let status: BatchStatus = serde_json::from_str::<BatchStatusStored>(&status_json)?.into();
+    let assets: Vec<AssetId> = serde_json::from_str::<Vec<String>>(&assets_json)?
+        .into_iter()
+        .filter_map(|s| uuid::Uuid::parse_str(&s).ok().map(AssetId::from_uuid))
+        .collect();
     let style_reference_id = if style_reference_id_str.is_empty() {
         None
     } else {
@@ -540,6 +550,88 @@ fn row_to_generation_batch(row: Row) -> Result<GenerationBatch> {
         requested_at,
         completed_at,
     })
+}
+
+// ============================================================================
+// Persistence serde models (so domain doesn't require serde)
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+enum BatchStatusStored {
+    Queued,
+    Generating { progress: u8 },
+    ReadyForSelection,
+    Completed,
+    Failed { error: String },
+}
+
+impl From<BatchStatus> for BatchStatusStored {
+    fn from(value: BatchStatus) -> Self {
+        match value {
+            BatchStatus::Queued => Self::Queued,
+            BatchStatus::Generating { progress } => Self::Generating { progress },
+            BatchStatus::ReadyForSelection => Self::ReadyForSelection,
+            BatchStatus::Completed => Self::Completed,
+            BatchStatus::Failed { error } => Self::Failed { error },
+        }
+    }
+}
+
+impl From<BatchStatusStored> for BatchStatus {
+    fn from(value: BatchStatusStored) -> Self {
+        match value {
+            BatchStatusStored::Queued => Self::Queued,
+            BatchStatusStored::Generating { progress } => Self::Generating { progress },
+            BatchStatusStored::ReadyForSelection => Self::ReadyForSelection,
+            BatchStatusStored::Completed => Self::Completed,
+            BatchStatusStored::Failed { error } => Self::Failed { error },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct GenerationMetadataStored {
+    pub workflow: String,
+    pub prompt: String,
+    pub negative_prompt: Option<String>,
+    pub seed: i64,
+    pub style_reference_id: Option<String>,
+    pub batch_id: String,
+}
+
+impl From<GenerationMetadata> for GenerationMetadataStored {
+    fn from(value: GenerationMetadata) -> Self {
+        Self {
+            workflow: value.workflow,
+            prompt: value.prompt,
+            negative_prompt: value.negative_prompt,
+            seed: value.seed,
+            style_reference_id: value.style_reference_id.map(|id| id.to_string()),
+            batch_id: value.batch_id.to_string(),
+        }
+    }
+}
+
+impl From<GenerationMetadataStored> for GenerationMetadata {
+    fn from(value: GenerationMetadataStored) -> Self {
+        let style_reference_id = value
+            .style_reference_id
+            .and_then(|s| uuid::Uuid::parse_str(&s).ok())
+            .map(AssetId::from_uuid);
+        let batch_id = uuid::Uuid::parse_str(&value.batch_id)
+            .ok()
+            .map(BatchId::from_uuid)
+            .unwrap_or_else(BatchId::new);
+
+        Self {
+            workflow: value.workflow,
+            prompt: value.prompt,
+            negative_prompt: value.negative_prompt,
+            seed: value.seed,
+            style_reference_id,
+            batch_id,
+        }
+    }
 }
 
 fn parse_entity_type(s: &str) -> EntityType {

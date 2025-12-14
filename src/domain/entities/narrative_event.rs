@@ -4,7 +4,6 @@
 //! They support complex triggers, branching outcomes, and chaining to other events.
 
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use crate::domain::value_objects::{
@@ -12,7 +11,7 @@ use crate::domain::value_objects::{
 };
 
 /// A narrative event that can be triggered when conditions are met
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct NarrativeEvent {
     pub id: NarrativeEventId,
     pub world_id: WorldId,
@@ -91,7 +90,7 @@ pub struct NarrativeEvent {
 }
 
 /// How multiple trigger conditions are evaluated
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TriggerLogic {
     /// All conditions must be met (AND)
     #[default]
@@ -103,7 +102,7 @@ pub enum TriggerLogic {
 }
 
 /// A single trigger condition
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct NarrativeTrigger {
     /// The type and parameters of this trigger
     pub trigger_type: NarrativeTriggerType,
@@ -116,8 +115,7 @@ pub struct NarrativeTrigger {
 }
 
 /// Types of triggers for narrative events
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[derive(Debug, Clone)]
 pub enum NarrativeTriggerType {
     /// NPC performs a specific action or completes dialogue
     NpcAction {
@@ -212,7 +210,7 @@ pub enum NarrativeTriggerType {
 }
 
 /// An outcome branch for a narrative event
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct EventOutcome {
     /// Unique identifier for this outcome within the event
     pub name: String,
@@ -231,8 +229,7 @@ pub struct EventOutcome {
 }
 
 /// Condition for an outcome branch
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[derive(Debug, Clone)]
 pub enum OutcomeCondition {
     /// DM selects this outcome manually
     DmChoice,
@@ -260,8 +257,7 @@ pub enum OutcomeCondition {
 }
 
 /// Effects that occur as part of an event outcome
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "effect_type", rename_all = "snake_case")]
+#[derive(Debug, Clone)]
 pub enum EventEffect {
     /// Change relationship between characters
     ModifyRelationship {
@@ -354,7 +350,7 @@ pub enum EventEffect {
 }
 
 /// Reference to a chained event
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct ChainedEvent {
     /// Event to chain to
     pub event_id: NarrativeEventId,

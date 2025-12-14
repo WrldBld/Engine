@@ -1,10 +1,9 @@
 //! Actantial model - Character wants and desires
 
-use serde::{Deserialize, Serialize};
 use super::{CharacterId, ItemId, WantId};
 
 /// A character's desire or goal (actantial model)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct Want {
     pub id: WantId,
     pub description: String,
@@ -43,7 +42,7 @@ impl Want {
 }
 
 /// The target of a character's want
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub enum ActantTarget {
     /// Wants something from/about another character
     Character(CharacterId),

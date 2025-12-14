@@ -5,6 +5,7 @@ use async_trait::async_trait;
 use neo4rs::{query, Row};
 
 use super::connection::Neo4jConnection;
+use crate::application::dto::RuleSystemConfigDto;
 use crate::application::ports::outbound::WorldRepositoryPort;
 use crate::domain::entities::{Act, MonomythStage, World};
 use crate::domain::value_objects::{ActId, RuleSystemConfig, WorldId};
@@ -21,7 +22,8 @@ impl Neo4jWorldRepository {
 
     /// Create a new world
     pub async fn create(&self, world: &World) -> Result<()> {
-        let rule_system_json = serde_json::to_string(&world.rule_system)?;
+        let rule_system_json =
+            serde_json::to_string(&RuleSystemConfigDto::from(world.rule_system.clone()))?;
 
         let q = query(
             "CREATE (w:World {
@@ -87,7 +89,8 @@ impl Neo4jWorldRepository {
 
     /// Update a world
     pub async fn update(&self, world: &World) -> Result<()> {
-        let rule_system_json = serde_json::to_string(&world.rule_system)?;
+        let rule_system_json =
+            serde_json::to_string(&RuleSystemConfigDto::from(world.rule_system.clone()))?;
 
         let q = query(
             "MATCH (w:World {id: $id})
@@ -180,7 +183,8 @@ fn row_to_world(row: Row) -> Result<World> {
     let updated_at_str: String = row.get("updated_at")?;
 
     let id = uuid::Uuid::parse_str(&id_str)?;
-    let rule_system: RuleSystemConfig = serde_json::from_str(&rule_system_json)?;
+    let rule_system: RuleSystemConfig =
+        serde_json::from_str::<RuleSystemConfigDto>(&rule_system_json)?.into();
     let created_at =
         chrono::DateTime::parse_from_rfc3339(&created_at_str)?.with_timezone(&chrono::Utc);
     let updated_at =

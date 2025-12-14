@@ -3,13 +3,14 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use neo4rs::{query, Row};
+use serde::{Deserialize, Serialize};
 
 use super::connection::Neo4jConnection;
 use crate::application::ports::outbound::InteractionRepositoryPort;
 use crate::domain::entities::{
     InteractionCondition, InteractionTarget, InteractionTemplate, InteractionType,
 };
-use crate::domain::value_objects::{InteractionId, SceneId};
+use crate::domain::value_objects::{CharacterId, InteractionId, ItemId, SceneId};
 
 /// Repository for InteractionTemplate operations
 pub struct Neo4jInteractionRepository {
@@ -23,9 +24,18 @@ impl Neo4jInteractionRepository {
 
     /// Create a new interaction template
     pub async fn create(&self, interaction: &InteractionTemplate) -> Result<()> {
-        let type_json = serde_json::to_string(&interaction.interaction_type)?;
-        let target_json = serde_json::to_string(&interaction.target)?;
-        let conditions_json = serde_json::to_string(&interaction.conditions)?;
+        let type_json =
+            serde_json::to_string(&InteractionTypeStored::from(interaction.interaction_type.clone()))?;
+        let target_json =
+            serde_json::to_string(&InteractionTargetStored::try_from(interaction.target.clone())?)?;
+        let conditions_json = serde_json::to_string(
+            &interaction
+                .conditions
+                .iter()
+                .cloned()
+                .map(InteractionConditionStored::try_from)
+                .collect::<Result<Vec<_>>>()?,
+        )?;
         let allowed_tools_json = serde_json::to_string(&interaction.allowed_tools)?;
 
         let q = query(
@@ -117,9 +127,18 @@ impl Neo4jInteractionRepository {
 
     /// Update an interaction
     pub async fn update(&self, interaction: &InteractionTemplate) -> Result<()> {
-        let type_json = serde_json::to_string(&interaction.interaction_type)?;
-        let target_json = serde_json::to_string(&interaction.target)?;
-        let conditions_json = serde_json::to_string(&interaction.conditions)?;
+        let type_json =
+            serde_json::to_string(&InteractionTypeStored::from(interaction.interaction_type.clone()))?;
+        let target_json =
+            serde_json::to_string(&InteractionTargetStored::try_from(interaction.target.clone())?)?;
+        let conditions_json = serde_json::to_string(
+            &interaction
+                .conditions
+                .iter()
+                .cloned()
+                .map(InteractionConditionStored::try_from)
+                .collect::<Result<Vec<_>>>()?,
+        )?;
         let allowed_tools_json = serde_json::to_string(&interaction.allowed_tools)?;
 
         let q = query(
@@ -191,10 +210,16 @@ fn row_to_interaction(row: Row) -> Result<InteractionTemplate> {
 
     let id = uuid::Uuid::parse_str(&id_str)?;
     let scene_id = uuid::Uuid::parse_str(&scene_id_str)?;
-    let interaction_type: InteractionType = serde_json::from_str(&type_json)?;
-    let target: InteractionTarget = serde_json::from_str(&target_json)?;
+    let interaction_type: InteractionType =
+        serde_json::from_str::<InteractionTypeStored>(&type_json)?.into();
+    let target: InteractionTarget =
+        serde_json::from_str::<InteractionTargetStored>(&target_json)?.try_into()?;
     let allowed_tools: Vec<String> = serde_json::from_str(&allowed_tools_json)?;
-    let conditions: Vec<InteractionCondition> = serde_json::from_str(&conditions_json)?;
+    let conditions: Vec<InteractionCondition> =
+        serde_json::from_str::<Vec<InteractionConditionStored>>(&conditions_json)?
+            .into_iter()
+            .map(TryInto::try_into)
+            .collect::<Result<Vec<_>>>()?;
 
     Ok(InteractionTemplate {
         id: InteractionId::from_uuid(id),
@@ -208,6 +233,151 @@ fn row_to_interaction(row: Row) -> Result<InteractionTemplate> {
         is_available,
         order: order as u32,
     })
+}
+
+// ============================================================================
+// Persistence serde models (so domain doesn't require serde)
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+enum InteractionTypeStored {
+    Dialogue,
+    Examine,
+    UseItem,
+    PickUp,
+    GiveItem,
+    Attack,
+    Travel,
+    Custom(String),
+}
+
+impl From<InteractionType> for InteractionTypeStored {
+    fn from(value: InteractionType) -> Self {
+        match value {
+            InteractionType::Dialogue => Self::Dialogue,
+            InteractionType::Examine => Self::Examine,
+            InteractionType::UseItem => Self::UseItem,
+            InteractionType::PickUp => Self::PickUp,
+            InteractionType::GiveItem => Self::GiveItem,
+            InteractionType::Attack => Self::Attack,
+            InteractionType::Travel => Self::Travel,
+            InteractionType::Custom(s) => Self::Custom(s),
+        }
+    }
+}
+
+impl From<InteractionTypeStored> for InteractionType {
+    fn from(value: InteractionTypeStored) -> Self {
+        match value {
+            InteractionTypeStored::Dialogue => Self::Dialogue,
+            InteractionTypeStored::Examine => Self::Examine,
+            InteractionTypeStored::UseItem => Self::UseItem,
+            InteractionTypeStored::PickUp => Self::PickUp,
+            InteractionTypeStored::GiveItem => Self::GiveItem,
+            InteractionTypeStored::Attack => Self::Attack,
+            InteractionTypeStored::Travel => Self::Travel,
+            InteractionTypeStored::Custom(s) => Self::Custom(s),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+enum InteractionTargetStored {
+    Character(String),
+    Item(String),
+    Environment(String),
+    None,
+}
+
+impl TryFrom<InteractionTarget> for InteractionTargetStored {
+    type Error = anyhow::Error;
+
+    fn try_from(value: InteractionTarget) -> Result<Self> {
+        Ok(match value {
+            InteractionTarget::Character(id) => Self::Character(id.to_string()),
+            InteractionTarget::Item(id) => Self::Item(id.to_string()),
+            InteractionTarget::Environment(s) => Self::Environment(s),
+            InteractionTarget::None => Self::None,
+        })
+    }
+}
+
+impl TryFrom<InteractionTargetStored> for InteractionTarget {
+    type Error = anyhow::Error;
+
+    fn try_from(value: InteractionTargetStored) -> Result<Self> {
+        Ok(match value {
+            InteractionTargetStored::Character(id) => {
+                InteractionTarget::Character(CharacterId::from_uuid(uuid::Uuid::parse_str(&id)?))
+            }
+            InteractionTargetStored::Item(id) => {
+                InteractionTarget::Item(ItemId::from_uuid(uuid::Uuid::parse_str(&id)?))
+            }
+            InteractionTargetStored::Environment(s) => InteractionTarget::Environment(s),
+            InteractionTargetStored::None => InteractionTarget::None,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+enum InteractionConditionStored {
+    HasItem(String),
+    CharacterPresent(String),
+    HasRelationship {
+        with_character: String,
+        relationship_type: Option<String>,
+    },
+    FlagSet(String),
+    FlagNotSet(String),
+    Custom(String),
+}
+
+impl TryFrom<InteractionCondition> for InteractionConditionStored {
+    type Error = anyhow::Error;
+
+    fn try_from(value: InteractionCondition) -> Result<Self> {
+        Ok(match value {
+            InteractionCondition::HasItem(item_id) => Self::HasItem(item_id.to_string()),
+            InteractionCondition::CharacterPresent(char_id) => {
+                Self::CharacterPresent(char_id.to_string())
+            }
+            InteractionCondition::HasRelationship {
+                with_character,
+                relationship_type,
+            } => Self::HasRelationship {
+                with_character: with_character.to_string(),
+                relationship_type,
+            },
+            InteractionCondition::FlagSet(s) => Self::FlagSet(s),
+            InteractionCondition::FlagNotSet(s) => Self::FlagNotSet(s),
+            InteractionCondition::Custom(s) => Self::Custom(s),
+        })
+    }
+}
+
+impl TryFrom<InteractionConditionStored> for InteractionCondition {
+    type Error = anyhow::Error;
+
+    fn try_from(value: InteractionConditionStored) -> Result<Self> {
+        Ok(match value {
+            InteractionConditionStored::HasItem(id) => {
+                InteractionCondition::HasItem(ItemId::from_uuid(uuid::Uuid::parse_str(&id)?))
+            }
+            InteractionConditionStored::CharacterPresent(id) => InteractionCondition::CharacterPresent(
+                CharacterId::from_uuid(uuid::Uuid::parse_str(&id)?),
+            ),
+            InteractionConditionStored::HasRelationship {
+                with_character,
+                relationship_type,
+            } => InteractionCondition::HasRelationship {
+                with_character: CharacterId::from_uuid(uuid::Uuid::parse_str(&with_character)?),
+                relationship_type,
+            },
+            InteractionConditionStored::FlagSet(s) => InteractionCondition::FlagSet(s),
+            InteractionConditionStored::FlagNotSet(s) => InteractionCondition::FlagNotSet(s),
+            InteractionConditionStored::Custom(s) => InteractionCondition::Custom(s),
+        })
+    }
 }
 
 // =============================================================================

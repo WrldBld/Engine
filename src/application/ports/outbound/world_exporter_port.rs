@@ -8,7 +8,8 @@ use anyhow::Result;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
-use crate::domain::value_objects::{RuleSystemConfig, SceneId, WorldId};
+use crate::application::dto::RuleSystemConfigDto;
+use crate::domain::value_objects::{SceneId, WorldId};
 
 /// Simplified world snapshot for Player clients
 ///
@@ -34,7 +35,7 @@ pub struct WorldData {
     pub id: String,
     pub name: String,
     pub description: String,
-    pub rule_system: RuleSystemConfig,
+    pub rule_system: RuleSystemConfigDto,
     pub created_at: String,
     pub updated_at: String,
 }

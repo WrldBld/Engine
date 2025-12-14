@@ -13,7 +13,8 @@ pub use directorial::{DirectorialNotes};
 pub use game_tools::{ChangeAmount, GameTool, InfoImportance, RelationshipChange};
 pub use ids::*;
 pub use relationship::{Relationship, RelationshipEvent, RelationshipType};
+pub use relationship::{FamilyRelation};
 pub use rule_system::{
     DiceSystem, RuleSystemConfig, RuleSystemType, RuleSystemVariant, StatDefinition, SuccessComparison,
 };
-pub use want::{Want};
+pub use want::{ActantTarget, Want};

@@ -120,7 +120,10 @@ impl PendingApproval {
 }
 
 /// A snapshot of the current world state for session joining
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// Note: This struct does not derive Serialize/Deserialize because it contains
+/// domain types. Use `to_json()` method for serialization instead.
+#[derive(Debug, Clone)]
 pub struct WorldSnapshot {
     pub world: World,
     pub locations: Vec<Location>,

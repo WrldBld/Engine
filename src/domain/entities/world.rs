@@ -1,12 +1,11 @@
 //! World entity - The top-level container for a campaign setting
 
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
 
 use crate::domain::value_objects::{RuleSystemConfig, WorldId};
 
 /// A complete campaign world
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct World {
     pub id: WorldId,
     pub name: String,
@@ -46,7 +45,7 @@ impl World {
 }
 
 /// The stage of the monomyth (Hero's Journey)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MonomythStage {
     /// The hero's normal life before the adventure
     OrdinaryWorld,
@@ -94,7 +93,7 @@ impl MonomythStage {
 }
 
 /// A story arc within a world
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct Act {
     pub id: crate::domain::value_objects::ActId,
     pub world_id: WorldId,
