@@ -5,7 +5,6 @@ use axum::{
     http::StatusCode,
     Json,
 };
-use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -13,95 +12,35 @@ use crate::application::services::{
     CreateActRequest as ServiceCreateActRequest, CreateWorldRequest as ServiceCreateWorldRequest,
     UpdateWorldRequest as ServiceUpdateWorldRequest, WorldService,
 };
-use crate::domain::entities::{Act, MonomythStage, World};
-use crate::domain::value_objects::{RuleSystemConfig, RuleSystemVariant, WorldId};
+use crate::application::dto::{
+    ActResponseDto, CreateActRequestDto, CreateWorldRequestDto, UpdateWorldRequestDto,
+    WorldResponseDto, parse_monomyth_stage,
+};
+use crate::domain::value_objects::WorldId;
 use crate::infrastructure::state::AppState;
-
-/// Request to create a world - accepts just the variant and expands to full config
-#[derive(Debug, Deserialize)]
-pub struct CreateWorldRequest {
-    pub name: String,
-    #[serde(default)]
-    pub description: String,
-    /// Rule system configuration - can be a full config or just a variant
-    #[serde(default)]
-    pub rule_system: Option<RuleSystemInput>,
-}
-
-/// Flexible input for rule system - either a variant name or full config
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
-pub enum RuleSystemInput {
-    /// Just specify a variant, and we'll expand to full config
-    VariantOnly {
-        variant: RuleSystemVariant,
-    },
-    /// Full configuration (for custom systems)
-    Full(RuleSystemConfig),
-}
-
-impl RuleSystemInput {
-    /// Convert to a full RuleSystemConfig
-    pub fn into_config(self) -> RuleSystemConfig {
-        match self {
-            RuleSystemInput::VariantOnly { variant } => RuleSystemConfig::from_variant(variant),
-            RuleSystemInput::Full(config) => config,
-        }
-    }
-}
-
-#[derive(Debug, Deserialize)]
-pub struct UpdateWorldRequest {
-    pub name: String,
-    pub description: String,
-    pub rule_system: RuleSystemConfig,
-}
-
-#[derive(Debug, Serialize)]
-pub struct WorldResponse {
-    pub id: String,
-    pub name: String,
-    pub description: String,
-    pub rule_system: RuleSystemConfig,
-    pub created_at: String,
-    pub updated_at: String,
-}
-
-impl From<World> for WorldResponse {
-    fn from(world: World) -> Self {
-        Self {
-            id: world.id.to_string(),
-            name: world.name,
-            description: world.description,
-            rule_system: world.rule_system,
-            created_at: world.created_at.to_rfc3339(),
-            updated_at: world.updated_at.to_rfc3339(),
-        }
-    }
-}
 
 /// List all worlds
 pub async fn list_worlds(
     State(state): State<Arc<AppState>>,
-) -> Result<Json<Vec<WorldResponse>>, (StatusCode, String)> {
+) -> Result<Json<Vec<WorldResponseDto>>, (StatusCode, String)> {
     let worlds = state
         .world_service
         .list_worlds()
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    Ok(Json(worlds.into_iter().map(WorldResponse::from).collect()))
+    Ok(Json(worlds.into_iter().map(WorldResponseDto::from).collect()))
 }
 
 /// Create a new world
 pub async fn create_world(
     State(state): State<Arc<AppState>>,
-    Json(req): Json<CreateWorldRequest>,
-) -> Result<(StatusCode, Json<WorldResponse>), (StatusCode, String)> {
+    Json(req): Json<CreateWorldRequestDto>,
+) -> Result<(StatusCode, Json<WorldResponseDto>), (StatusCode, String)> {
     let service_request = ServiceCreateWorldRequest {
         name: req.name,
         description: req.description,
-        rule_system: req.rule_system.map(|r| r.into_config()),
+        rule_system: req.rule_system.map(|r| r.into_domain()),
     };
 
     let world = state
@@ -110,14 +49,14 @@ pub async fn create_world(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    Ok((StatusCode::CREATED, Json(WorldResponse::from(world))))
+    Ok((StatusCode::CREATED, Json(WorldResponseDto::from(world))))
 }
 
 /// Get a world by ID
 pub async fn get_world(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
-) -> Result<Json<WorldResponse>, (StatusCode, String)> {
+) -> Result<Json<WorldResponseDto>, (StatusCode, String)> {
     let uuid = Uuid::parse_str(&id)
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid world ID".to_string()))?;
 
@@ -128,22 +67,22 @@ pub async fn get_world(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .ok_or_else(|| (StatusCode::NOT_FOUND, "World not found".to_string()))?;
 
-    Ok(Json(WorldResponse::from(world)))
+    Ok(Json(WorldResponseDto::from(world)))
 }
 
 /// Update a world
 pub async fn update_world(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
-    Json(req): Json<UpdateWorldRequest>,
-) -> Result<Json<WorldResponse>, (StatusCode, String)> {
+    Json(req): Json<UpdateWorldRequestDto>,
+) -> Result<Json<WorldResponseDto>, (StatusCode, String)> {
     let uuid = Uuid::parse_str(&id)
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid world ID".to_string()))?;
 
     let service_request = ServiceUpdateWorldRequest {
         name: Some(req.name),
         description: Some(req.description),
-        rule_system: Some(req.rule_system),
+        rule_system: Some(req.rule_system.into()),
     };
 
     let world = state
@@ -158,7 +97,7 @@ pub async fn update_world(
             }
         })?;
 
-    Ok(Json(WorldResponse::from(world)))
+    Ok(Json(WorldResponseDto::from(world)))
 }
 
 /// Delete a world
@@ -186,43 +125,11 @@ pub async fn delete_world(
 
 // Act endpoints
 
-#[derive(Debug, Deserialize)]
-pub struct CreateActRequest {
-    pub name: String,
-    pub stage: String,
-    #[serde(default)]
-    pub description: String,
-    pub order: u32,
-}
-
-#[derive(Debug, Serialize)]
-pub struct ActResponse {
-    pub id: String,
-    pub world_id: String,
-    pub name: String,
-    pub stage: String,
-    pub description: String,
-    pub order: u32,
-}
-
-impl From<Act> for ActResponse {
-    fn from(act: Act) -> Self {
-        Self {
-            id: act.id.to_string(),
-            world_id: act.world_id.to_string(),
-            name: act.name,
-            stage: format!("{:?}", act.stage),
-            description: act.description,
-            order: act.order,
-        }
-    }
-}
-
 /// List acts in a world
 pub async fn list_acts(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
-) -> Result<Json<Vec<ActResponse>>, (StatusCode, String)> {
+) -> Result<Json<Vec<ActResponseDto>>, (StatusCode, String)> {
     let uuid = Uuid::parse_str(&id)
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid world ID".to_string()))?;
 
@@ -232,15 +139,15 @@ pub async fn list_acts(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    Ok(Json(acts.into_iter().map(ActResponse::from).collect()))
+    Ok(Json(acts.into_iter().map(ActResponseDto::from).collect()))
 }
 
 /// Create an act in a world
 pub async fn create_act(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
-    Json(req): Json<CreateActRequest>,
-) -> Result<(StatusCode, Json<ActResponse>), (StatusCode, String)> {
+    Json(req): Json<CreateActRequestDto>,
+) -> Result<(StatusCode, Json<ActResponseDto>), (StatusCode, String)> {
     let uuid = Uuid::parse_str(&id)
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid world ID".to_string()))?;
 
@@ -262,23 +169,5 @@ pub async fn create_act(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    Ok((StatusCode::CREATED, Json(ActResponse::from(act))))
-}
-
-fn parse_monomyth_stage(s: &str) -> MonomythStage {
-    match s {
-        "OrdinaryWorld" => MonomythStage::OrdinaryWorld,
-        "CallToAdventure" => MonomythStage::CallToAdventure,
-        "RefusalOfTheCall" => MonomythStage::RefusalOfTheCall,
-        "MeetingTheMentor" => MonomythStage::MeetingTheMentor,
-        "CrossingTheThreshold" => MonomythStage::CrossingTheThreshold,
-        "TestsAlliesEnemies" => MonomythStage::TestsAlliesEnemies,
-        "ApproachToInnermostCave" => MonomythStage::ApproachToInnermostCave,
-        "Ordeal" => MonomythStage::Ordeal,
-        "Reward" => MonomythStage::Reward,
-        "TheRoadBack" => MonomythStage::TheRoadBack,
-        "Resurrection" => MonomythStage::Resurrection,
-        "ReturnWithElixir" => MonomythStage::ReturnWithElixir,
-        _ => MonomythStage::OrdinaryWorld,
-    }
+    Ok((StatusCode::CREATED, Json(ActResponseDto::from(act))))
 }

@@ -14,6 +14,6 @@ pub use game_tools::{ChangeAmount, GameTool, InfoImportance, RelationshipChange}
 pub use ids::*;
 pub use relationship::{Relationship, RelationshipEvent, RelationshipType};
 pub use rule_system::{
-    RuleSystemConfig, RuleSystemType, RuleSystemVariant,
+    DiceSystem, RuleSystemConfig, RuleSystemType, RuleSystemVariant, StatDefinition, SuccessComparison,
 };
 pub use want::{Want};
