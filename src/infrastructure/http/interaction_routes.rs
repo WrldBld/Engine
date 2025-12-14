@@ -5,69 +5,23 @@ use axum::{
     http::StatusCode,
     Json,
 };
-use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::application::services::InteractionService;
-use crate::domain::entities::{
-    InteractionTarget, InteractionTemplate, InteractionType,
+use crate::application::dto::{
+    parse_interaction_type, parse_target, CreateInteractionRequestDto, InteractionResponseDto,
+    SetAvailabilityRequestDto,
 };
-use crate::domain::value_objects::{CharacterId, InteractionId, ItemId, SceneId};
+use crate::domain::entities::InteractionTemplate;
+use crate::domain::value_objects::{InteractionId, SceneId};
 use crate::infrastructure::state::AppState;
-
-#[derive(Debug, Deserialize)]
-pub struct CreateInteractionRequest {
-    pub name: String,
-    pub interaction_type: String,
-    #[serde(default)]
-    pub target_type: String,
-    #[serde(default)]
-    pub target_id: Option<String>,
-    #[serde(default)]
-    pub target_description: Option<String>,
-    #[serde(default)]
-    pub prompt_hints: String,
-    #[serde(default)]
-    pub allowed_tools: Vec<String>,
-    #[serde(default)]
-    pub order: u32,
-}
-
-#[derive(Debug, Serialize)]
-pub struct InteractionResponse {
-    pub id: String,
-    pub scene_id: String,
-    pub name: String,
-    pub interaction_type: String,
-    pub target: String,
-    pub prompt_hints: String,
-    pub allowed_tools: Vec<String>,
-    pub is_available: bool,
-    pub order: u32,
-}
-
-impl From<InteractionTemplate> for InteractionResponse {
-    fn from(i: InteractionTemplate) -> Self {
-        Self {
-            id: i.id.to_string(),
-            scene_id: i.scene_id.to_string(),
-            name: i.name,
-            interaction_type: format!("{:?}", i.interaction_type),
-            target: format!("{:?}", i.target),
-            prompt_hints: i.prompt_hints,
-            allowed_tools: i.allowed_tools,
-            is_available: i.is_available,
-            order: i.order,
-        }
-    }
-}
 
 /// List interactions in a scene
 pub async fn list_interactions(
     State(state): State<Arc<AppState>>,
     Path(scene_id): Path<String>,
-) -> Result<Json<Vec<InteractionResponse>>, (StatusCode, String)> {
+) -> Result<Json<Vec<InteractionResponseDto>>, (StatusCode, String)> {
     let uuid = Uuid::parse_str(&scene_id)
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid scene ID".to_string()))?;
 
@@ -80,7 +34,7 @@ pub async fn list_interactions(
     Ok(Json(
         interactions
             .into_iter()
-            .map(InteractionResponse::from)
+            .map(InteractionResponseDto::from)
             .collect(),
     ))
 }
@@ -89,8 +43,8 @@ pub async fn list_interactions(
 pub async fn create_interaction(
     State(state): State<Arc<AppState>>,
     Path(scene_id): Path<String>,
-    Json(req): Json<CreateInteractionRequest>,
-) -> Result<(StatusCode, Json<InteractionResponse>), (StatusCode, String)> {
+    Json(req): Json<CreateInteractionRequestDto>,
+) -> Result<(StatusCode, Json<InteractionResponseDto>), (StatusCode, String)> {
     let scene_uuid = Uuid::parse_str(&scene_id)
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid scene ID".to_string()))?;
 
@@ -99,7 +53,8 @@ pub async fn create_interaction(
         &req.target_type,
         req.target_id.as_deref(),
         req.target_description.as_deref(),
-    )?;
+    )
+    .map_err(|msg| (StatusCode::BAD_REQUEST, msg))?;
 
     let mut interaction = InteractionTemplate::new(
         SceneId::from_uuid(scene_uuid),
@@ -126,7 +81,7 @@ pub async fn create_interaction(
 
     Ok((
         StatusCode::CREATED,
-        Json(InteractionResponse::from(interaction)),
+        Json(InteractionResponseDto::from(interaction)),
     ))
 }
 
@@ -134,7 +89,7 @@ pub async fn create_interaction(
 pub async fn get_interaction(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
-) -> Result<Json<InteractionResponse>, (StatusCode, String)> {
+) -> Result<Json<InteractionResponseDto>, (StatusCode, String)> {
     let uuid = Uuid::parse_str(&id).map_err(|_| {
         (
             StatusCode::BAD_REQUEST,
@@ -149,15 +104,15 @@ pub async fn get_interaction(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .ok_or_else(|| (StatusCode::NOT_FOUND, "Interaction not found".to_string()))?;
 
-    Ok(Json(InteractionResponse::from(interaction)))
+    Ok(Json(InteractionResponseDto::from(interaction)))
 }
 
 /// Update an interaction
 pub async fn update_interaction(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
-    Json(req): Json<CreateInteractionRequest>,
-) -> Result<Json<InteractionResponse>, (StatusCode, String)> {
+    Json(req): Json<CreateInteractionRequestDto>,
+) -> Result<Json<InteractionResponseDto>, (StatusCode, String)> {
     let uuid = Uuid::parse_str(&id).map_err(|_| {
         (
             StatusCode::BAD_REQUEST,
@@ -178,7 +133,8 @@ pub async fn update_interaction(
         &req.target_type,
         req.target_id.as_deref(),
         req.target_description.as_deref(),
-    )?;
+    )
+    .map_err(|msg| (StatusCode::BAD_REQUEST, msg))?;
     interaction.prompt_hints = req.prompt_hints;
     interaction.allowed_tools = req.allowed_tools;
     interaction.order = req.order;
@@ -189,7 +145,7 @@ pub async fn update_interaction(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    Ok(Json(InteractionResponse::from(interaction)))
+    Ok(Json(InteractionResponseDto::from(interaction)))
 }
 
 /// Delete an interaction
@@ -213,16 +169,11 @@ pub async fn delete_interaction(
     Ok(StatusCode::NO_CONTENT)
 }
 
-#[derive(Debug, Deserialize)]
-pub struct SetAvailabilityRequest {
-    pub available: bool,
-}
-
 /// Toggle interaction availability
 pub async fn set_interaction_availability(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
-    Json(req): Json<SetAvailabilityRequest>,
+    Json(req): Json<SetAvailabilityRequestDto>,
 ) -> Result<StatusCode, (StatusCode, String)> {
     let uuid = Uuid::parse_str(&id).map_err(|_| {
         (
@@ -238,59 +189,4 @@ pub async fn set_interaction_availability(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     Ok(StatusCode::OK)
-}
-
-fn parse_interaction_type(s: &str) -> InteractionType {
-    match s {
-        "Dialogue" => InteractionType::Dialogue,
-        "Examine" => InteractionType::Examine,
-        "UseItem" => InteractionType::UseItem,
-        "PickUp" => InteractionType::PickUp,
-        "GiveItem" => InteractionType::GiveItem,
-        "Attack" => InteractionType::Attack,
-        "Travel" => InteractionType::Travel,
-        other => InteractionType::Custom(other.to_string()),
-    }
-}
-
-fn parse_target(
-    target_type: &str,
-    target_id: Option<&str>,
-    description: Option<&str>,
-) -> Result<InteractionTarget, (StatusCode, String)> {
-    match target_type {
-        "Character" => {
-            let id = target_id.ok_or_else(|| {
-                (
-                    StatusCode::BAD_REQUEST,
-                    "Character target requires target_id".to_string(),
-                )
-            })?;
-            let uuid = Uuid::parse_str(id)
-                .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid character ID".to_string()))?;
-            Ok(InteractionTarget::Character(CharacterId::from_uuid(uuid)))
-        }
-        "Item" => {
-            let id = target_id.ok_or_else(|| {
-                (
-                    StatusCode::BAD_REQUEST,
-                    "Item target requires target_id".to_string(),
-                )
-            })?;
-            let uuid = Uuid::parse_str(id)
-                .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid item ID".to_string()))?;
-            Ok(InteractionTarget::Item(ItemId::from_uuid(uuid)))
-        }
-        "Environment" => {
-            let desc = description.ok_or_else(|| {
-                (
-                    StatusCode::BAD_REQUEST,
-                    "Environment target requires target_description".to_string(),
-                )
-            })?;
-            Ok(InteractionTarget::Environment(desc.to_string()))
-        }
-        "None" | "" => Ok(InteractionTarget::None),
-        _ => Ok(InteractionTarget::None),
-    }
 }
