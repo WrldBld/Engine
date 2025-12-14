@@ -5,7 +5,6 @@ use axum::{
     http::StatusCode,
     Json,
 };
-use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -14,61 +13,21 @@ use crate::application::services::{
     CreateCharacterRequest as ServiceCreateCharacterRequest, RelationshipService,
     UpdateCharacterRequest as ServiceUpdateCharacterRequest,
 };
-use crate::domain::entities::Character;
 use crate::domain::value_objects::{
-    CampbellArchetype, CharacterId, Relationship, RelationshipId, RelationshipType, WorldId,
+    CharacterId, Relationship, RelationshipId, WorldId,
 };
 use crate::application::ports::outbound::SocialNetwork;
+use crate::application::dto::{
+    ChangeArchetypeRequestDto, CharacterResponseDto, CreateCharacterRequestDto,
+    CreateRelationshipRequestDto, CreatedIdResponseDto, parse_archetype, parse_relationship_type,
+};
 use crate::infrastructure::state::AppState;
-
-#[derive(Debug, Deserialize)]
-pub struct CreateCharacterRequest {
-    pub name: String,
-    #[serde(default)]
-    pub description: String,
-    pub archetype: String,
-    #[serde(default)]
-    pub sprite_asset: Option<String>,
-    #[serde(default)]
-    pub portrait_asset: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct CharacterResponse {
-    pub id: String,
-    pub world_id: String,
-    pub name: String,
-    pub description: String,
-    pub base_archetype: String,
-    pub current_archetype: String,
-    pub sprite_asset: Option<String>,
-    pub portrait_asset: Option<String>,
-    pub is_alive: bool,
-    pub is_active: bool,
-}
-
-impl From<Character> for CharacterResponse {
-    fn from(c: Character) -> Self {
-        Self {
-            id: c.id.to_string(),
-            world_id: c.world_id.to_string(),
-            name: c.name,
-            description: c.description,
-            base_archetype: format!("{:?}", c.base_archetype),
-            current_archetype: format!("{:?}", c.current_archetype),
-            sprite_asset: c.sprite_asset,
-            portrait_asset: c.portrait_asset,
-            is_alive: c.is_alive,
-            is_active: c.is_active,
-        }
-    }
-}
 
 /// List characters in a world
 pub async fn list_characters(
     State(state): State<Arc<AppState>>,
     Path(world_id): Path<String>,
-) -> Result<Json<Vec<CharacterResponse>>, (StatusCode, String)> {
+) -> Result<Json<Vec<CharacterResponseDto>>, (StatusCode, String)> {
     let uuid = Uuid::parse_str(&world_id)
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid world ID".to_string()))?;
 
@@ -78,20 +37,15 @@ pub async fn list_characters(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    Ok(Json(
-        characters
-            .into_iter()
-            .map(CharacterResponse::from)
-            .collect(),
-    ))
+    Ok(Json(characters.into_iter().map(CharacterResponseDto::from).collect()))
 }
 
 /// Create a character
 pub async fn create_character(
     State(state): State<Arc<AppState>>,
     Path(world_id): Path<String>,
-    Json(req): Json<CreateCharacterRequest>,
-) -> Result<(StatusCode, Json<CharacterResponse>), (StatusCode, String)> {
+    Json(req): Json<CreateCharacterRequestDto>,
+) -> Result<(StatusCode, Json<CharacterResponseDto>), (StatusCode, String)> {
     let uuid = Uuid::parse_str(&world_id)
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid world ID".to_string()))?;
 
@@ -119,7 +73,7 @@ pub async fn create_character(
 
     Ok((
         StatusCode::CREATED,
-        Json(CharacterResponse::from(character)),
+        Json(CharacterResponseDto::from(character)),
     ))
 }
 
@@ -127,7 +81,7 @@ pub async fn create_character(
 pub async fn get_character(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
-) -> Result<Json<CharacterResponse>, (StatusCode, String)> {
+) -> Result<Json<CharacterResponseDto>, (StatusCode, String)> {
     let uuid = Uuid::parse_str(&id)
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid character ID".to_string()))?;
 
@@ -138,15 +92,15 @@ pub async fn get_character(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .ok_or_else(|| (StatusCode::NOT_FOUND, "Character not found".to_string()))?;
 
-    Ok(Json(CharacterResponse::from(character)))
+    Ok(Json(CharacterResponseDto::from(character)))
 }
 
 /// Update a character
 pub async fn update_character(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
-    Json(req): Json<CreateCharacterRequest>,
-) -> Result<Json<CharacterResponse>, (StatusCode, String)> {
+    Json(req): Json<CreateCharacterRequestDto>,
+) -> Result<Json<CharacterResponseDto>, (StatusCode, String)> {
     let uuid = Uuid::parse_str(&id)
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid character ID".to_string()))?;
 
@@ -176,7 +130,7 @@ pub async fn update_character(
             }
         })?;
 
-    Ok(Json(CharacterResponse::from(character)))
+    Ok(Json(CharacterResponseDto::from(character)))
 }
 
 /// Delete a character
@@ -202,17 +156,11 @@ pub async fn delete_character(
     Ok(StatusCode::NO_CONTENT)
 }
 
-#[derive(Debug, Deserialize)]
-pub struct ChangeArchetypeRequest {
-    pub archetype: String,
-    pub reason: String,
-}
-
 /// Change a character's archetype
 pub async fn change_archetype(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
-    Json(req): Json<ChangeArchetypeRequest>,
+    Json(req): Json<ChangeArchetypeRequestDto>,
 ) -> Result<StatusCode, (StatusCode, String)> {
     let uuid = Uuid::parse_str(&id)
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid character ID".to_string()))?;
@@ -257,26 +205,11 @@ pub async fn get_social_network(
     Ok(Json(network))
 }
 
-#[derive(Debug, Deserialize)]
-pub struct CreateRelationshipRequest {
-    pub from_character_id: String,
-    pub to_character_id: String,
-    pub relationship_type: String,
-    #[serde(default)]
-    pub sentiment: f32,
-    #[serde(default = "default_known")]
-    pub known_to_player: bool,
-}
-
-fn default_known() -> bool {
-    true
-}
-
 /// Create a relationship between characters
 pub async fn create_relationship(
     State(state): State<Arc<AppState>>,
-    Json(req): Json<CreateRelationshipRequest>,
-) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, String)> {
+    Json(req): Json<CreateRelationshipRequestDto>,
+) -> Result<(StatusCode, Json<CreatedIdResponseDto>), (StatusCode, String)> {
     let from_uuid = Uuid::parse_str(&req.from_character_id).map_err(|_| {
         (
             StatusCode::BAD_REQUEST,
@@ -311,9 +244,9 @@ pub async fn create_relationship(
 
     Ok((
         StatusCode::CREATED,
-        Json(serde_json::json!({
-            "id": relationship.id.to_string()
-        })),
+        Json(CreatedIdResponseDto {
+            id: relationship.id.to_string(),
+        }),
     ))
 }
 
@@ -338,28 +271,4 @@ pub async fn delete_relationship(
     Ok(StatusCode::NO_CONTENT)
 }
 
-fn parse_archetype(s: &str) -> CampbellArchetype {
-    match s {
-        "Hero" => CampbellArchetype::Hero,
-        "Mentor" => CampbellArchetype::Mentor,
-        "ThresholdGuardian" => CampbellArchetype::ThresholdGuardian,
-        "Herald" => CampbellArchetype::Herald,
-        "Shapeshifter" => CampbellArchetype::Shapeshifter,
-        "Shadow" => CampbellArchetype::Shadow,
-        "Trickster" => CampbellArchetype::Trickster,
-        "Ally" => CampbellArchetype::Ally,
-        _ => CampbellArchetype::Ally,
-    }
-}
-
-fn parse_relationship_type(s: &str) -> RelationshipType {
-    match s {
-        "Romantic" => RelationshipType::Romantic,
-        "Professional" => RelationshipType::Professional,
-        "Rivalry" => RelationshipType::Rivalry,
-        "Friendship" => RelationshipType::Friendship,
-        "Mentorship" => RelationshipType::Mentorship,
-        "Enmity" => RelationshipType::Enmity,
-        _ => RelationshipType::Custom(s.to_string()),
-    }
-}
+// NOTE: parsing helpers live in `application/dto/character.rs`.

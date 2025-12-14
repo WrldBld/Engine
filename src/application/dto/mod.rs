@@ -4,7 +4,9 @@
 //! serialize/deserialize without pulling serde into the domain model.
 
 pub mod rule_system;
+pub mod character;
 pub mod world;
 
 pub use rule_system::*;
+pub use character::*;
 pub use world::*;
