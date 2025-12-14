@@ -7,7 +7,6 @@ use axum::{
     http::StatusCode,
     Json,
 };
-use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -15,66 +14,9 @@ use crate::application::services::{
     CreateSkillRequest as ServiceCreateRequest, SkillService,
     UpdateSkillRequest as ServiceUpdateRequest,
 };
-use crate::domain::entities::{Skill, SkillCategory};
 use crate::domain::value_objects::{SkillId, WorldId};
+use crate::application::dto::{CreateSkillRequestDto, SkillResponseDto, UpdateSkillRequestDto};
 use crate::infrastructure::state::AppState;
-
-/// Request to create a custom skill
-#[derive(Debug, Deserialize)]
-pub struct CreateSkillRequest {
-    pub name: String,
-    #[serde(default)]
-    pub description: String,
-    pub category: SkillCategory,
-    pub base_attribute: Option<String>,
-}
-
-/// Request to update a skill
-#[derive(Debug, Deserialize)]
-pub struct UpdateSkillRequest {
-    #[serde(default)]
-    pub name: Option<String>,
-    #[serde(default)]
-    pub description: Option<String>,
-    #[serde(default)]
-    pub category: Option<SkillCategory>,
-    #[serde(default)]
-    pub base_attribute: Option<String>,
-    #[serde(default)]
-    pub is_hidden: Option<bool>,
-    #[serde(default)]
-    pub order: Option<u32>,
-}
-
-/// Skill response
-#[derive(Debug, Serialize)]
-pub struct SkillResponse {
-    pub id: String,
-    pub world_id: String,
-    pub name: String,
-    pub description: String,
-    pub category: SkillCategory,
-    pub base_attribute: Option<String>,
-    pub is_custom: bool,
-    pub is_hidden: bool,
-    pub order: u32,
-}
-
-impl From<Skill> for SkillResponse {
-    fn from(skill: Skill) -> Self {
-        Self {
-            id: skill.id.to_string(),
-            world_id: skill.world_id.to_string(),
-            name: skill.name,
-            description: skill.description,
-            category: skill.category,
-            base_attribute: skill.base_attribute,
-            is_custom: skill.is_custom,
-            is_hidden: skill.is_hidden,
-            order: skill.order,
-        }
-    }
-}
 
 /// List all skills for a world
 ///
@@ -82,7 +24,7 @@ impl From<Skill> for SkillResponse {
 pub async fn list_skills(
     State(state): State<Arc<AppState>>,
     Path(world_id): Path<String>,
-) -> Result<Json<Vec<SkillResponse>>, (StatusCode, String)> {
+) -> Result<Json<Vec<SkillResponseDto>>, (StatusCode, String)> {
     let uuid = Uuid::parse_str(&world_id)
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid world ID".to_string()))?;
     let world_id = WorldId::from_uuid(uuid);
@@ -93,15 +35,15 @@ pub async fn list_skills(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    Ok(Json(skills.into_iter().map(SkillResponse::from).collect()))
+    Ok(Json(skills.into_iter().map(SkillResponseDto::from).collect()))
 }
 
 /// Create a custom skill for a world
 pub async fn create_skill(
     State(state): State<Arc<AppState>>,
     Path(world_id): Path<String>,
-    Json(req): Json<CreateSkillRequest>,
-) -> Result<(StatusCode, Json<SkillResponse>), (StatusCode, String)> {
+    Json(req): Json<CreateSkillRequestDto>,
+) -> Result<(StatusCode, Json<SkillResponseDto>), (StatusCode, String)> {
     let uuid = Uuid::parse_str(&world_id)
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid world ID".to_string()))?;
     let world_id = WorldId::from_uuid(uuid);
@@ -110,7 +52,7 @@ pub async fn create_skill(
     let service_req = ServiceCreateRequest {
         name: req.name,
         description: req.description,
-        category: req.category,
+        category: req.category.into(),
         base_attribute: req.base_attribute,
     };
 
@@ -120,15 +62,15 @@ pub async fn create_skill(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    Ok((StatusCode::CREATED, Json(SkillResponse::from(skill))))
+    Ok((StatusCode::CREATED, Json(SkillResponseDto::from(skill))))
 }
 
 /// Update a skill
 pub async fn update_skill(
     State(state): State<Arc<AppState>>,
     Path((world_id, skill_id)): Path<(String, String)>,
-    Json(req): Json<UpdateSkillRequest>,
-) -> Result<Json<SkillResponse>, (StatusCode, String)> {
+    Json(req): Json<UpdateSkillRequestDto>,
+) -> Result<Json<SkillResponseDto>, (StatusCode, String)> {
     let world_uuid = Uuid::parse_str(&world_id)
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid world ID".to_string()))?;
     let skill_uuid = Uuid::parse_str(&skill_id)
@@ -157,7 +99,7 @@ pub async fn update_skill(
     let service_req = ServiceUpdateRequest {
         name: req.name,
         description: req.description,
-        category: req.category,
+        category: req.category.map(Into::into),
         base_attribute: req.base_attribute,
         is_hidden: req.is_hidden,
         order: req.order,
@@ -169,7 +111,7 @@ pub async fn update_skill(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    Ok(Json(SkillResponse::from(skill)))
+    Ok(Json(SkillResponseDto::from(skill)))
 }
 
 /// Delete a custom skill
@@ -218,7 +160,7 @@ pub async fn delete_skill(
 pub async fn initialize_skills(
     State(state): State<Arc<AppState>>,
     Path(world_id): Path<String>,
-) -> Result<Json<Vec<SkillResponse>>, (StatusCode, String)> {
+) -> Result<Json<Vec<SkillResponseDto>>, (StatusCode, String)> {
     let uuid = Uuid::parse_str(&world_id)
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid world ID".to_string()))?;
     let world_id = WorldId::from_uuid(uuid);
@@ -229,5 +171,5 @@ pub async fn initialize_skills(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    Ok(Json(skills.into_iter().map(SkillResponse::from).collect()))
+    Ok(Json(skills.into_iter().map(SkillResponseDto::from).collect()))
 }

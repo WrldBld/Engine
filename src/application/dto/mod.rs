@@ -5,12 +5,16 @@
 
 pub mod rule_system;
 pub mod character;
+pub mod skill;
+pub mod challenge;
 pub mod location;
 pub mod scene;
 pub mod world;
 
 pub use rule_system::*;
 pub use character::*;
+pub use skill::*;
+pub use challenge::*;
 pub use location::*;
 pub use scene::*;
 pub use world::*;
