@@ -5,132 +5,19 @@ use axum::{
     http::StatusCode,
     Json,
 };
-use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::application::services::{AssetService, CreateAssetRequest};
-use crate::domain::entities::{AssetType, BatchStatus, EntityType, GalleryAsset, GenerationBatch};
+use crate::application::dto::{
+    parse_asset_type, parse_entity_type, GalleryAssetResponseDto, GenerateAssetRequestDto,
+    GenerationBatchResponseDto, SelectFromBatchRequestDto, UpdateAssetLabelRequestDto,
+    UploadAssetRequestDto,
+};
+use crate::domain::entities::{BatchStatus, EntityType, GenerationBatch};
 use crate::domain::value_objects::{AssetId, BatchId};
 use crate::infrastructure::state::AppState;
-
-// ==================== Request/Response DTOs ====================
-
-#[derive(Debug, Deserialize)]
-pub struct UploadAssetRequest {
-    pub asset_type: String,
-    pub file_path: String,
-    #[serde(default)]
-    pub label: Option<String>,
-    #[serde(default)]
-    pub set_active: bool,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct UpdateAssetLabelRequest {
-    pub label: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct GalleryAssetResponse {
-    pub id: String,
-    pub entity_type: String,
-    pub entity_id: String,
-    pub asset_type: String,
-    pub file_path: String,
-    pub is_active: bool,
-    pub label: Option<String>,
-    pub is_generated: bool,
-    pub created_at: String,
-}
-
-impl From<GalleryAsset> for GalleryAssetResponse {
-    fn from(a: GalleryAsset) -> Self {
-        let is_generated = a.is_generated();
-        Self {
-            id: a.id.to_string(),
-            entity_type: a.entity_type.to_string(),
-            entity_id: a.entity_id,
-            asset_type: a.asset_type.to_string(),
-            file_path: a.file_path,
-            is_active: a.is_active,
-            label: a.label,
-            is_generated,
-            created_at: a.created_at.to_rfc3339(),
-        }
-    }
-}
-
-#[derive(Debug, Deserialize)]
-pub struct GenerateAssetRequest {
-    pub entity_type: String,
-    pub entity_id: String,
-    pub asset_type: String,
-    pub workflow: String,
-    pub prompt: String,
-    #[serde(default)]
-    pub negative_prompt: Option<String>,
-    #[serde(default = "default_count")]
-    pub count: u8,
-    #[serde(default)]
-    pub style_reference_id: Option<String>,
-}
-
-fn default_count() -> u8 {
-    4
-}
-
-#[derive(Debug, Serialize)]
-pub struct GenerationBatchResponse {
-    pub id: String,
-    pub entity_type: String,
-    pub entity_id: String,
-    pub asset_type: String,
-    pub workflow: String,
-    pub prompt: String,
-    pub count: u8,
-    pub status: String,
-    pub progress: Option<u8>,
-    pub asset_count: usize,
-    pub requested_at: String,
-    pub completed_at: Option<String>,
-}
-
-impl From<GenerationBatch> for GenerationBatchResponse {
-    fn from(b: GenerationBatch) -> Self {
-        let (status, progress) = match &b.status {
-            BatchStatus::Queued => ("Queued".to_string(), None),
-            BatchStatus::Generating { progress } => ("Generating".to_string(), Some(*progress)),
-            BatchStatus::ReadyForSelection => ("ReadyForSelection".to_string(), Some(100)),
-            BatchStatus::Completed => ("Completed".to_string(), Some(100)),
-            BatchStatus::Failed { error } => (format!("Failed: {}", error), None),
-        };
-
-        Self {
-            id: b.id.to_string(),
-            entity_type: b.entity_type.to_string(),
-            entity_id: b.entity_id,
-            asset_type: b.asset_type.to_string(),
-            workflow: b.workflow,
-            prompt: b.prompt,
-            count: b.count,
-            status,
-            progress,
-            asset_count: b.assets.len(),
-            requested_at: b.requested_at.to_rfc3339(),
-            completed_at: b.completed_at.map(|t| t.to_rfc3339()),
-        }
-    }
-}
-
-#[derive(Debug, Deserialize)]
-pub struct SelectFromBatchRequest {
-    pub selected_assets: Vec<String>,
-    #[serde(default)]
-    pub discard_others: bool,
-    #[serde(default)]
-    pub labels: Vec<Option<String>>,
-}
+// NOTE: asset request/response DTOs live in `application/dto/asset.rs`.
 
 // ==================== Character Gallery Routes ====================
 
@@ -138,7 +25,7 @@ pub struct SelectFromBatchRequest {
 pub async fn list_character_assets(
     State(state): State<Arc<AppState>>,
     Path(character_id): Path<String>,
-) -> Result<Json<Vec<GalleryAssetResponse>>, (StatusCode, String)> {
+) -> Result<Json<Vec<GalleryAssetResponseDto>>, (StatusCode, String)> {
     let assets = state
         .asset_service
         .list_assets(EntityType::Character, &character_id)
@@ -146,7 +33,10 @@ pub async fn list_character_assets(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     Ok(Json(
-        assets.into_iter().map(GalleryAssetResponse::from).collect(),
+        assets
+            .into_iter()
+            .map(GalleryAssetResponseDto::from)
+            .collect(),
     ))
 }
 
@@ -154,14 +44,10 @@ pub async fn list_character_assets(
 pub async fn upload_character_asset(
     State(state): State<Arc<AppState>>,
     Path(character_id): Path<String>,
-    Json(req): Json<UploadAssetRequest>,
-) -> Result<(StatusCode, Json<GalleryAssetResponse>), (StatusCode, String)> {
-    let asset_type = AssetType::from_str(&req.asset_type).ok_or_else(|| {
-        (
-            StatusCode::BAD_REQUEST,
-            format!("Invalid asset type: {}", req.asset_type),
-        )
-    })?;
+    Json(req): Json<UploadAssetRequestDto>,
+) -> Result<(StatusCode, Json<GalleryAssetResponseDto>), (StatusCode, String)> {
+    let asset_type = parse_asset_type(&req.asset_type)
+        .map_err(|msg| (StatusCode::BAD_REQUEST, msg))?;
 
     let create_request = CreateAssetRequest {
         entity_type: EntityType::Character,
@@ -186,7 +72,10 @@ pub async fn upload_character_asset(
         asset.is_active = true;
     }
 
-    Ok((StatusCode::CREATED, Json(GalleryAssetResponse::from(asset))))
+    Ok((
+        StatusCode::CREATED,
+        Json(GalleryAssetResponseDto::from(asset)),
+    ))
 }
 
 /// Activate an asset in a character's gallery
@@ -210,7 +99,7 @@ pub async fn activate_character_asset(
 pub async fn update_character_asset_label(
     State(state): State<Arc<AppState>>,
     Path((_character_id, asset_id)): Path<(String, String)>,
-    Json(req): Json<UpdateAssetLabelRequest>,
+    Json(req): Json<UpdateAssetLabelRequestDto>,
 ) -> Result<StatusCode, (StatusCode, String)> {
     let uuid = Uuid::parse_str(&asset_id)
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid asset ID".to_string()))?;
@@ -247,7 +136,7 @@ pub async fn delete_character_asset(
 pub async fn list_location_assets(
     State(state): State<Arc<AppState>>,
     Path(location_id): Path<String>,
-) -> Result<Json<Vec<GalleryAssetResponse>>, (StatusCode, String)> {
+) -> Result<Json<Vec<GalleryAssetResponseDto>>, (StatusCode, String)> {
     let assets = state
         .asset_service
         .list_assets(EntityType::Location, &location_id)
@@ -255,7 +144,10 @@ pub async fn list_location_assets(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     Ok(Json(
-        assets.into_iter().map(GalleryAssetResponse::from).collect(),
+        assets
+            .into_iter()
+            .map(GalleryAssetResponseDto::from)
+            .collect(),
     ))
 }
 
@@ -263,14 +155,10 @@ pub async fn list_location_assets(
 pub async fn upload_location_asset(
     State(state): State<Arc<AppState>>,
     Path(location_id): Path<String>,
-    Json(req): Json<UploadAssetRequest>,
-) -> Result<(StatusCode, Json<GalleryAssetResponse>), (StatusCode, String)> {
-    let asset_type = AssetType::from_str(&req.asset_type).ok_or_else(|| {
-        (
-            StatusCode::BAD_REQUEST,
-            format!("Invalid asset type: {}", req.asset_type),
-        )
-    })?;
+    Json(req): Json<UploadAssetRequestDto>,
+) -> Result<(StatusCode, Json<GalleryAssetResponseDto>), (StatusCode, String)> {
+    let asset_type = parse_asset_type(&req.asset_type)
+        .map_err(|msg| (StatusCode::BAD_REQUEST, msg))?;
 
     let create_request = CreateAssetRequest {
         entity_type: EntityType::Location,
@@ -295,7 +183,10 @@ pub async fn upload_location_asset(
         asset.is_active = true;
     }
 
-    Ok((StatusCode::CREATED, Json(GalleryAssetResponse::from(asset))))
+    Ok((
+        StatusCode::CREATED,
+        Json(GalleryAssetResponseDto::from(asset)),
+    ))
 }
 
 /// Activate an asset in a location's gallery
@@ -338,7 +229,7 @@ pub async fn delete_location_asset(
 pub async fn list_item_assets(
     State(state): State<Arc<AppState>>,
     Path(item_id): Path<String>,
-) -> Result<Json<Vec<GalleryAssetResponse>>, (StatusCode, String)> {
+) -> Result<Json<Vec<GalleryAssetResponseDto>>, (StatusCode, String)> {
     let assets = state
         .asset_service
         .list_assets(EntityType::Item, &item_id)
@@ -346,7 +237,10 @@ pub async fn list_item_assets(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     Ok(Json(
-        assets.into_iter().map(GalleryAssetResponse::from).collect(),
+        assets
+            .into_iter()
+            .map(GalleryAssetResponseDto::from)
+            .collect(),
     ))
 }
 
@@ -354,14 +248,10 @@ pub async fn list_item_assets(
 pub async fn upload_item_asset(
     State(state): State<Arc<AppState>>,
     Path(item_id): Path<String>,
-    Json(req): Json<UploadAssetRequest>,
-) -> Result<(StatusCode, Json<GalleryAssetResponse>), (StatusCode, String)> {
-    let asset_type = AssetType::from_str(&req.asset_type).ok_or_else(|| {
-        (
-            StatusCode::BAD_REQUEST,
-            format!("Invalid asset type: {}", req.asset_type),
-        )
-    })?;
+    Json(req): Json<UploadAssetRequestDto>,
+) -> Result<(StatusCode, Json<GalleryAssetResponseDto>), (StatusCode, String)> {
+    let asset_type = parse_asset_type(&req.asset_type)
+        .map_err(|msg| (StatusCode::BAD_REQUEST, msg))?;
 
     let create_request = CreateAssetRequest {
         entity_type: EntityType::Item,
@@ -386,7 +276,10 @@ pub async fn upload_item_asset(
         asset.is_active = true;
     }
 
-    Ok((StatusCode::CREATED, Json(GalleryAssetResponse::from(asset))))
+    Ok((
+        StatusCode::CREATED,
+        Json(GalleryAssetResponseDto::from(asset)),
+    ))
 }
 
 /// Activate an asset in an item's gallery
@@ -428,8 +321,8 @@ pub async fn delete_item_asset(
 /// Queue a new asset generation request
 pub async fn queue_generation(
     State(state): State<Arc<AppState>>,
-    Json(req): Json<GenerateAssetRequest>,
-) -> Result<(StatusCode, Json<GenerationBatchResponse>), (StatusCode, String)> {
+    Json(req): Json<GenerateAssetRequestDto>,
+) -> Result<(StatusCode, Json<GenerationBatchResponseDto>), (StatusCode, String)> {
     let entity_type = parse_entity_type(&req.entity_type).ok_or_else(|| {
         (
             StatusCode::BAD_REQUEST,
@@ -437,12 +330,8 @@ pub async fn queue_generation(
         )
     })?;
 
-    let asset_type = AssetType::from_str(&req.asset_type).ok_or_else(|| {
-        (
-            StatusCode::BAD_REQUEST,
-            format!("Invalid asset type: {}", req.asset_type),
-        )
-    })?;
+    let asset_type = parse_asset_type(&req.asset_type)
+        .map_err(|msg| (StatusCode::BAD_REQUEST, msg))?;
 
     let mut batch = GenerationBatch::new(
         entity_type,
@@ -485,14 +374,14 @@ pub async fn queue_generation(
 
     Ok((
         StatusCode::CREATED,
-        Json(GenerationBatchResponse::from(batch)),
+        Json(GenerationBatchResponseDto::from(batch)),
     ))
 }
 
 /// List the generation queue
 pub async fn list_queue(
     State(state): State<Arc<AppState>>,
-) -> Result<Json<Vec<GenerationBatchResponse>>, (StatusCode, String)> {
+) -> Result<Json<Vec<GenerationBatchResponseDto>>, (StatusCode, String)> {
     let batches = state
         .asset_service
         .list_active_batches()
@@ -502,7 +391,7 @@ pub async fn list_queue(
     Ok(Json(
         batches
             .into_iter()
-            .map(GenerationBatchResponse::from)
+            .map(GenerationBatchResponseDto::from)
             .collect(),
     ))
 }
@@ -510,7 +399,7 @@ pub async fn list_queue(
 /// List batches ready for selection
 pub async fn list_ready_batches(
     State(state): State<Arc<AppState>>,
-) -> Result<Json<Vec<GenerationBatchResponse>>, (StatusCode, String)> {
+) -> Result<Json<Vec<GenerationBatchResponseDto>>, (StatusCode, String)> {
     let batches = state
         .asset_service
         .list_ready_batches()
@@ -520,7 +409,7 @@ pub async fn list_ready_batches(
     Ok(Json(
         batches
             .into_iter()
-            .map(GenerationBatchResponse::from)
+            .map(GenerationBatchResponseDto::from)
             .collect(),
     ))
 }
@@ -529,7 +418,7 @@ pub async fn list_ready_batches(
 pub async fn get_batch(
     State(state): State<Arc<AppState>>,
     Path(batch_id): Path<String>,
-) -> Result<Json<GenerationBatchResponse>, (StatusCode, String)> {
+) -> Result<Json<GenerationBatchResponseDto>, (StatusCode, String)> {
     let uuid = Uuid::parse_str(&batch_id)
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid batch ID".to_string()))?;
 
@@ -540,14 +429,14 @@ pub async fn get_batch(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .ok_or_else(|| (StatusCode::NOT_FOUND, "Batch not found".to_string()))?;
 
-    Ok(Json(GenerationBatchResponse::from(batch)))
+    Ok(Json(GenerationBatchResponseDto::from(batch)))
 }
 
 /// Get assets from a completed batch
 pub async fn get_batch_assets(
     State(state): State<Arc<AppState>>,
     Path(batch_id): Path<String>,
-) -> Result<Json<Vec<GalleryAssetResponse>>, (StatusCode, String)> {
+) -> Result<Json<Vec<GalleryAssetResponseDto>>, (StatusCode, String)> {
     let uuid = Uuid::parse_str(&batch_id)
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid batch ID".to_string()))?;
 
@@ -566,7 +455,7 @@ pub async fn get_batch_assets(
             .await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         {
-            assets.push(GalleryAssetResponse::from(asset));
+            assets.push(GalleryAssetResponseDto::from(asset));
         }
     }
 
@@ -577,7 +466,7 @@ pub async fn get_batch_assets(
 pub async fn select_from_batch(
     State(state): State<Arc<AppState>>,
     Path(batch_id): Path<String>,
-    Json(req): Json<SelectFromBatchRequest>,
+    Json(req): Json<SelectFromBatchRequestDto>,
 ) -> Result<StatusCode, (StatusCode, String)> {
     let uuid = Uuid::parse_str(&batch_id)
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid batch ID".to_string()))?;
@@ -663,13 +552,4 @@ pub async fn cancel_batch(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     Ok(StatusCode::NO_CONTENT)
-}
-
-fn parse_entity_type(s: &str) -> Option<EntityType> {
-    match s.to_lowercase().as_str() {
-        "character" => Some(EntityType::Character),
-        "location" => Some(EntityType::Location),
-        "item" => Some(EntityType::Item),
-        _ => None,
-    }
 }
