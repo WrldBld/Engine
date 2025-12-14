@@ -5,26 +5,20 @@ use axum::{
     http::StatusCode,
     Json,
 };
-use serde::Deserialize;
 use std::sync::Arc;
 use uuid::Uuid;
 
+use crate::application::dto::ExportQueryDto;
 use crate::application::ports::outbound::PlayerWorldSnapshot;
 use crate::application::services::WorldService;
 use crate::domain::value_objects::WorldId;
 use crate::infrastructure::state::AppState;
 
-#[derive(Debug, Deserialize)]
-pub struct ExportQuery {
-    #[serde(default)]
-    pub format: Option<String>,
-}
-
 /// Export a world as JSON snapshot
 pub async fn export_world(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
-    Query(_query): Query<ExportQuery>,
+    Query(_query): Query<ExportQueryDto>,
 ) -> Result<Json<PlayerWorldSnapshot>, (StatusCode, String)> {
     let uuid = Uuid::parse_str(&id)
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid world ID".to_string()))?;
@@ -42,7 +36,7 @@ pub async fn export_world(
 pub async fn export_world_raw(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
-    Query(query): Query<ExportQuery>,
+    Query(query): Query<ExportQueryDto>,
 ) -> Result<String, (StatusCode, String)> {
     let uuid = Uuid::parse_str(&id)
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid world ID".to_string()))?;
