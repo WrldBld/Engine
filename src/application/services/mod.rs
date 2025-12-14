@@ -4,6 +4,7 @@
 //! for the WrldBldr Engine. Each service follows hexagonal architecture principles,
 //! accepting repository dependencies and returning domain entities or DTOs.
 
+pub mod approval_service;
 pub mod asset_service;
 pub mod challenge_service;
 pub mod character_service;
@@ -13,6 +14,7 @@ pub mod interaction_service;
 pub mod llm_service;
 pub mod location_service;
 pub mod narrative_event_service;
+pub mod player_action_service;
 pub mod relationship_service;
 pub mod scene_service;
 pub mod sheet_template_service;
@@ -109,3 +111,11 @@ pub use narrative_event_service::{NarrativeEventService, NarrativeEventServiceIm
 // Re-export event chain service types
 #[allow(unused_imports)]
 pub use event_chain_service::{EventChainService, EventChainServiceImpl};
+
+// Re-export player action service types
+#[allow(unused_imports)]
+pub use player_action_service::{PlayerActionError, PlayerActionResult, PlayerActionService};
+
+// Re-export approval service types
+#[allow(unused_imports)]
+pub use approval_service::{ApprovalDecision, ApprovalError, ApprovalResult, ApprovalService};

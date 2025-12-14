@@ -4,6 +4,7 @@ mod comfyui_port;
 mod game_session_port;
 mod llm_port;
 mod repository_port;
+mod session_management_port;
 mod world_exporter_port;
 
 pub use comfyui_port::{
@@ -25,6 +26,12 @@ pub use repository_port::{
     RelationshipRepositoryPort, RepositoryProvider, SceneRepositoryPort,
     SheetTemplateRepositoryPort, SkillRepositoryPort, SocialNetwork, StoryEventRepositoryPort,
     WorkflowRepositoryPort, WorldRepositoryPort,
+};
+
+pub use session_management_port::{
+    BroadcastMessage, CharacterContextInfo, ParticipantRoleDto, ParticipantSummary,
+    PendingApprovalInfo, ProposedToolInfo, SessionJoinResult, SessionLifecyclePort,
+    SessionManagementError, SessionManagementPort, SessionWorldContext,
 };
 
 pub use world_exporter_port::{
