@@ -35,6 +35,8 @@ pub struct WorldData {
     pub name: String,
     pub description: String,
     pub rule_system: RuleSystemConfig,
+    pub created_at: String,
+    pub updated_at: String,
 }
 
 /// Location data for Player clients

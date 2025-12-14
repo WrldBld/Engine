@@ -50,6 +50,8 @@ pub async fn load_world_snapshot(
         name: world.name,
         description: world.description,
         rule_system: world.rule_system,
+        created_at: world.created_at.to_rfc3339(),
+        updated_at: world.updated_at.to_rfc3339(),
     };
 
     let location_data: Vec<LocationData> = locations
@@ -217,6 +219,8 @@ mod tests {
             name: "Test World".to_string(),
             description: "A test world".to_string(),
             rule_system: RuleSystemConfig::default(),
+            created_at: "2025-01-01T00:00:00Z".to_string(),
+            updated_at: "2025-01-01T00:00:00Z".to_string(),
         };
 
         let json = serde_json::to_string(&world).expect("serialization should succeed");
@@ -252,6 +256,8 @@ mod tests {
                 name: "Fantasy Realm".to_string(),
                 description: "A magical world".to_string(),
                 rule_system: RuleSystemConfig::default(),
+                created_at: "2025-01-01T00:00:00Z".to_string(),
+                updated_at: "2025-01-01T00:00:00Z".to_string(),
             },
             locations: vec![LocationData {
                 id: "loc-1".to_string(),
