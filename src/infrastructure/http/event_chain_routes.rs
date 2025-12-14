@@ -7,141 +7,19 @@ use axum::{
     http::StatusCode,
     Json,
 };
-use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::application::services::{EventChainService, WorldService};
-use crate::domain::entities::{ChainStatus, EventChain};
+use crate::application::dto::{
+    AddEventRequestDto, ChainStatusResponseDto, CreateEventChainRequestDto, EventChainResponseDto,
+    UpdateEventChainRequestDto,
+};
+use crate::domain::entities::EventChain;
 use crate::domain::value_objects::{ActId, EventChainId, NarrativeEventId, WorldId};
 use crate::infrastructure::state::AppState;
 
-// ============================================================================
-// Request/Response Types
-// ============================================================================
-
-/// Request to create an event chain
-#[derive(Debug, Deserialize)]
-pub struct CreateEventChainRequest {
-    pub name: String,
-    #[serde(default)]
-    pub description: String,
-    #[serde(default)]
-    pub events: Vec<String>,
-    #[serde(default)]
-    pub act_id: Option<String>,
-    #[serde(default)]
-    pub tags: Vec<String>,
-    #[serde(default)]
-    pub color: Option<String>,
-    #[serde(default)]
-    pub is_active: bool,
-}
-
-/// Request to update an event chain
-#[derive(Debug, Deserialize)]
-pub struct UpdateEventChainRequest {
-    #[serde(default)]
-    pub name: Option<String>,
-    #[serde(default)]
-    pub description: Option<String>,
-    #[serde(default)]
-    pub events: Option<Vec<String>>,
-    #[serde(default)]
-    pub act_id: Option<String>,
-    #[serde(default)]
-    pub tags: Option<Vec<String>>,
-    #[serde(default)]
-    pub color: Option<String>,
-    #[serde(default)]
-    pub is_active: Option<bool>,
-}
-
-/// Request to add an event to a chain
-#[derive(Debug, Deserialize)]
-pub struct AddEventRequest {
-    pub event_id: String,
-    #[serde(default)]
-    pub position: Option<usize>,
-}
-
-/// Event chain response
-#[derive(Debug, Serialize)]
-pub struct EventChainResponse {
-    pub id: String,
-    pub world_id: String,
-    pub name: String,
-    pub description: String,
-    pub events: Vec<String>,
-    pub is_active: bool,
-    pub current_position: u32,
-    pub completed_events: Vec<String>,
-    pub act_id: Option<String>,
-    pub tags: Vec<String>,
-    pub color: Option<String>,
-    pub is_favorite: bool,
-    pub progress_percent: u32,
-    pub is_complete: bool,
-    pub remaining_events: usize,
-    pub created_at: String,
-    pub updated_at: String,
-}
-
-impl From<EventChain> for EventChainResponse {
-    fn from(c: EventChain) -> Self {
-        let progress_percent = (c.progress() * 100.0) as u32;
-        let is_complete = c.is_complete();
-        let remaining_events = c.remaining_events();
-
-        Self {
-            id: c.id.to_string(),
-            world_id: c.world_id.to_string(),
-            name: c.name,
-            description: c.description,
-            events: c.events.iter().map(|e| e.to_string()).collect(),
-            is_active: c.is_active,
-            current_position: c.current_position,
-            completed_events: c.completed_events.iter().map(|e| e.to_string()).collect(),
-            act_id: c.act_id.map(|a| a.to_string()),
-            tags: c.tags,
-            color: c.color,
-            is_favorite: c.is_favorite,
-            progress_percent,
-            is_complete,
-            remaining_events,
-            created_at: c.created_at.to_rfc3339(),
-            updated_at: c.updated_at.to_rfc3339(),
-        }
-    }
-}
-
-/// Chain status response
-#[derive(Debug, Serialize)]
-pub struct ChainStatusResponse {
-    pub chain_id: String,
-    pub chain_name: String,
-    pub is_active: bool,
-    pub is_complete: bool,
-    pub total_events: usize,
-    pub completed_events: usize,
-    pub progress_percent: u32,
-    pub current_event_id: Option<String>,
-}
-
-impl From<ChainStatus> for ChainStatusResponse {
-    fn from(s: ChainStatus) -> Self {
-        Self {
-            chain_id: s.chain_id.to_string(),
-            chain_name: s.chain_name,
-            is_active: s.is_active,
-            is_complete: s.is_complete,
-            total_events: s.total_events,
-            completed_events: s.completed_events,
-            progress_percent: s.progress_percent,
-            current_event_id: s.current_event_id.map(|e| e.to_string()),
-        }
-    }
-}
+// NOTE: event chain request/response DTOs + conversions live in `application/dto/event_chain.rs`.
 
 // ============================================================================
 // Handlers
@@ -151,7 +29,7 @@ impl From<ChainStatus> for ChainStatusResponse {
 pub async fn list_event_chains(
     State(state): State<Arc<AppState>>,
     Path(world_id): Path<String>,
-) -> Result<Json<Vec<EventChainResponse>>, (StatusCode, String)> {
+) -> Result<Json<Vec<EventChainResponseDto>>, (StatusCode, String)> {
     let uuid = Uuid::parse_str(&world_id)
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid world ID".to_string()))?;
     let world_id = WorldId::from_uuid(uuid);
@@ -163,7 +41,7 @@ pub async fn list_event_chains(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     Ok(Json(
-        chains.into_iter().map(EventChainResponse::from).collect(),
+        chains.into_iter().map(EventChainResponseDto::from).collect(),
     ))
 }
 
@@ -171,7 +49,7 @@ pub async fn list_event_chains(
 pub async fn list_active_chains(
     State(state): State<Arc<AppState>>,
     Path(world_id): Path<String>,
-) -> Result<Json<Vec<EventChainResponse>>, (StatusCode, String)> {
+) -> Result<Json<Vec<EventChainResponseDto>>, (StatusCode, String)> {
     let uuid = Uuid::parse_str(&world_id)
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid world ID".to_string()))?;
     let world_id = WorldId::from_uuid(uuid);
@@ -183,7 +61,7 @@ pub async fn list_active_chains(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     Ok(Json(
-        chains.into_iter().map(EventChainResponse::from).collect(),
+        chains.into_iter().map(EventChainResponseDto::from).collect(),
     ))
 }
 
@@ -191,7 +69,7 @@ pub async fn list_active_chains(
 pub async fn list_favorite_chains(
     State(state): State<Arc<AppState>>,
     Path(world_id): Path<String>,
-) -> Result<Json<Vec<EventChainResponse>>, (StatusCode, String)> {
+) -> Result<Json<Vec<EventChainResponseDto>>, (StatusCode, String)> {
     let uuid = Uuid::parse_str(&world_id)
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid world ID".to_string()))?;
     let world_id = WorldId::from_uuid(uuid);
@@ -203,7 +81,7 @@ pub async fn list_favorite_chains(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     Ok(Json(
-        chains.into_iter().map(EventChainResponse::from).collect(),
+        chains.into_iter().map(EventChainResponseDto::from).collect(),
     ))
 }
 
@@ -211,7 +89,7 @@ pub async fn list_favorite_chains(
 pub async fn list_chain_statuses(
     State(state): State<Arc<AppState>>,
     Path(world_id): Path<String>,
-) -> Result<Json<Vec<ChainStatusResponse>>, (StatusCode, String)> {
+) -> Result<Json<Vec<ChainStatusResponseDto>>, (StatusCode, String)> {
     let uuid = Uuid::parse_str(&world_id)
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid world ID".to_string()))?;
     let world_id = WorldId::from_uuid(uuid);
@@ -223,7 +101,10 @@ pub async fn list_chain_statuses(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     Ok(Json(
-        statuses.into_iter().map(ChainStatusResponse::from).collect(),
+        statuses
+            .into_iter()
+            .map(ChainStatusResponseDto::from)
+            .collect(),
     ))
 }
 
@@ -231,7 +112,7 @@ pub async fn list_chain_statuses(
 pub async fn get_event_chain(
     State(state): State<Arc<AppState>>,
     Path(chain_id): Path<String>,
-) -> Result<Json<EventChainResponse>, (StatusCode, String)> {
+) -> Result<Json<EventChainResponseDto>, (StatusCode, String)> {
     let uuid = Uuid::parse_str(&chain_id)
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid chain ID".to_string()))?;
     let chain_id = EventChainId::from_uuid(uuid);
@@ -243,15 +124,15 @@ pub async fn get_event_chain(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .ok_or_else(|| (StatusCode::NOT_FOUND, "Event chain not found".to_string()))?;
 
-    Ok(Json(EventChainResponse::from(chain)))
+    Ok(Json(EventChainResponseDto::from(chain)))
 }
 
 /// Create a new event chain
 pub async fn create_event_chain(
     State(state): State<Arc<AppState>>,
     Path(world_id): Path<String>,
-    Json(req): Json<CreateEventChainRequest>,
-) -> Result<(StatusCode, Json<EventChainResponse>), (StatusCode, String)> {
+    Json(req): Json<CreateEventChainRequestDto>,
+) -> Result<(StatusCode, Json<EventChainResponseDto>), (StatusCode, String)> {
     let world_uuid = Uuid::parse_str(&world_id)
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid world ID".to_string()))?;
     let world_id = WorldId::from_uuid(world_uuid);
@@ -298,15 +179,18 @@ pub async fn create_event_chain(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    Ok((StatusCode::CREATED, Json(EventChainResponse::from(created_chain))))
+    Ok((
+        StatusCode::CREATED,
+        Json(EventChainResponseDto::from(created_chain)),
+    ))
 }
 
 /// Update an event chain
 pub async fn update_event_chain(
     State(state): State<Arc<AppState>>,
     Path(chain_id): Path<String>,
-    Json(req): Json<UpdateEventChainRequest>,
-) -> Result<Json<EventChainResponse>, (StatusCode, String)> {
+    Json(req): Json<UpdateEventChainRequestDto>,
+) -> Result<Json<EventChainResponseDto>, (StatusCode, String)> {
     let uuid = Uuid::parse_str(&chain_id)
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid chain ID".to_string()))?;
     let chain_id = EventChainId::from_uuid(uuid);
@@ -360,7 +244,7 @@ pub async fn update_event_chain(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    Ok(Json(EventChainResponse::from(updated_chain)))
+    Ok(Json(EventChainResponseDto::from(updated_chain)))
 }
 
 /// Delete an event chain
@@ -441,7 +325,7 @@ pub async fn reset_chain(
 pub async fn add_event_to_chain(
     State(state): State<Arc<AppState>>,
     Path(chain_id): Path<String>,
-    Json(req): Json<AddEventRequest>,
+    Json(req): Json<AddEventRequestDto>,
 ) -> Result<StatusCode, (StatusCode, String)> {
     let chain_uuid = Uuid::parse_str(&chain_id)
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid chain ID".to_string()))?;
