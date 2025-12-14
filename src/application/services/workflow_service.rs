@@ -388,8 +388,13 @@ mod tests {
         // Should have extracted non-connection inputs
         assert!(analysis.inputs.len() > 0);
 
-        // Should have found text inputs
-        assert_eq!(analysis.text_inputs.len(), 2); // positive and negative prompts
+        // Should have found prompt text inputs (positive and negative prompts)
+        let prompt_text_inputs: Vec<_> = analysis
+            .text_inputs
+            .iter()
+            .filter(|i| i.node_type == "CLIPTextEncode" && i.input_name == "text")
+            .collect();
+        assert_eq!(prompt_text_inputs.len(), 2);
 
         // Should not include connection inputs (arrays)
         assert!(!analysis
