@@ -11,7 +11,7 @@ use tokio::sync::Semaphore;
 use crate::application::ports::outbound::{
     AssetRepositoryPort, ComfyUIPort, ProcessingQueuePort, QueueError, QueueItemId, QueuePort,
 };
-use crate::domain::value_objects::AssetGenerationItem;
+use crate::application::dto::AssetGenerationItem;
 
 /// Priority constants for queue operations
 const PRIORITY_NORMAL: u8 = 0;

@@ -12,7 +12,7 @@ use crate::application::services::{
     SceneServiceImpl, SheetTemplateService, SkillServiceImpl, StoryEventService,
     RelationshipServiceImpl, WorkflowConfigService, WorldServiceImpl,
 };
-use crate::domain::value_objects::{
+use crate::application::dto::{
     ApprovalItem, AssetGenerationItem, DMActionItem, LLMRequestItem, PlayerActionItem,
 };
 use crate::infrastructure::comfyui::ComfyUIClient;

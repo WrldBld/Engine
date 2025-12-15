@@ -1,7 +1,6 @@
 //! Outbound ports - Interfaces that the application requires from external systems
 
 mod comfyui_port;
-mod game_session_port;
 mod llm_port;
 mod queue_port;
 mod repository_port;
@@ -12,8 +11,6 @@ pub use comfyui_port::{
     ComfyUIPort, GeneratedImage, HistoryResponse, NodeOutput, PromptHistory,
     PromptStatus, QueuePromptResponse,
 };
-
-pub use game_session_port::GameSessionPort;
 
 pub use llm_port::{
     ChatMessage, FinishReason, LlmPort, LlmRequest, LlmResponse, MessageRole,
@@ -31,9 +28,10 @@ pub use repository_port::{
 
 pub use session_management_port::{
     BroadcastMessage, CharacterContextInfo, ParticipantRoleDto, ParticipantSummary,
-    PendingApprovalInfo, ProposedToolInfo, SessionJoinResult, SessionLifecyclePort,
+    PendingApprovalInfo, SessionJoinResult, SessionLifecyclePort,
     SessionManagementError, SessionManagementPort, SessionWorldContext,
 };
+// Note: ProposedToolInfo is now in domain::value_objects
 
 pub use queue_port::{
     ApprovalQueuePort, ProcessingQueuePort, QueueError, QueueItem, QueueItemId, QueueItemStatus,

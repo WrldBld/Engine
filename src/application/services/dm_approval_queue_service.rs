@@ -9,13 +9,12 @@ use std::time::Duration;
 use chrono::Utc;
 
 use crate::application::ports::outbound::{
-    ApprovalQueuePort, BroadcastMessage, GameSessionPort, QueueError, QueueItem, QueueItemId,
+    ApprovalQueuePort, BroadcastMessage, QueueError, QueueItem, QueueItemId,
     SessionManagementPort,
 };
 use crate::application::services::ToolExecutionService;
-use crate::domain::value_objects::{
-    ApprovalDecision, ApprovalItem, DecisionType, DecisionUrgency, GameTool, SessionId,
-};
+use crate::application::dto::{ApprovalItem, DecisionType, DecisionUrgency};
+use crate::domain::value_objects::{ApprovalDecision, GameTool, SessionId};
 
 /// Maximum number of times a response can be rejected before requiring TakeOver
 const MAX_RETRY_COUNT: u32 = 3;
@@ -44,10 +43,10 @@ impl<Q: ApprovalQueuePort<ApprovalItem>> DMApprovalQueueService<Q> {
     ///
     /// This method handles the DM's decision on an approval request and
     /// routes it to the appropriate handler based on the decision type.
-    pub async fn process_decision<S: SessionManagementPort, G: GameSessionPort>(
+    pub async fn process_decision<S: SessionManagementPort>(
         &self,
         session: &mut S,
-        game_session: &G,
+        session_id: SessionId,
         item_id: QueueItemId,
         decision: ApprovalDecision,
     ) -> Result<ApprovalOutcome, QueueError> {
@@ -59,19 +58,20 @@ impl<Q: ApprovalQueuePort<ApprovalItem>> DMApprovalQueueService<Q> {
 
         let outcome = match decision {
             ApprovalDecision::Accept => {
-                self.handle_accept(session, game_session, &item.payload).await?
+                self.handle_accept(session, session_id, &item.payload).await?
             }
             ApprovalDecision::AcceptWithModification {
                 modified_dialogue,
-                modified_tools,
+                approved_tools,
+                rejected_tools,
             } => {
-                self.handle_accept_modified(session, game_session, &item.payload, &modified_dialogue, modified_tools).await?
+                self.handle_accept_modified(session, session_id, &item.payload, &modified_dialogue, &approved_tools, &rejected_tools).await?
             }
             ApprovalDecision::Reject { feedback } => {
                 self.handle_reject(&item.payload, &feedback).await?
             }
             ApprovalDecision::TakeOver { dm_response } => {
-                self.handle_takeover(session, game_session, &item.payload, &dm_response).await?
+                self.handle_takeover(session, session_id, &item.payload, &dm_response).await?
             }
         };
 
@@ -102,10 +102,10 @@ impl<Q: ApprovalQueuePort<ApprovalItem>> DMApprovalQueueService<Q> {
     }
 
     /// Handle accepting an approval as-is
-    async fn handle_accept<S: SessionManagementPort, G: GameSessionPort>(
+    async fn handle_accept<S: SessionManagementPort>(
         &self,
         session: &mut S,
-        game_session: &G,
+        session_id: SessionId,
         approval: &ApprovalItem,
     ) -> Result<ApprovalOutcome, QueueError> {
         // Broadcast the dialogue to players using ServerMessage format
@@ -119,7 +119,7 @@ impl<Q: ApprovalQueuePort<ApprovalItem>> DMApprovalQueueService<Q> {
 
         session
             .broadcast_to_session(
-                approval.session_id,
+                session_id,
                 BroadcastMessage {
                     content: message,
                 },
@@ -127,7 +127,9 @@ impl<Q: ApprovalQueuePort<ApprovalItem>> DMApprovalQueueService<Q> {
             .map_err(|e| QueueError::Backend(format!("Session error: {}", e)))?;
         
         // Add to conversation history
-        game_session.add_npc_response(&approval.npc_name, &approval.proposed_dialogue);
+        session
+            .add_to_conversation_history(session_id, &approval.npc_name, &approval.proposed_dialogue)
+            .map_err(|e| QueueError::Backend(format!("Session error: {}", e)))?;
 
         // Execute approved tool calls
         for tool_info in &approval.proposed_tools {
@@ -136,7 +138,7 @@ impl<Q: ApprovalQueuePort<ApprovalItem>> DMApprovalQueueService<Q> {
             if let Ok(tool) = self.parse_tool_from_info(tool_info) {
                 if let Err(e) = self
                     .tool_execution_service
-                    .execute_tool(&tool, game_session)
+                    .execute_tool(&tool, session, session_id)
                     .await
                 {
                     tracing::warn!("Failed to execute tool {}: {}", tool_info.name, e);
@@ -151,13 +153,14 @@ impl<Q: ApprovalQueuePort<ApprovalItem>> DMApprovalQueueService<Q> {
     }
 
     /// Handle accepting with modifications
-    async fn handle_accept_modified<S: SessionManagementPort, G: GameSessionPort>(
+    async fn handle_accept_modified<S: SessionManagementPort>(
         &self,
         session: &mut S,
-        game_session: &G,
+        session_id: SessionId,
         approval: &ApprovalItem,
         modified_dialogue: &str,
-        _modified_tools: Option<Vec<crate::domain::value_objects::ProposedToolInfo>>,
+        approved_tools: &[String],
+        rejected_tools: &[String],
     ) -> Result<ApprovalOutcome, QueueError> {
         // Broadcast the modified dialogue using ServerMessage format
         let message = serde_json::json!({
@@ -170,7 +173,7 @@ impl<Q: ApprovalQueuePort<ApprovalItem>> DMApprovalQueueService<Q> {
 
         session
             .broadcast_to_session(
-                approval.session_id,
+                session_id,
                 BroadcastMessage {
                     content: message,
                 },
@@ -178,21 +181,26 @@ impl<Q: ApprovalQueuePort<ApprovalItem>> DMApprovalQueueService<Q> {
             .map_err(|e| QueueError::Backend(format!("Session error: {}", e)))?;
         
         // Add to conversation history
-        game_session.add_npc_response(&approval.npc_name, modified_dialogue);
+        session
+            .add_to_conversation_history(session_id, &approval.npc_name, modified_dialogue)
+            .map_err(|e| QueueError::Backend(format!("Session error: {}", e)))?;
 
-        // Execute approved/modified tool calls
-        if let Some(tools) = modified_tools {
-            for tool_info in &tools {
+        // Execute approved tool calls (filter based on approved_tools list)
+        // approved_tools contains tool IDs that should be executed
+        for tool_info in &approval.proposed_tools {
+            // Check if this tool is in the approved list
+            if approved_tools.contains(&tool_info.id) {
                 if let Ok(tool) = self.parse_tool_from_info(tool_info) {
                     if let Err(e) = self
                         .tool_execution_service
-                        .execute_tool(&tool, game_session)
+                        .execute_tool(&tool, session, session_id)
                         .await
                     {
                         tracing::warn!("Failed to execute tool {}: {}", tool_info.name, e);
                     }
                 }
             }
+            // Tools in rejected_tools are simply skipped
         }
 
         Ok(ApprovalOutcome::Broadcast {
@@ -228,10 +236,10 @@ impl<Q: ApprovalQueuePort<ApprovalItem>> DMApprovalQueueService<Q> {
     }
 
     /// Handle DM taking over
-    async fn handle_takeover<S: SessionManagementPort, G: GameSessionPort>(
+    async fn handle_takeover<S: SessionManagementPort>(
         &self,
         session: &mut S,
-        game_session: &G,
+        session_id: SessionId,
         approval: &ApprovalItem,
         dm_response: &str,
     ) -> Result<ApprovalOutcome, QueueError> {
@@ -246,7 +254,7 @@ impl<Q: ApprovalQueuePort<ApprovalItem>> DMApprovalQueueService<Q> {
 
         session
             .broadcast_to_session(
-                approval.session_id,
+                session_id,
                 BroadcastMessage {
                     content: message,
                 },
@@ -254,7 +262,9 @@ impl<Q: ApprovalQueuePort<ApprovalItem>> DMApprovalQueueService<Q> {
             .map_err(|e| QueueError::Backend(format!("Session error: {}", e)))?;
         
         // Add to conversation history
-        game_session.add_npc_response(&approval.npc_name, dm_response);
+        session
+            .add_to_conversation_history(session_id, &approval.npc_name, dm_response)
+            .map_err(|e| QueueError::Backend(format!("Session error: {}", e)))?;
 
         Ok(ApprovalOutcome::Broadcast {
             dialogue: dm_response.to_string(),

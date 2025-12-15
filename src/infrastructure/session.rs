@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
 use crate::application::ports::outbound::{
-    BroadcastMessage, CharacterContextInfo, GameSessionPort, PendingApprovalInfo, ProposedToolInfo,
+    BroadcastMessage, CharacterContextInfo, PendingApprovalInfo, ProposedToolInfo,
     SessionManagementError, SessionManagementPort, SessionWorldContext,
 };
 use crate::domain::entities::{Character, Location, Scene, World};
@@ -783,6 +783,22 @@ impl SessionManagementPort for SessionManager {
         Ok(())
     }
 
+    fn broadcast_to_session(
+        &self,
+        session_id: SessionId,
+        message: &BroadcastMessage,
+    ) -> Result<(), SessionManagementError> {
+        let session = self
+            .sessions
+            .get(&session_id)
+            .ok_or_else(|| SessionManagementError::SessionNotFound(session_id.to_string()))?;
+
+        if let Some(server_msg) = broadcast_to_server_message(message) {
+            session.broadcast(&server_msg);
+        }
+        Ok(())
+    }
+
     fn add_to_conversation_history(
         &mut self,
         session_id: SessionId,
@@ -870,22 +886,6 @@ impl SessionManagementPort for SessionManager {
             characters,
             directorial_notes: current_scene.directorial_notes.clone(),
         })
-    }
-}
-
-/// Implement GameSessionPort for GameSession
-///
-/// This implementation allows the application layer to interact with game sessions
-/// through the port interface, maintaining hexagonal architecture boundaries.
-impl GameSessionPort for GameSession {
-    fn add_npc_response(&mut self, speaker: &str, text: &str) {
-        // Delegate to the existing implementation
-        self.add_npc_response(speaker, text)
-    }
-
-    fn history_length(&self) -> usize {
-        // Delegate to the existing implementation
-        self.history_length()
     }
 }
 

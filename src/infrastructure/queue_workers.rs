@@ -9,12 +9,13 @@ use std::time::Duration;
 use tokio::sync::RwLock;
 
 use crate::application::services::{DMActionQueueService, DMApprovalQueueService};
-use crate::domain::value_objects::{ApprovalDecision, DMAction};
+use crate::application::dto::DMAction;
+use crate::domain::value_objects::ApprovalDecision;
 use crate::infrastructure::session::SessionManager;
 use crate::infrastructure::websocket::ServerMessage;
 
 /// Worker that processes approval items and sends ApprovalRequired messages to DM
-pub async fn approval_notification_worker<Q: crate::application::ports::outbound::ApprovalQueuePort<crate::domain::value_objects::ApprovalItem>>(
+pub async fn approval_notification_worker<Q: crate::application::ports::outbound::ApprovalQueuePort<crate::application::dto::ApprovalItem>>(
     approval_queue_service: Arc<DMApprovalQueueService<Arc<Q>>>,
     sessions: Arc<RwLock<SessionManager>>,
 ) {
@@ -149,13 +150,14 @@ async fn process_dm_action(
             // which matches what we have from the DMAction
 
             // Process the decision using the approval queue service
-            // This requires access to session manager and game session
+            // The service now only needs SessionManagementPort (session manager) and session_id
             let mut sessions_write = sessions.write().await;
-            if let Some(session) = sessions_write.get_session_mut(action.session_id) {
+            // Verify session exists
+            if sessions_write.get_session_mut(action.session_id).is_some() {
                 // Use the approval service's process_decision method
                 // The service expects domain ApprovalDecision which matches what we have
                 match approval_queue_service
-                    .process_decision(&mut *sessions_write, session, approval_item_id, decision.clone())
+                    .process_decision(&mut *sessions_write, action.session_id, approval_item_id, decision.clone())
                     .await
                 {
                     Ok(outcome) => {

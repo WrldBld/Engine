@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use crate::application::ports::outbound::{QueueError, QueueItem, QueueItemId, QueuePort};
-use crate::domain::value_objects::{DMAction, DMActionItem};
+use crate::application::dto::{DMAction, DMActionItem};
 
 /// Service for managing the DM action queue
 pub struct DMActionQueueService<Q: QueuePort<DMActionItem>> {

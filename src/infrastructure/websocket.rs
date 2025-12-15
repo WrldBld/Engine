@@ -20,9 +20,9 @@ use crate::application::services::WorldService;
 use crate::domain::value_objects::{ActionId, SessionId, WorldId};
 use crate::infrastructure::session::{ClientId, SessionError, WorldSnapshot};
 use crate::infrastructure::state::AppState;
-use crate::application::services::llm_service::{
-    ActiveNarrativeEventContext, GamePromptRequest, PlayerActionContext, SceneContext,
-    CharacterContext,
+use crate::domain::value_objects::{
+    ActiveNarrativeEventContext, ApprovalDecision, CharacterContext, GamePromptRequest,
+    PlayerActionContext, ProposedToolInfo, SceneContext,
 };
 
 /// WebSocket upgrade handler
@@ -210,12 +210,12 @@ async fn handle_message(
             match state
                 .player_action_queue_service
                 .enqueue_action(
-                    session_id,
+                        session_id,
                     player_id.clone(),
-                    action_type.clone(),
-                    target.clone(),
-                    dialogue.clone(),
-                )
+                        action_type.clone(),
+                        target.clone(),
+                        dialogue.clone(),
+                    )
                 .await
             {
                 Ok(_) => {
@@ -240,21 +240,21 @@ async fn handle_message(
                     }
                     drop(sessions);
 
-                    tracing::info!(
+                tracing::info!(
                         "Enqueued action {} from player {} in session {}: {} -> {:?}",
-                        action_id_str,
-                        player_id,
-                        session_id,
-                        action_type,
-                        target
-                    );
+                    action_id_str,
+                    player_id,
+                    session_id,
+                    action_type,
+                    target
+                );
 
-                    // Send ActionReceived acknowledgment to the player
-                    let _ = sender.send(ServerMessage::ActionReceived {
-                        action_id: action_id_str,
-                        player_id,
-                        action_type: action_type.clone(),
-                    });
+                // Send ActionReceived acknowledgment to the player
+                let _ = sender.send(ServerMessage::ActionReceived {
+                    action_id: action_id_str,
+                    player_id,
+                    action_type: action_type.clone(),
+                });
                 }
                 Err(e) => {
                     tracing::error!("Failed to enqueue player action: {}", e);
@@ -826,7 +826,7 @@ pub enum ServerMessage {
         npc_name: String,
         proposed_dialogue: String,
         internal_reasoning: String,
-        proposed_tools: Vec<ProposedTool>,
+        proposed_tools: Vec<ProposedToolInfo>,
         challenge_suggestion: Option<ChallengeSuggestionInfo>,
         narrative_event_suggestion: Option<NarrativeEventSuggestionInfo>,
     },
@@ -964,32 +964,7 @@ pub struct NpcMotivationData {
     pub secret_agenda: Option<String>,
 }
 
-/// DM's approval decision
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "decision")]
-pub enum ApprovalDecision {
-    Accept,
-    AcceptWithModification {
-        modified_dialogue: String,
-        approved_tools: Vec<String>,
-        rejected_tools: Vec<String>,
-    },
-    Reject {
-        feedback: String,
-    },
-    TakeOver {
-        dm_response: String,
-    },
-}
-
-/// Proposed tool call from LLM
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProposedTool {
-    pub id: String,
-    pub name: String,
-    pub description: String,
-    pub arguments: serde_json::Value,
-}
+// ApprovalDecision and ProposedToolInfo are now imported from domain::value_objects
 
 /// Challenge suggestion information for DM approval
 #[derive(Debug, Clone, Serialize, Deserialize)]

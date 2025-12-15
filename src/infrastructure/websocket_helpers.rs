@@ -3,11 +3,11 @@
 //! These functions assist with building prompts and processing queue items
 //! in the WebSocket handler and background workers.
 
-use crate::application::services::{
-    ChallengeServiceImpl, GamePromptRequest, NarrativeEventServiceImpl, PlayerActionContext,
-    SceneContext, CharacterContext,
+use crate::application::services::{ChallengeServiceImpl, NarrativeEventServiceImpl};
+use crate::domain::value_objects::{
+    CharacterContext, GamePromptRequest, PlayerActionContext, SceneContext,
 };
-use crate::domain::value_objects::PlayerActionItem;
+use crate::application::dto::PlayerActionItem;
 use crate::infrastructure::session::SessionManager;
 use std::sync::Arc;
 use tokio::sync::RwLock;

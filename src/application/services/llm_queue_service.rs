@@ -14,9 +14,8 @@ use crate::application::ports::outbound::{
     QueuePort, SessionManagementPort,
 };
 use crate::application::services::llm_service::LLMService;
-use crate::domain::value_objects::{
-    ApprovalItem, DecisionType, DecisionUrgency, LLMRequestItem, LLMRequestType, ProposedToolInfo,
-};
+use crate::application::dto::{ApprovalItem, DecisionType, DecisionUrgency, LLMRequestItem, LLMRequestType};
+use crate::domain::value_objects::ProposedToolInfo;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 

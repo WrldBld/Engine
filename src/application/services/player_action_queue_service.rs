@@ -8,8 +8,8 @@ use std::sync::Arc;
 use crate::application::ports::outbound::{
     ProcessingQueuePort, QueueError, QueueItem, QueueItemId, QueuePort,
 };
-use crate::application::services::GamePromptRequest;
-use crate::domain::value_objects::{LLMRequestItem, LLMRequestType, PlayerActionItem};
+use crate::application::dto::{LLMRequestItem, LLMRequestType, PlayerActionItem};
+use crate::domain::value_objects::GamePromptRequest;
 
 /// Service for managing the player action queue
 pub struct PlayerActionQueueService<Q: QueuePort<PlayerActionItem>, LQ: ProcessingQueuePort<LLMRequestItem>> {

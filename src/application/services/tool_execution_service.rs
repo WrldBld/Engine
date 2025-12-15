@@ -7,9 +7,9 @@
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, instrument};
 
-use crate::application::ports::outbound::GameSessionPort;
+use crate::application::ports::outbound::SessionManagementPort;
 use crate::domain::value_objects::{
-    ChangeAmount, GameTool, InfoImportance, RelationshipChange,
+    ChangeAmount, GameTool, InfoImportance, RelationshipChange, SessionId,
 };
 
 /// Result of executing a tool
@@ -100,32 +100,33 @@ impl ToolExecutionService {
     /// assert!(result.success);
     /// ```
     #[instrument(skip(self, session))]
-    pub async fn execute_tool(
+    pub async fn execute_tool<S: SessionManagementPort>(
         &self,
         tool: &GameTool,
-        session: &mut impl GameSessionPort,
+        session: &mut S,
+        session_id: SessionId,
     ) -> Result<ToolExecutionResult, ToolExecutionError> {
         match tool {
             GameTool::GiveItem { item_name, description } => {
-                self.execute_give_item(item_name, description, session).await
+                self.execute_give_item(item_name, description, session, session_id).await
             }
             GameTool::RevealInfo {
                 info_type,
                 content,
                 importance,
             } => {
-                self.execute_reveal_info(info_type, content, importance, session)
+                self.execute_reveal_info(info_type, content, importance, session, session_id)
                     .await
             }
             GameTool::ChangeRelationship { change, amount, reason } => {
-                self.execute_change_relationship(change, amount, reason, session)
+                self.execute_change_relationship(change, amount, reason, session, session_id)
                     .await
             }
             GameTool::TriggerEvent {
                 event_type,
                 description,
             } => {
-                self.execute_trigger_event(event_type, description, session)
+                self.execute_trigger_event(event_type, description, session, session_id)
                     .await
             }
         }
@@ -133,11 +134,12 @@ impl ToolExecutionService {
 
     /// Execute GiveItem tool - adds item to character inventory
     #[instrument(skip(self, session))]
-    async fn execute_give_item(
+    async fn execute_give_item<S: SessionManagementPort>(
         &self,
         item_name: &str,
         description: &str,
-        session: &mut impl GameSessionPort,
+        session: &mut S,
+        session_id: SessionId,
     ) -> Result<ToolExecutionResult, ToolExecutionError> {
         // Get the player character from the session
         // For now, we log the item transfer without modifying inventory
@@ -151,10 +153,13 @@ impl ToolExecutionService {
         debug!("Item transfer: {}", description_msg);
 
         // Log the action in conversation history
-        session.add_npc_response(
-            "System",
-            &format!("Item received: {} - {}", item_name, description),
-        );
+        session
+            .add_to_conversation_history(
+                session_id,
+                "System",
+                &format!("Item received: {} - {}", item_name, description),
+            )
+            .map_err(|e| ToolExecutionError::ExecutionError(e.to_string()))?;
 
         let state_change = StateChange::ItemAdded {
             character: "Player".to_string(),
@@ -170,12 +175,13 @@ impl ToolExecutionService {
 
     /// Execute RevealInfo tool - marks information as known to player
     #[instrument(skip(self, session))]
-    async fn execute_reveal_info(
+    async fn execute_reveal_info<S: SessionManagementPort>(
         &self,
         info_type: &str,
         content: &str,
         importance: &InfoImportance,
-        session: &mut impl GameSessionPort,
+        session: &mut S,
+        session_id: SessionId,
     ) -> Result<ToolExecutionResult, ToolExecutionError> {
         let description_msg = format!(
             "Revealed {} {} information",
@@ -186,10 +192,13 @@ impl ToolExecutionService {
         debug!("Info revealed: {} - {}", info_type, content);
 
         // Log the revelation in conversation history
-        session.add_npc_response(
-            "System",
-            &format!("[{}] {} - {}", info_type, importance.as_str(), content),
-        );
+        session
+            .add_to_conversation_history(
+                session_id,
+                "System",
+                &format!("[{}] {} - {}", info_type, importance.as_str(), content),
+            )
+            .map_err(|e| ToolExecutionError::ExecutionError(e.to_string()))?;
 
         let state_change = StateChange::InfoRevealed {
             info: format!("[{}] {}", info_type, content),
@@ -204,12 +213,13 @@ impl ToolExecutionService {
 
     /// Execute ChangeRelationship tool - updates relationship sentiment
     #[instrument(skip(self, session))]
-    async fn execute_change_relationship(
+    async fn execute_change_relationship<S: SessionManagementPort>(
         &self,
         change: &RelationshipChange,
         amount: &ChangeAmount,
         reason: &str,
-        session: &mut impl GameSessionPort,
+        session: &mut S,
+        session_id: SessionId,
     ) -> Result<ToolExecutionResult, ToolExecutionError> {
         // Calculate sentiment delta based on amount
         let delta = match amount {
@@ -242,15 +252,18 @@ impl ToolExecutionService {
         );
 
         // Log the relationship change in conversation history
-        session.add_npc_response(
-            "System",
-            &format!(
-                "Relationship {}: {} ({})",
-                change.as_str(),
-                amount.as_str(),
-                reason
-            ),
-        );
+        session
+            .add_to_conversation_history(
+                session_id,
+                "System",
+                &format!(
+                    "Relationship {}: {} ({})",
+                    change.as_str(),
+                    amount.as_str(),
+                    reason
+                ),
+            )
+            .map_err(|e| ToolExecutionError::ExecutionError(e.to_string()))?;
 
         let state_change = StateChange::RelationshipChanged {
             from: "NPC".to_string(),
@@ -267,21 +280,25 @@ impl ToolExecutionService {
 
     /// Execute TriggerEvent tool - logs and triggers an event
     #[instrument(skip(self, session))]
-    async fn execute_trigger_event(
+    async fn execute_trigger_event<S: SessionManagementPort>(
         &self,
         event_type: &str,
         description: &str,
-        session: &mut impl GameSessionPort,
+        session: &mut S,
+        session_id: SessionId,
     ) -> Result<ToolExecutionResult, ToolExecutionError> {
         let description_msg = format!("Triggered {} event: {}", event_type, description);
 
         info!("Event triggered: {}", description_msg);
 
         // Log the event in conversation history
-        session.add_npc_response(
-            "System",
-            &format!("[EVENT: {}] {}", event_type, description),
-        );
+        session
+            .add_to_conversation_history(
+                session_id,
+                "System",
+                &format!("[EVENT: {}] {}", event_type, description),
+            )
+            .map_err(|e| ToolExecutionError::ExecutionError(e.to_string()))?;
 
         let state_change = StateChange::EventTriggered {
             name: format!("{}: {}", event_type, description),
@@ -305,32 +322,116 @@ impl Default for ToolExecutionService {
 mod tests {
     use super::*;
 
-    /// Fake implementation of GameSessionPort for testing
+    /// Fake implementation of SessionManagementPort for testing
     /// This avoids depending on infrastructure types in application layer tests
-    struct FakeGameSession {
+    struct FakeSessionManager {
         conversation_history: Vec<(String, String)>,
+        session_id: SessionId,
     }
 
-    impl FakeGameSession {
+    impl FakeSessionManager {
         fn new() -> Self {
             Self {
                 conversation_history: Vec::new(),
+                session_id: SessionId::new(),
             }
         }
     }
 
-    impl GameSessionPort for FakeGameSession {
-        fn add_npc_response(&mut self, speaker: &str, text: &str) {
-            self.conversation_history.push((speaker.to_string(), text.to_string()));
+    impl SessionManagementPort for FakeSessionManager {
+        fn get_client_session(&self, _client_id: &str) -> Option<SessionId> {
+            Some(self.session_id)
         }
 
-        fn history_length(&self) -> usize {
-            self.conversation_history.len()
+        fn is_client_dm(&self, _client_id: &str) -> bool {
+            false
+        }
+
+        fn get_client_user_id(&self, _client_id: &str) -> Option<String> {
+            None
+        }
+
+        fn get_pending_approval(
+            &self,
+            _session_id: SessionId,
+            _request_id: &str,
+        ) -> Option<crate::application::ports::outbound::PendingApprovalInfo> {
+            None
+        }
+
+        fn add_pending_approval(
+            &mut self,
+            _session_id: SessionId,
+            _approval: crate::application::ports::outbound::PendingApprovalInfo,
+        ) -> Result<(), crate::application::ports::outbound::SessionManagementError> {
+            Ok(())
+        }
+
+        fn remove_pending_approval(
+            &mut self,
+            _session_id: SessionId,
+            _request_id: &str,
+        ) -> Result<(), crate::application::ports::outbound::SessionManagementError> {
+            Ok(())
+        }
+
+        fn increment_retry_count(
+            &mut self,
+            _session_id: SessionId,
+            _request_id: &str,
+        ) -> Result<u32, crate::application::ports::outbound::SessionManagementError> {
+            Ok(0)
+        }
+
+        fn broadcast_to_players(
+            &self,
+            _session_id: SessionId,
+            _message: &crate::application::ports::outbound::BroadcastMessage,
+        ) -> Result<(), crate::application::ports::outbound::SessionManagementError> {
+            Ok(())
+        }
+
+        fn send_to_dm(
+            &self,
+            _session_id: SessionId,
+            _message: &crate::application::ports::outbound::BroadcastMessage,
+        ) -> Result<(), crate::application::ports::outbound::SessionManagementError> {
+            Ok(())
+        }
+
+        fn broadcast_except(
+            &self,
+            _session_id: SessionId,
+            _message: &crate::application::ports::outbound::BroadcastMessage,
+            _exclude_client: &str,
+        ) -> Result<(), crate::application::ports::outbound::SessionManagementError> {
+            Ok(())
+        }
+
+        fn add_to_conversation_history(
+            &mut self,
+            _session_id: SessionId,
+            speaker: &str,
+            text: &str,
+        ) -> Result<(), crate::application::ports::outbound::SessionManagementError> {
+            self.conversation_history.push((speaker.to_string(), text.to_string()));
+            Ok(())
+        }
+
+        fn session_has_dm(&self, _session_id: SessionId) -> bool {
+            false
+        }
+
+        fn get_session_world_context(
+            &self,
+            _session_id: SessionId,
+        ) -> Option<crate::application::ports::outbound::SessionWorldContext> {
+            None
         }
     }
 
-    fn create_test_session() -> FakeGameSession {
-        FakeGameSession::new()
+    fn create_test_session() -> FakeSessionManager {
+        FakeSessionManager::new()
     }
 
     #[tokio::test]
@@ -342,7 +443,8 @@ mod tests {
         };
 
         let mut session = create_test_session();
-        let result = service.execute_tool(&tool, &mut session).await.unwrap();
+        let session_id = session.session_id;
+        let result = service.execute_tool(&tool, &mut session, session_id).await.unwrap();
 
         assert!(result.success);
         assert!(result.description.contains("Mysterious Key"));
@@ -363,7 +465,8 @@ mod tests {
         };
 
         let mut session = create_test_session();
-        let result = service.execute_tool(&tool, &mut session).await.unwrap();
+        let session_id = session.session_id;
+        let result = service.execute_tool(&tool, &mut session, session_id).await.unwrap();
 
         assert!(result.success);
         assert!(result.description.contains("minor"));
@@ -380,7 +483,8 @@ mod tests {
         };
 
         let mut session = create_test_session();
-        let result = service.execute_tool(&tool, &mut session).await.unwrap();
+        let session_id = session.session_id;
+        let result = service.execute_tool(&tool, &mut session, session_id).await.unwrap();
 
         assert!(result.success);
         assert!(result.description.contains("critical"));
@@ -400,7 +504,8 @@ mod tests {
         };
 
         let mut session = create_test_session();
-        let result = service.execute_tool(&tool, &mut session).await.unwrap();
+        let session_id = session.session_id;
+        let result = service.execute_tool(&tool, &mut session, session_id).await.unwrap();
 
         assert!(result.success);
         assert!(result.description.contains("Improve"));
@@ -424,7 +529,8 @@ mod tests {
         };
 
         let mut session = create_test_session();
-        let result = service.execute_tool(&tool, &mut session).await.unwrap();
+        let session_id = session.session_id;
+        let result = service.execute_tool(&tool, &mut session, session_id).await.unwrap();
 
         assert!(result.success);
 
@@ -445,7 +551,8 @@ mod tests {
         };
 
         let mut session = create_test_session();
-        let result = service.execute_tool(&tool, &mut session).await.unwrap();
+        let session_id = session.session_id;
+        let result = service.execute_tool(&tool, &mut session, session_id).await.unwrap();
 
         assert!(result.success);
 
@@ -466,7 +573,8 @@ mod tests {
         };
 
         let mut session = create_test_session();
-        let result = service.execute_tool(&tool, &mut session).await.unwrap();
+        let session_id = session.session_id;
+        let result = service.execute_tool(&tool, &mut session, session_id).await.unwrap();
 
         assert!(result.success);
         assert!(result.description.contains("Worsen"));
@@ -487,7 +595,8 @@ mod tests {
         };
 
         let mut session = create_test_session();
-        let result = service.execute_tool(&tool, &mut session).await.unwrap();
+        let session_id = session.session_id;
+        let result = service.execute_tool(&tool, &mut session, session_id).await.unwrap();
 
         assert!(result.success);
         assert!(result.description.contains("combat"));
@@ -503,13 +612,14 @@ mod tests {
     async fn test_multiple_tools_sequence() {
         let service = ToolExecutionService::new();
         let mut session = create_test_session();
+        let session_id = session.session_id;
 
         // Execute multiple tools in sequence
         let tool1 = GameTool::GiveItem {
             item_name: "Sword".to_string(),
             description: "A sharp blade".to_string(),
         };
-        let result1 = service.execute_tool(&tool1, &mut session).await.unwrap();
+        let result1 = service.execute_tool(&tool1, &mut session, session_id).await.unwrap();
         assert!(result1.success);
 
         let tool2 = GameTool::RevealInfo {
@@ -517,7 +627,7 @@ mod tests {
             content: "Find the dragon".to_string(),
             importance: InfoImportance::Major,
         };
-        let result2 = service.execute_tool(&tool2, &mut session).await.unwrap();
+        let result2 = service.execute_tool(&tool2, &mut session, session_id).await.unwrap();
         assert!(result2.success);
 
         let tool3 = GameTool::ChangeRelationship {
@@ -525,10 +635,10 @@ mod tests {
             amount: ChangeAmount::Moderate,
             reason: "Helping out".to_string(),
         };
-        let result3 = service.execute_tool(&tool3, &mut session).await.unwrap();
+        let result3 = service.execute_tool(&tool3, &mut session, session_id).await.unwrap();
         assert!(result3.success);
 
         // Check that session history was updated
-        assert!(session.history_length() >= 3);
+        assert!(session.conversation_history.len() >= 3);
     }
 }

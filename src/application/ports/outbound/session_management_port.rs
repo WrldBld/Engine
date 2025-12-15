@@ -4,7 +4,7 @@
 //! allowing the infrastructure to provide the concrete implementation while
 //! maintaining hexagonal architecture boundaries.
 
-use crate::domain::value_objects::{SessionId, WorldId};
+use crate::domain::value_objects::{ProposedToolInfo, SessionId, WorldId};
 use std::collections::HashMap;
 
 /// Information about a pending approval request
@@ -22,19 +22,6 @@ pub struct PendingApprovalInfo {
     pub proposed_tools: Vec<ProposedToolInfo>,
     /// Number of times this has been rejected and retried
     pub retry_count: u32,
-}
-
-/// Information about a proposed tool call
-#[derive(Debug, Clone)]
-pub struct ProposedToolInfo {
-    /// Unique ID for this tool call
-    pub id: String,
-    /// Tool name
-    pub name: String,
-    /// Description of what the tool will do
-    pub description: String,
-    /// Tool arguments as JSON
-    pub arguments: serde_json::Value,
 }
 
 /// Result of joining a session
@@ -168,6 +155,13 @@ pub trait SessionManagementPort: Send + Sync {
         session_id: SessionId,
         message: &BroadcastMessage,
         exclude_client: &str,
+    ) -> Result<(), SessionManagementError>;
+
+    /// Broadcast a message to all participants in a session (players and DM)
+    fn broadcast_to_session(
+        &self,
+        session_id: SessionId,
+        message: &BroadcastMessage,
     ) -> Result<(), SessionManagementError>;
 
     /// Add an NPC response to the session's conversation history

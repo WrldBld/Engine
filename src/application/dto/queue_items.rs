@@ -6,18 +6,9 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::application::services::GamePromptRequest;
-use crate::domain::value_objects::{QueueItemId, SceneId, SessionId};
-use serde::{Deserialize, Serialize};
-
-/// Serializable version of ProposedToolInfo for queue items
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProposedToolInfo {
-    pub id: String,
-    pub name: String,
-    pub description: String,
-    pub arguments: serde_json::Value,
-}
+use crate::domain::value_objects::{
+    ApprovalDecision, GamePromptRequest, ProposedToolInfo, QueueItemId, SceneId, SessionId,
+};
 
 /// Player action waiting to be processed
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -55,21 +46,6 @@ pub enum DMAction {
     },
     TransitionScene {
         scene_id: SceneId,
-    },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum ApprovalDecision {
-    Accept,
-    AcceptWithModification {
-        modified_dialogue: String,
-        modified_tools: Option<Vec<ProposedToolInfo>>,
-    },
-    Reject {
-        feedback: String,
-    },
-    TakeOver {
-        dm_response: String,
     },
 }
 
