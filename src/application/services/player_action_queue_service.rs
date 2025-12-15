@@ -82,7 +82,8 @@ impl<Q: QueuePort<PlayerActionItem>, LQ: ProcessingQueuePort<LLMRequestItem>>
                 action_item_id: item_id,
             },
             session_id: Some(session_id),
-            prompt,
+            prompt: Some(prompt),
+            suggestion_context: None,
             callback_id: item_id.to_string(),
         };
 

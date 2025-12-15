@@ -60,6 +60,7 @@ pub trait SkillService: Send + Sync {
 }
 
 /// Default implementation of SkillService using port abstractions
+#[derive(Clone)]
 pub struct SkillServiceImpl {
     skill_repository: Arc<dyn SkillRepositoryPort>,
     world_repository: Arc<dyn WorldRepositoryPort>,

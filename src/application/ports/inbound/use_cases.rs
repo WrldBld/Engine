@@ -2,6 +2,11 @@
 //!
 //! These traits define what the application can do, without specifying how.
 //! They are implemented by application services.
+//!
+//! **Status**: Planned for Phase 3.1 DDD implementation
+//! Currently unused - services will implement these traits in the future
+
+#![allow(dead_code)]
 
 use async_trait::async_trait;
 

@@ -11,6 +11,10 @@ use crate::domain::value_objects::{WorldId, ActId, SceneId, CharacterId, Locatio
 ///
 /// Contains all entities that belong to a world and provides methods
 /// to modify them while maintaining consistency invariants.
+///
+/// **Status**: Planned for Phase 3.1 DDD implementation
+/// Currently unused - will be wired when aggregate pattern is fully implemented
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct WorldAggregate {
     /// The root world entity
@@ -195,6 +199,9 @@ impl WorldAggregate {
 }
 
 /// Errors that can occur when modifying the aggregate
+///
+/// **Status**: Planned for Phase 3.1 DDD implementation
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum AggregateError {
     /// A validation rule was violated

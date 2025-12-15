@@ -10,7 +10,6 @@
 //! - State: Shared application state
 //! - Session: Game session management
 
-pub mod asset_manager;
 pub mod comfyui;
 pub mod config;
 pub mod export;

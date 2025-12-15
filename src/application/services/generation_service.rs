@@ -30,6 +30,27 @@ pub enum GenerationEvent {
     BatchComplete { batch_id: BatchId, asset_count: u32 },
     /// A batch has failed
     BatchFailed { batch_id: BatchId, error: String },
+    /// A suggestion request has been queued
+    SuggestionQueued {
+        request_id: String,
+        field_type: String,
+        entity_id: Option<String>,
+    },
+    /// A suggestion request is being processed
+    SuggestionProgress {
+        request_id: String,
+        status: String,
+    },
+    /// A suggestion request has completed
+    SuggestionComplete {
+        request_id: String,
+        suggestions: Vec<String>,
+    },
+    /// A suggestion request has failed
+    SuggestionFailed {
+        request_id: String,
+        error: String,
+    },
 }
 
 /// Request to generate assets

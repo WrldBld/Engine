@@ -18,8 +18,9 @@ use tokio::sync::mpsc;
 use crate::application::dto::{ChallengeSuggestionInfo, DMAction, NarrativeEventSuggestionInfo};
 use crate::application::ports::outbound::PlayerWorldSnapshot;
 use crate::application::services::{
-    ChallengeService, InteractionService, SceneService, WorldService,
+    ChallengeService, InteractionService, SceneService, SkillService, WorldService,
 };
+use crate::application::services::narrative_event_service::NarrativeEventService;
 use crate::domain::entities::OutcomeType;
 use crate::domain::value_objects::{ActionId, ApprovalDecision, ProposedToolInfo, SessionId, WorldId};
 use crate::infrastructure::session::{ClientId, SessionError, WorldSnapshot};
@@ -473,8 +474,6 @@ async fn handle_message(
                     message: "Only the DM can approve responses".to_string(),
                 });
             }
-
-            None
         }
 
         ClientMessage::ChallengeRoll {
@@ -531,8 +530,9 @@ async fn handle_message(
                 }
             };
 
-            // TODO: Get actual character modifier from character sheet
-            // For now, use a placeholder modifier of 0
+            // TODO (Phase 14C integration): Get actual character modifier from character sheet
+            // Requires: Character sheet data loaded into session, player-to-character mapping
+            // For now, use a placeholder modifier of 0 until character sheets are integrated
             let character_modifier = 0;
 
             // Evaluate challenge result
@@ -613,11 +613,23 @@ async fn handle_message(
                 }
             };
 
-            // TODO: Get skill name from skill service using challenge.skill_id
-            let skill_name = challenge.skill_id.to_string(); // Placeholder
+            // Look up skill name from skill service
+            let skill_name = match state.skill_service.get_skill(challenge.skill_id).await {
+                Ok(Some(skill)) => skill.name,
+                Ok(None) => {
+                    tracing::warn!("Skill {} not found for challenge", challenge.skill_id);
+                    challenge.skill_id.to_string()
+                }
+                Err(e) => {
+                    tracing::error!("Failed to look up skill {}: {}", challenge.skill_id, e);
+                    challenge.skill_id.to_string()
+                }
+            };
 
-            // TODO: Get character modifier from character sheet
-            let character_modifier = 0; // Placeholder
+            // TODO (Phase 14C integration): Get character modifier from character sheet
+            // Requires: Character sheet data loaded into session, player-to-character mapping
+            // For now, use a placeholder modifier of 0 until character sheets are integrated
+            let character_modifier = 0;
 
             // Build ChallengePrompt message
             let prompt = ServerMessage::ChallengePrompt {
@@ -680,19 +692,97 @@ async fn handle_message(
             }
 
             if approved {
-                // TODO: Extract challenge_id from request_id (approval item)
-                // For now, the challenge suggestion is stored in the approval item
-                // This would require looking up the approval item and extracting the challenge_id
-                tracing::info!(
-                    "DM approved challenge suggestion for request {}",
-                    request_id
-                );
-                // TODO: Trigger the challenge with modified_difficulty if provided
+                // Look up the approval item to get challenge details
+                let approval_item = state.dm_approval_queue_service.get_by_id(&request_id).await;
+                
+                match approval_item {
+                    Ok(Some(item)) => {
+                        if let Some(challenge_suggestion) = &item.payload.challenge_suggestion {
+                            // Parse challenge_id from the suggestion
+                            let challenge_uuid = match uuid::Uuid::parse_str(&challenge_suggestion.challenge_id) {
+                                Ok(uuid) => crate::domain::value_objects::ChallengeId::from_uuid(uuid),
+                                Err(_) => {
+                                    tracing::error!("Invalid challenge_id in suggestion: {}", challenge_suggestion.challenge_id);
+                                    return Some(ServerMessage::Error {
+                                        code: "INVALID_CHALLENGE_ID".to_string(),
+                                        message: "Invalid challenge ID format".to_string(),
+                                    });
+                                }
+                            };
+                            
+                            // Load the challenge
+                            let challenge = match state.challenge_service.get_challenge(challenge_uuid).await {
+                                Ok(Some(c)) => c,
+                                Ok(None) => {
+                                    tracing::error!("Challenge {} not found", challenge_suggestion.challenge_id);
+                                    return Some(ServerMessage::Error {
+                                        code: "CHALLENGE_NOT_FOUND".to_string(),
+                                        message: format!("Challenge {} not found", challenge_suggestion.challenge_id),
+                                    });
+                                }
+                                Err(e) => {
+                                    tracing::error!("Failed to load challenge: {}", e);
+                                    return Some(ServerMessage::Error {
+                                        code: "CHALLENGE_LOAD_ERROR".to_string(),
+                                        message: format!("Failed to load challenge: {}", e),
+                                    });
+                                }
+                            };
+                            
+                            // Apply modified difficulty if provided
+                            let difficulty_display = if let Some(mod_diff) = modified_difficulty {
+                                mod_diff
             } else {
+                                challenge.difficulty.display()
+                            };
+                            
+                            // TODO (Phase 14C integration): Get actual character modifier from character sheet
+                            let character_modifier = 0;
+                            
+                            // Broadcast ChallengePrompt to players
+                            let prompt = ServerMessage::ChallengePrompt {
+                                challenge_id: challenge_suggestion.challenge_id.clone(),
+                                challenge_name: challenge.name.clone(),
+                                skill_name: challenge_suggestion.skill_name.clone(),
+                                difficulty_display,
+                                description: challenge.description.clone(),
+                                character_modifier,
+                            };
+                            
+                            let sessions_read = state.sessions.read().await;
+                            if let Some(session_id) = sessions_read.get_client_session(client_id) {
+                                sessions_read.broadcast_to_session(session_id, &prompt);
+                            }
+                            
                 tracing::info!(
-                    "DM rejected challenge suggestion for request {}",
-                    request_id
-                );
+                                "Triggered challenge '{}' for session via suggestion approval",
+                                challenge.name
+                            );
+                        } else {
+                            tracing::warn!("No challenge suggestion found in approval item {}", request_id);
+                            return Some(ServerMessage::Error {
+                                code: "NO_CHALLENGE_SUGGESTION".to_string(),
+                                message: "No challenge suggestion found in approval request".to_string(),
+                            });
+                        }
+                    }
+                    Ok(None) => {
+                        tracing::error!("Approval item {} not found", request_id);
+                        return Some(ServerMessage::Error {
+                            code: "APPROVAL_NOT_FOUND".to_string(),
+                            message: format!("Approval request {} not found", request_id),
+                        });
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to get approval item: {}", e);
+                        return Some(ServerMessage::Error {
+                            code: "APPROVAL_LOOKUP_ERROR".to_string(),
+                            message: format!("Failed to look up approval: {}", e),
+                        });
+                    }
+                }
+            } else {
+                tracing::info!("DM rejected challenge suggestion for request {}", request_id);
             }
 
             None
@@ -720,15 +810,110 @@ async fn handle_message(
                     if let Some(dm) = session.get_dm() {
                         if dm.client_id == client_id {
                             if approved {
-                                // TODO: Implement narrative event triggering
                                 // 1. Load the narrative event from repository
-                                // 2. Mark it as triggered (with selected_outcome)
-                                // 3. Execute any immediate effects
+                                let event_uuid = match uuid::Uuid::parse_str(&event_id) {
+                                    Ok(uuid) => crate::domain::value_objects::NarrativeEventId::from_uuid(uuid),
+                                    Err(_) => {
+                                        tracing::error!("Invalid event_id: {}", event_id);
+                                        return Some(ServerMessage::Error {
+                                            code: "INVALID_EVENT_ID".to_string(),
+                                            message: "Invalid narrative event ID format".to_string(),
+                                        });
+                                    }
+                                };
+                                
+                                let narrative_event = match state.narrative_event_service.get(event_uuid).await {
+                                    Ok(Some(event)) => event,
+                                    Ok(None) => {
+                                        tracing::error!("Narrative event {} not found", event_id);
+                                        return Some(ServerMessage::Error {
+                                            code: "EVENT_NOT_FOUND".to_string(),
+                                            message: format!("Narrative event {} not found", event_id),
+                                        });
+                                    }
+                                    Err(e) => {
+                                        tracing::error!("Failed to load narrative event: {}", e);
+                                        return Some(ServerMessage::Error {
+                                            code: "EVENT_LOAD_ERROR".to_string(),
+                                            message: format!("Failed to load narrative event: {}", e),
+                                        });
+                                    }
+                                };
+                                
+                                // 2. Find the selected outcome (or default to first)
+                                let outcome = if let Some(outcome_name) = &selected_outcome {
+                                    narrative_event.outcomes.iter()
+                                        .find(|o| o.name == *outcome_name)
+                                        .cloned()
+                                        .or_else(|| narrative_event.outcomes.first().cloned())
+                                } else {
+                                    narrative_event.outcomes.first().cloned()
+                                };
+                                
+                                let outcome = match outcome {
+                                    Some(o) => o,
+                                    None => {
+                                        tracing::error!("Narrative event {} has no outcomes", event_id);
+                                        return Some(ServerMessage::Error {
+                                            code: "NO_OUTCOMES".to_string(),
+                                            message: format!("Narrative event {} has no outcomes", event_id),
+                                        });
+                                    }
+                                };
+                                
+                                // 3. Mark event as triggered
+                                if let Err(e) = state.narrative_event_service.mark_triggered(
+                                    event_uuid, 
+                                    Some(outcome.name.clone())
+                                ).await {
+                                    tracing::error!("Failed to mark narrative event as triggered: {}", e);
+                                }
+                                
                                 // 4. Record a StoryEvent for the timeline
+                                let session_id_for_story = session_id.to_string();
+                                let session_uuid = match uuid::Uuid::parse_str(&session_id_for_story) {
+                                    Ok(uuid) => crate::domain::value_objects::SessionId::from_uuid(uuid),
+                                    Err(_) => {
+                                        tracing::warn!("Invalid session_id for story event: {}", session_id_for_story);
+                                        crate::domain::value_objects::SessionId::from_uuid(uuid::Uuid::nil())
+                                    }
+                                };
+                                
+                                if let Err(e) = state.story_event_service.record_narrative_event_triggered(
+                                    narrative_event.world_id,
+                                    session_uuid,
+                                    None, // scene_id
+                                    None, // location_id
+                                    event_uuid,
+                                    narrative_event.name.clone(),
+                                    Some(outcome.name.clone()),
+                                    outcome.effects.iter().map(|e| format!("{:?}", e)).collect(),
+                                    vec![], // involved_characters
+                                    None, // game_time
+                                ).await {
+                                    tracing::error!("Failed to record story event: {}", e);
+                                }
+                                
                                 // 5. Broadcast scene direction to DM
+                                drop(sessions); // Release read lock before new lock
+                                let sessions_read = state.sessions.read().await;
+                                let scene_direction = ServerMessage::NarrativeEventTriggered {
+                                    event_id: event_id.clone(),
+                                    event_name: narrative_event.name.clone(),
+                                    outcome_description: outcome.description.clone(),
+                                    scene_direction: narrative_event.scene_direction.clone(),
+                                };
+                                
+                                if let Some(sid) = sessions_read.get_client_session(client_id) {
+                                    if let Some(session) = sessions_read.get_session(sid) {
+                                        session.send_to_dm(&scene_direction);
+                                    }
+                                }
+                                
                                 tracing::info!(
-                                    "DM approved narrative event {} trigger for request {}",
-                                    event_id,
+                                    "Triggered narrative event '{}' with outcome '{}' for request {}",
+                                    narrative_event.name,
+                                    outcome.description,
                                     request_id
                                 );
                             } else {
@@ -1257,6 +1442,13 @@ pub enum ServerMessage {
         outcome: String,
         outcome_description: String,
     },
+    /// Narrative event has been triggered
+    NarrativeEventTriggered {
+        event_id: String,
+        event_name: String,
+        outcome_description: String,
+        scene_direction: String,
+    },
     /// Error message
     Error { code: String, message: String },
     /// Heartbeat response
@@ -1280,6 +1472,27 @@ pub enum ServerMessage {
     },
     /// Generation batch failed
     GenerationFailed { batch_id: String, error: String },
+    /// A suggestion request has been queued
+    SuggestionQueued {
+        request_id: String,
+        field_type: String,
+        entity_id: Option<String>,
+    },
+    /// A suggestion request is being processed
+    SuggestionProgress {
+        request_id: String,
+        status: String,
+    },
+    /// A suggestion request has completed
+    SuggestionComplete {
+        request_id: String,
+        suggestions: Vec<String>,
+    },
+    /// A suggestion request has failed
+    SuggestionFailed {
+        request_id: String,
+        error: String,
+    },
 }
 
 /// Information about a session participant

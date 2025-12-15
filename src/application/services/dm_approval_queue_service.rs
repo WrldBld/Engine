@@ -39,6 +39,14 @@ impl<Q: ApprovalQueuePort<ApprovalItem>> DMApprovalQueueService<Q> {
         self.queue.list_by_session(session_id).await
     }
 
+    /// Get an approval item by its string ID
+    pub async fn get_by_id(&self, id: &str) -> Result<Option<QueueItem<ApprovalItem>>, QueueError> {
+        let uuid = uuid::Uuid::parse_str(id)
+            .map_err(|e| QueueError::Backend(format!("Invalid UUID: {}", e)))?;
+        let item_id = QueueItemId::from_uuid(uuid);
+        self.queue.get(item_id).await
+    }
+
     /// Process DM approval decision
     ///
     /// This method handles the DM's decision on an approval request and

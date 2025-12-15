@@ -49,10 +49,6 @@ pub struct QueueConfig {
     pub history_retention_hours: u64,
     /// How long before pending approvals expire (minutes)
     pub approval_timeout_minutes: u64,
-    /// Polling interval when queue is empty (milliseconds)
-    pub worker_poll_interval_ms: u64,
-    /// Delay after error before retrying (milliseconds)
-    pub worker_error_delay_ms: u64,
     /// Cleanup worker interval (seconds)
     pub cleanup_interval_seconds: u64,
     /// Recovery poll interval for crash recovery (seconds)
@@ -110,14 +106,6 @@ impl AppConfig {
                     .unwrap_or_else(|_| "30".to_string())
                     .parse()
                     .unwrap_or(30),
-                worker_poll_interval_ms: env::var("QUEUE_WORKER_POLL_INTERVAL_MS")
-                    .unwrap_or_else(|_| "100".to_string())
-                    .parse()
-                    .unwrap_or(100),
-                worker_error_delay_ms: env::var("QUEUE_WORKER_ERROR_DELAY_MS")
-                    .unwrap_or_else(|_| "1000".to_string())
-                    .parse()
-                    .unwrap_or(1000),
                 cleanup_interval_seconds: env::var("QUEUE_CLEANUP_INTERVAL_SECONDS")
                     .unwrap_or_else(|_| "3600".to_string())
                     .parse()

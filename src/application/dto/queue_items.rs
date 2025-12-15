@@ -54,7 +54,10 @@ pub enum DMAction {
 pub struct LLMRequestItem {
     pub request_type: LLMRequestType,
     pub session_id: Option<SessionId>,
-    pub prompt: GamePromptRequest,
+    #[serde(default)]
+    pub prompt: Option<GamePromptRequest>, // None for suggestions
+    #[serde(default)]
+    pub suggestion_context: Option<crate::application::services::SuggestionContext>, // Some for suggestions
     pub callback_id: String, // For routing response back
 }
 

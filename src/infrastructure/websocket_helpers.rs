@@ -7,6 +7,7 @@ use crate::application::dto::PlayerActionItem;
 use crate::application::ports::outbound::QueueError;
 use crate::application::services::{
     ChallengeService, ChallengeServiceImpl, NarrativeEventService, NarrativeEventServiceImpl,
+    SkillService, SkillServiceImpl,
 };
 use crate::domain::value_objects::{
     ActiveChallengeContext, ActiveNarrativeEventContext, CharacterContext, ConversationTurn,
@@ -20,6 +21,7 @@ use tokio::sync::RwLock;
 pub async fn build_prompt_from_action(
     sessions: &Arc<RwLock<SessionManager>>,
     challenge_service: &Arc<ChallengeServiceImpl>,
+    skill_service: &Arc<SkillServiceImpl>,
     narrative_event_service: &Arc<NarrativeEventServiceImpl>,
     action: &PlayerActionItem,
 ) -> Result<GamePromptRequest, QueueError> {
@@ -133,21 +135,37 @@ pub async fn build_prompt_from_action(
         .list_active(world_id)
         .await
     {
-        Ok(challenges) => challenges
-            .into_iter()
-            .map(|c| ActiveChallengeContext {
-                id: c.id.to_string(),
-                name: c.name,
-                skill_name: c.skill_id.to_string(), // TODO: Look up actual skill name from skill service
-                difficulty_display: c.difficulty.display(),
-                description: c.description,
-                trigger_hints: c
-                    .trigger_conditions
-                    .iter()
-                    .map(|t| t.description.clone())
-                    .collect(),
-            })
-            .collect(),
+        Ok(challenges) => {
+            let mut contexts = Vec::new();
+            for c in challenges {
+                // Look up skill name
+                let skill_name = match skill_service.get_skill(c.skill_id).await {
+                    Ok(Some(skill)) => skill.name,
+                    Ok(None) => {
+                        tracing::warn!("Skill {} not found for challenge {}", c.skill_id, c.id);
+                        c.skill_id.to_string()
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to look up skill {}: {}", c.skill_id, e);
+                        c.skill_id.to_string()
+                    }
+                };
+
+                contexts.push(ActiveChallengeContext {
+                    id: c.id.to_string(),
+                    name: c.name,
+                    skill_name,
+                    difficulty_display: c.difficulty.display(),
+                    description: c.description,
+                    trigger_hints: c
+                        .trigger_conditions
+                        .iter()
+                        .map(|t| t.description.clone())
+                        .collect(),
+                });
+            }
+            contexts
+        }
         Err(e) => {
             tracing::warn!("Failed to load active challenges: {}", e);
             vec![]

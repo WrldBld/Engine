@@ -7,11 +7,12 @@ use tokio::sync::RwLock;
 
 use crate::application::services::{
     AssetGenerationQueueService, AssetServiceImpl, ChallengeServiceImpl, CharacterServiceImpl,
-    DMActionQueueService, DMApprovalQueueService, EventChainServiceImpl, InteractionServiceImpl,
-    LLMQueueService, LocationServiceImpl, NarrativeEventServiceImpl, PlayerActionQueueService,
-    SceneServiceImpl, SheetTemplateService, SkillServiceImpl, StoryEventService,
-    RelationshipServiceImpl, WorkflowConfigService, WorldServiceImpl,
+    DMActionQueueService, DMApprovalQueueService, EventChainServiceImpl,
+    InteractionServiceImpl, LLMQueueService, LocationServiceImpl, NarrativeEventServiceImpl,
+    PlayerActionQueueService, SceneServiceImpl, SheetTemplateService, SkillServiceImpl,
+    StoryEventService, RelationshipServiceImpl, WorkflowConfigService, WorldServiceImpl,
 };
+use crate::application::services::generation_service::{GenerationService, GenerationEvent};
 use crate::application::dto::{
     ApprovalItem, AssetGenerationItem, DMActionItem, LLMRequestItem, PlayerActionItem,
 };
@@ -26,7 +27,12 @@ use crate::infrastructure::session::SessionManager;
 /// Shared application state
 pub struct AppState {
     pub config: AppConfig,
-    /// Neo4j repository - now private, all access goes through services
+    /// Neo4j repository - kept for potential direct access, normally use services
+    ///
+    /// This field is private and marked `#[allow(dead_code)]` because all data access
+    /// should go through the individual repository ports (world_repo, character_repo, etc.)
+    /// which provide proper trait-based abstraction. This field is retained in case
+    /// direct repository access is needed for advanced operations.
     #[allow(dead_code)]
     repository: Neo4jRepository,
     pub llm_client: OllamaClient,
@@ -48,6 +54,7 @@ pub struct AppState {
     pub asset_service: AssetServiceImpl,
     pub workflow_config_service: WorkflowConfigService,
     pub sheet_template_service: SheetTemplateService,
+    pub generation_service: Arc<GenerationService>,
     // Queue services - using QueueBackendEnum for runtime backend selection
     // Note: Services take Arc<Q> where Q implements the port, so Q = QueueBackendEnum<T>
     // (not Arc<QueueBackendEnum<T>>) since Arc<QueueBackendEnum<T>> implements the port
@@ -68,7 +75,7 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub async fn new(config: AppConfig) -> Result<Self> {
+    pub async fn new(config: AppConfig) -> Result<(Self, tokio::sync::mpsc::UnboundedReceiver<GenerationEvent>)> {
         // Initialize Neo4j repository
         let repository = Neo4jRepository::new(
             &config.neo4j_uri,
@@ -128,11 +135,11 @@ impl AppState {
         let location_service = LocationServiceImpl::new(world_repo.clone(), location_repo.clone());
         let relationship_service = RelationshipServiceImpl::new(relationship_repo);
         let scene_service = SceneServiceImpl::new(scene_repo, location_repo, character_repo);
-        let skill_service = SkillServiceImpl::new(skill_repo, world_repo);
+        let skill_service = SkillServiceImpl::new(skill_repo.clone(), world_repo);
         let interaction_service = InteractionServiceImpl::new(interaction_repo);
         let story_event_service = StoryEventService::new(story_event_repo);
-        let challenge_service = ChallengeServiceImpl::new(challenge_repo);
-        let narrative_event_service = NarrativeEventServiceImpl::new(narrative_event_repo);
+        let challenge_service = ChallengeServiceImpl::new(challenge_repo.clone());
+        let narrative_event_service = NarrativeEventServiceImpl::new(narrative_event_repo.clone());
         let event_chain_service = EventChainServiceImpl::new(event_chain_repo);
         let asset_repo_for_service = asset_repo.clone();
         let asset_service = AssetServiceImpl::new(asset_repo_for_service);
@@ -158,13 +165,21 @@ impl AppState {
 
         let dm_action_queue_service = Arc::new(DMActionQueueService::new(dm_action_queue.clone()));
 
+        // Create event channel for generation service (needed for LLMQueueService suggestions)
+        let (generation_event_tx, generation_event_rx) = tokio::sync::mpsc::unbounded_channel();
+        let generation_event_tx_for_llm = generation_event_tx.clone();
+
         let llm_client_arc = Arc::new(llm_client.clone());
         let llm_queue_service = Arc::new(LLMQueueService::new(
             llm_queue.clone(),
             llm_client_arc,
             approval_queue.clone(),
+            challenge_repo.clone(),
+            skill_repo.clone(),
+            narrative_event_repo.clone(),
             queue_factory.config().llm_batch_size,
             queue_factory.llm_notifier(),
+            generation_event_tx_for_llm,
         ));
 
         let asset_repo_for_queue = asset_repo.clone();
@@ -178,7 +193,16 @@ impl AppState {
 
         let dm_approval_queue_service = Arc::new(DMApprovalQueueService::new(approval_queue.clone()));
 
-        Ok(Self {
+        // Create generation service (generation_event_tx already created above)
+        let generation_service = Arc::new(GenerationService::new(
+            Arc::new(comfyui_client.clone()) as Arc<dyn crate::application::ports::outbound::ComfyUIPort>,
+            asset_repo.clone(),
+            std::path::PathBuf::from("./data/assets"),
+            std::path::PathBuf::from("./workflows"),
+            generation_event_tx,
+        ));
+
+        Ok((Self {
             config: config.clone(),
             repository,
             llm_client,
@@ -200,11 +224,12 @@ impl AppState {
             asset_service,
             workflow_config_service,
             sheet_template_service,
+            generation_service,
             player_action_queue_service,
             dm_action_queue_service,
             llm_queue_service,
             asset_generation_queue_service,
             dm_approval_queue_service,
-        })
+        }, generation_event_rx))
     }
 }

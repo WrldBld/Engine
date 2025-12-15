@@ -13,7 +13,6 @@ mod infrastructure;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use std::time::Duration;
 use axum::{routing::get, Router};
 use crate::application::ports::outbound::{ApprovalQueuePort, QueueNotificationPort, QueuePort};
 use tower_http::{
@@ -52,7 +51,7 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("  ComfyUI: {}", config.comfyui_base_url);
 
     // Initialize application state
-    let state = AppState::new(config).await?;
+    let (state, generation_event_rx) = AppState::new(config).await?;
     let state = Arc::new(state);
     tracing::info!("Application state initialized");
 
@@ -84,6 +83,7 @@ async fn main() -> anyhow::Result<()> {
         let service = state.player_action_queue_service.clone();
         let sessions = state.sessions.clone();
         let challenge_service = Arc::new(state.challenge_service.clone());
+        let skill_service = Arc::new(state.skill_service.clone());
         let narrative_event_service = Arc::new(state.narrative_event_service.clone());
         let notifier = service.queue.notifier();
         let recovery_interval_clone = recovery_interval;
@@ -92,16 +92,19 @@ async fn main() -> anyhow::Result<()> {
             loop {
                 let sessions_clone = sessions.clone();
                 let challenge_service_clone = challenge_service.clone();
+                let skill_service_clone = skill_service.clone();
                 let narrative_event_service_clone = narrative_event_service.clone();
                 match service
                     .process_next(|action| {
                         let sessions = sessions_clone.clone();
                         let challenge_service = challenge_service_clone.clone();
+                        let skill_service = skill_service_clone.clone();
                         let narrative_event_service = narrative_event_service_clone.clone();
                         async move {
                         build_prompt_from_action(
                             &sessions,
                             &challenge_service,
+                            &skill_service,
                             &narrative_event_service,
                                 &action,
                         )
@@ -189,6 +192,93 @@ async fn main() -> anyhow::Result<()> {
         })
     };
 
+    // Generation event broadcaster (broadcasts generation events to WebSocket clients)
+    let generation_event_worker = {
+        let sessions = state.sessions.clone();
+        let mut rx = generation_event_rx;
+        tokio::spawn(async move {
+            tracing::info!("Starting generation event broadcaster");
+            while let Some(event) = rx.recv().await {
+                use crate::application::services::generation_service::GenerationEvent;
+                use crate::infrastructure::websocket::ServerMessage;
+                
+                // Convert GenerationEvent to ServerMessage
+                let message = match event {
+                    GenerationEvent::BatchQueued { batch_id, position } => {
+                        tracing::debug!("Broadcasting BatchQueued event: batch_id={}, position={}", batch_id, position);
+                        // We don't have entity details in the event, so we'll use placeholder values
+                        // This should be improved in a future iteration to include entity details
+                        ServerMessage::GenerationQueued {
+                            batch_id: batch_id.to_string(),
+                            entity_type: "unknown".to_string(),
+                            entity_id: "unknown".to_string(),
+                            asset_type: "unknown".to_string(),
+                            position,
+                        }
+                    }
+                    GenerationEvent::BatchProgress { batch_id, progress } => {
+                        tracing::debug!("Broadcasting BatchProgress event: batch_id={}, progress={}%", batch_id, progress);
+                        ServerMessage::GenerationProgress {
+                            batch_id: batch_id.to_string(),
+                            progress,
+                        }
+                    }
+                    GenerationEvent::BatchComplete { batch_id, asset_count } => {
+                        tracing::info!("Broadcasting BatchComplete event: batch_id={}, asset_count={}", batch_id, asset_count);
+                        ServerMessage::GenerationComplete {
+                            batch_id: batch_id.to_string(),
+                            asset_count,
+                        }
+                    }
+                    GenerationEvent::BatchFailed { batch_id, error } => {
+                        tracing::warn!("Broadcasting BatchFailed event: batch_id={}, error={}", batch_id, error);
+                        ServerMessage::GenerationFailed {
+                            batch_id: batch_id.to_string(),
+                            error,
+                        }
+                    }
+                    GenerationEvent::SuggestionQueued { request_id, field_type, entity_id } => {
+                        tracing::debug!("Broadcasting SuggestionQueued event: request_id={}, field_type={}", request_id, field_type);
+                        ServerMessage::SuggestionQueued {
+                            request_id,
+                            field_type,
+                            entity_id,
+                        }
+                    }
+                    GenerationEvent::SuggestionProgress { request_id, status } => {
+                        tracing::debug!("Broadcasting SuggestionProgress event: request_id={}, status={}", request_id, status);
+                        ServerMessage::SuggestionProgress {
+                            request_id,
+                            status,
+                        }
+                    }
+                    GenerationEvent::SuggestionComplete { request_id, suggestions } => {
+                        tracing::info!("Broadcasting SuggestionComplete event: request_id={}, count={}", request_id, suggestions.len());
+                        ServerMessage::SuggestionComplete {
+                            request_id,
+                            suggestions,
+                        }
+                    }
+                    GenerationEvent::SuggestionFailed { request_id, error } => {
+                        tracing::warn!("Broadcasting SuggestionFailed event: request_id={}, error={}", request_id, error);
+                        ServerMessage::SuggestionFailed {
+                            request_id,
+                            error,
+                        }
+                    }
+                };
+                
+                // Broadcast to all connected clients
+                // In a future iteration, we could broadcast only to clients in the relevant session/world
+                let sessions = sessions.read().await;
+                for session_id in sessions.get_session_ids() {
+                    sessions.broadcast_to_session(session_id, &message);
+                }
+            }
+            tracing::info!("Generation event broadcaster stopped");
+        })
+    };
+
     tracing::info!("Background queue workers started");
 
     // Get server port before moving state
@@ -234,6 +324,7 @@ async fn main() -> anyhow::Result<()> {
             approval_notification_worker_task.abort();
             dm_action_worker_task.abort();
             cleanup_worker.abort();
+            generation_event_worker.abort();
             tracing::info!("Workers stopped");
         }
     }

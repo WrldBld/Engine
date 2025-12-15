@@ -6,6 +6,9 @@
 //! - Notifying other parts of the system
 //! - Audit logging
 //! - Triggering side effects
+//!
+//! **Status**: Planned for Phase 3.1 DDD implementation
+//! Currently unused - will be wired with event publisher/subscriber
 
 use chrono::{DateTime, Utc};
 
@@ -14,6 +17,9 @@ use crate::domain::value_objects::{
 };
 
 /// Base data for all events
+///
+/// **Status**: Planned for Phase 3.1
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct EventMetadata {
     /// When the event occurred
@@ -32,6 +38,9 @@ impl Default for EventMetadata {
 }
 
 /// All domain events in the system
+///
+/// **Status**: Planned for Phase 3.1
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum DomainEvent {
     // ========================================================================
