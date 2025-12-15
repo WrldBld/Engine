@@ -16,7 +16,7 @@ use crate::application::services::{
 };
 use crate::domain::value_objects::{NarrativeEventId, ProposedToolInfo};
 use crate::infrastructure::session::SessionManager;
-use crate::infrastructure::websocket::{
+use crate::infrastructure::websocket::messages::{
     CharacterData, CharacterPosition, InteractionData, SceneData, ServerMessage,
 };
 

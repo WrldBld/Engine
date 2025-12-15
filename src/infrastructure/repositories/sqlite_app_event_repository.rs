@@ -47,6 +47,11 @@ impl SqliteAppEventRepository {
 
         Ok(Self { pool })
     }
+
+    /// Expose underlying pool for related repositories that share the same DB.
+    pub fn pool(&self) -> &SqlitePool {
+        &self.pool
+    }
 }
 
 #[async_trait]

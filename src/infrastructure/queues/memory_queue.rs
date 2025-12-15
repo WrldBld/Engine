@@ -221,7 +221,7 @@ impl<T, N: QueueNotificationPort + 'static> ApprovalQueuePort<T> for InMemoryQue
 where
     T: Send + Sync + Clone + Serialize + DeserializeOwned,
 {
-    async fn list_by_session(&self, session_id: SessionId) -> Result<Vec<QueueItem<T>>, QueueError> {
+    async fn list_by_session(&self, _session_id: SessionId) -> Result<Vec<QueueItem<T>>, QueueError> {
         // For ApprovalQueuePort, we need to extract session_id from the payload
         // Since T is generic, we can't directly access it. This is a limitation
         // of the in-memory implementation. In practice, ApprovalQueuePort should

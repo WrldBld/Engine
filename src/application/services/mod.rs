@@ -6,6 +6,8 @@
 
 pub mod asset_generation_queue_service;
 pub mod asset_service;
+pub mod challenge_resolution_service;
+pub mod session_join_service;
 pub mod challenge_service;
 pub mod dm_approval_queue_service;
 pub mod character_service;
@@ -18,6 +20,7 @@ pub mod llm_queue_service;
 pub mod llm_service;
 pub mod location_service;
 pub mod narrative_event_service;
+pub mod narrative_event_approval_service;
 pub mod player_action_queue_service;
 pub mod relationship_service;
 pub mod scene_service;
@@ -36,6 +39,9 @@ pub mod world_service;
 pub use world_service::{
     CreateActRequest, CreateWorldRequest, UpdateWorldRequest, WorldService, WorldServiceImpl,
 };
+
+// Re-export session join service types
+pub use session_join_service::{SessionJoinService, SessionJoinedInfo};
 
 // Re-export scene service types
 pub use scene_service::{
@@ -68,6 +74,9 @@ pub use workflow_service::WorkflowService;
 // Re-export story event service
 pub use story_event_service::StoryEventService;
 
+// Re-export narrative event approval service
+pub use narrative_event_approval_service::NarrativeEventApprovalService;
+
 // Re-export skill service types
 pub use skill_service::{
     CreateSkillRequest, SkillService, SkillServiceImpl, UpdateSkillRequest,
@@ -78,6 +87,9 @@ pub use interaction_service::{InteractionService, InteractionServiceImpl};
 
 // Re-export challenge service types (used in HTTP routes)
 pub use challenge_service::{ChallengeService, ChallengeServiceImpl};
+
+// Re-export challenge resolution service
+pub use challenge_resolution_service::ChallengeResolutionService;
 
 // Re-export relationship service types
 pub use relationship_service::{RelationshipService, RelationshipServiceImpl};

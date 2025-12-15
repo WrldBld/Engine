@@ -19,6 +19,7 @@ use crate::domain::value_objects::{
 };
 
 /// Service for recording gameplay events to the story timeline
+#[derive(Clone)]
 pub struct StoryEventService {
     repository: Arc<dyn StoryEventRepositoryPort>,
     event_bus: Arc<dyn EventBusPort<AppEvent>>,

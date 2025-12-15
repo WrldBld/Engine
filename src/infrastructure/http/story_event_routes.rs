@@ -212,8 +212,8 @@ pub async fn update_story_event(
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid event ID".to_string()))?;
     let event_id = StoryEventId::from_uuid(uuid);
 
-    // Get existing event
-    let event = state
+    // Get existing event (verify it exists before updating)
+    let _event = state
         .story_event_service
         .get_event(event_id)
         .await

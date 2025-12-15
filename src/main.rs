@@ -206,16 +206,9 @@ async fn main() -> anyhow::Result<()> {
     // WebSocket event subscriber (converts AppEvents to ServerMessages and broadcasts to clients)
     let websocket_event_subscriber = {
         use crate::infrastructure::websocket_event_subscriber::WebSocketEventSubscriber;
-        let repository = state.event_bus.clone(); // TODO: need to get repository from state
-        // For now, we need to create a repository instance
-        // In a production system, we'd store the repository in AppState
-        let event_db_path = state.config.queue.sqlite_path.replace(".db", "_events.db");
-        let event_pool = sqlx::SqlitePool::connect(&format!("sqlite:{}?mode=rwc", event_db_path))
-            .await?;
-        let app_event_repository = crate::infrastructure::repositories::SqliteAppEventRepository::new(event_pool).await
-            .map_err(|e| anyhow::anyhow!("Failed to initialize event repository for subscriber: {}", e))?;
-        let app_event_repository: Arc<dyn crate::application::ports::outbound::AppEventRepositoryPort> = Arc::new(app_event_repository);
         
+        // Reuse the event repository from AppState (no duplicate DB connection)
+        let app_event_repository = state.app_event_repository.clone();
         let notifier = state.event_notifier.clone();
         let sessions = state.sessions.clone();
         let subscriber = WebSocketEventSubscriber::new(app_event_repository, notifier, sessions, 30);

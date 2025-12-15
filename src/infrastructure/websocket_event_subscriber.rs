@@ -78,13 +78,25 @@ impl WebSocketEventSubscriber {
         tracing::debug!("Processing {} new events", events.len());
 
         for (event_id, event, _timestamp) in events {
-            // Map AppEvent to ServerMessage
+            // Map AppEvent to ServerMessage and determine target world (if any)
             if let Some(message) = self.map_to_server_message(&event) {
-                // Broadcast to all connected clients
-                // TODO: In the future, we could filter by world_id or session_id
+                let target_world = event.world_id().map(|s| s.to_string());
+
                 let sessions = self.sessions.read().await;
-                for session_id in sessions.get_session_ids() {
-                    sessions.broadcast_to_session(session_id, &message);
+                let session_ids = sessions.get_session_ids();
+
+                for session_id in session_ids {
+                    if let Some(session) = sessions.get_session(session_id) {
+                        // If the event is associated with a specific world, only
+                        // deliver to sessions for that world. Otherwise, broadcast
+                        // to all sessions.
+                        if let Some(ref world_id_str) = target_world {
+                            if session.world_id.to_string() != *world_id_str {
+                                continue;
+                            }
+                        }
+                        sessions.broadcast_to_session(session_id, &message);
+                    }
                 }
                 drop(sessions);
             }

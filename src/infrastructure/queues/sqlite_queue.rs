@@ -470,7 +470,7 @@ impl<T, N: QueueNotificationPort + 'static> ApprovalQueuePort<T> for SqliteQueue
 where
     T: Send + Sync + Clone + Serialize + DeserializeOwned + 'static,
 {
-    async fn list_by_session(&self, session_id: SessionId) -> Result<Vec<QueueItem<T>>, QueueError> {
+    async fn list_by_session(&self, _session_id: SessionId) -> Result<Vec<QueueItem<T>>, QueueError> {
         // Extract session_id from payload JSON
         // This is a limitation - we need to know the structure of T
         // In practice, ApprovalQueuePort should only be used with ApprovalItem

@@ -299,7 +299,7 @@ impl AssetService for AssetServiceImpl {
     #[instrument(skip(self))]
     async fn delete_batch(&self, batch_id: BatchId) -> Result<()> {
         // Verify the batch exists before deletion
-        let batch = self
+        let _batch = self
             .repository
             .get_batch(batch_id)
             .await?

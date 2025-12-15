@@ -198,6 +198,11 @@ pub fn create_routes() -> Router<Arc<AppState>> {
             "/api/items/{item_id}/gallery/{asset_id}",
             delete(asset_routes::delete_item_asset),
         )
+        // Unified generation queue snapshot
+        .route(
+            "/api/generation/queue",
+            get(queue_routes::get_generation_queue),
+        )
         // Generation Queue routes
         .route("/api/assets/generate", post(asset_routes::queue_generation))
         .route("/api/assets/queue", get(asset_routes::list_queue))

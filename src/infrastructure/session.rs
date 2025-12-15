@@ -76,6 +76,7 @@ pub struct SessionParticipant {
     pub client_id: ClientId,
     pub user_id: String,
     pub role: ParticipantRole,
+    #[allow(dead_code)] // Kept for future session analytics and participant tracking
     pub joined_at: DateTime<Utc>,
     /// Channel to send messages to this client
     pub sender: mpsc::UnboundedSender<ServerMessage>,
@@ -99,6 +100,7 @@ pub struct PendingApproval {
     /// Number of rejection retries already used
     pub retry_count: u32,
     /// Timestamp when approval was requested
+    #[allow(dead_code)] // Kept for future approval timeout/expiry features
     pub requested_at: DateTime<Utc>,
 }
 
@@ -177,6 +179,7 @@ pub struct GameSession {
     pub world_id: WorldId,
     pub world_snapshot: Arc<WorldSnapshot>,
     pub participants: HashMap<ClientId, SessionParticipant>,
+    #[allow(dead_code)] // Kept for future session management features
     pub created_at: DateTime<Utc>,
     pub current_scene_id: Option<String>,
     /// Conversation history for LLM context
@@ -245,6 +248,7 @@ impl GameSession {
     /// # Arguments
     /// * `character_name` - Name of the character performing the action
     /// * `action` - Description of the action or dialogue
+    #[allow(dead_code)] // Kept for future conversation history features
     pub fn add_player_action(&mut self, character_name: &str, action: &str) {
         let turn = ConversationTurn::new(
             character_name.to_string(),
@@ -298,11 +302,13 @@ impl GameSession {
     }
 
     /// Get the entire conversation history
+    #[allow(dead_code)] // Kept for future conversation history export/review features
     pub fn get_full_history(&self) -> &[ConversationTurn] {
         &self.conversation_history
     }
 
     /// Clear all conversation history
+    #[allow(dead_code)] // Kept for future session management features
     pub fn clear_history(&mut self) {
         self.conversation_history.clear();
     }
@@ -313,6 +319,7 @@ impl GameSession {
     ///
     /// # Arguments
     /// * `max_length` - New maximum length (must be > 0)
+    #[allow(dead_code)] // Kept for future dynamic history configuration
     pub fn set_max_history_length(&mut self, max_length: usize) {
         assert!(max_length > 0, "max_history_length must be greater than 0");
         self.max_history_length = max_length;
@@ -324,6 +331,7 @@ impl GameSession {
     }
 
     /// Get the current number of turns in history
+    #[allow(dead_code)] // Kept for future UI display of history stats
     pub fn history_length(&self) -> usize {
         self.conversation_history.len()
     }
@@ -381,6 +389,7 @@ impl GameSession {
     }
 
     /// Get the number of active participants
+    #[allow(dead_code)] // Kept for future session stats/UI features
     pub fn participant_count(&self) -> usize {
         self.participants.len()
     }
@@ -422,6 +431,7 @@ pub enum SessionError {
     WorldNotFound(String),
 
     #[error("Client not in any session: {0}")]
+    #[allow(dead_code)] // Kept for comprehensive error handling
     ClientNotInSession(ClientId),
 
     #[error("Session already has a DM")]
@@ -578,11 +588,13 @@ impl SessionManager {
     }
 
     /// Get the number of active sessions
+    #[allow(dead_code)] // Kept for future monitoring/metrics features
     pub fn session_count(&self) -> usize {
         self.sessions.len()
     }
 
     /// Get the number of connected clients
+    #[allow(dead_code)] // Kept for future monitoring/metrics features
     pub fn client_count(&self) -> usize {
         self.client_sessions.len()
     }

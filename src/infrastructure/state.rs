@@ -6,17 +6,21 @@ use anyhow::Result;
 use tokio::sync::RwLock;
 
 use crate::application::services::{
-    AssetGenerationQueueService, AssetServiceImpl, ChallengeServiceImpl, CharacterServiceImpl,
-    DMActionQueueService, DMApprovalQueueService, EventChainServiceImpl,
-    InteractionServiceImpl, LLMQueueService, LocationServiceImpl, NarrativeEventServiceImpl,
-    PlayerActionQueueService, SceneServiceImpl, SheetTemplateService, SkillServiceImpl,
-    StoryEventService, RelationshipServiceImpl, WorkflowConfigService, WorldServiceImpl,
+    AssetGenerationQueueService, AssetServiceImpl,
+    challenge_resolution_service::ChallengeResolutionService, ChallengeServiceImpl,
+    CharacterServiceImpl, DMActionQueueService, DMApprovalQueueService, EventChainServiceImpl,
+    InteractionServiceImpl, LLMQueueService, LocationServiceImpl, NarrativeEventApprovalService,
+    NarrativeEventServiceImpl, PlayerActionQueueService, SceneServiceImpl, SheetTemplateService,
+    SkillServiceImpl, StoryEventService, RelationshipServiceImpl, WorkflowConfigService,
+    WorldServiceImpl,
 };
 use crate::application::services::generation_service::{GenerationService, GenerationEvent};
 use crate::application::dto::{
     AppEvent, ApprovalItem, AssetGenerationItem, DMActionItem, LLMRequestItem, PlayerActionItem,
 };
-use crate::application::ports::outbound::{AppEventRepositoryPort, EventBusPort};
+use crate::application::ports::outbound::{
+    AppEventRepositoryPort, EventBusPort, GenerationReadStatePort,
+};
 use crate::infrastructure::comfyui::ComfyUIClient;
 use crate::infrastructure::config::AppConfig;
 use crate::infrastructure::event_bus::{InProcessEventNotifier, SqliteEventBus};
@@ -24,7 +28,9 @@ use crate::infrastructure::export::Neo4jWorldExporter;
 use crate::infrastructure::ollama::OllamaClient;
 use crate::infrastructure::persistence::Neo4jRepository;
 use crate::infrastructure::queues::QueueFactory;
-use crate::infrastructure::repositories::SqliteAppEventRepository;
+use crate::infrastructure::repositories::{
+    SqliteAppEventRepository, SqliteGenerationReadStateRepository,
+};
 use crate::infrastructure::session::SessionManager;
 
 /// Shared application state
@@ -52,11 +58,20 @@ pub struct AppState {
     pub relationship_service: RelationshipServiceImpl,
     pub story_event_service: StoryEventService,
     pub challenge_service: ChallengeServiceImpl,
+    pub challenge_resolution_service: Arc<
+        ChallengeResolutionService<
+            ChallengeServiceImpl,
+            SkillServiceImpl,
+            crate::infrastructure::queues::QueueBackendEnum<ApprovalItem>,
+        >,
+    >,
+    pub narrative_event_approval_service: Arc<NarrativeEventApprovalService<NarrativeEventServiceImpl>>,
     pub narrative_event_service: NarrativeEventServiceImpl,
     pub event_chain_service: EventChainServiceImpl,
     pub asset_service: AssetServiceImpl,
     pub workflow_config_service: WorkflowConfigService,
     pub sheet_template_service: SheetTemplateService,
+    #[allow(dead_code)] // Kept for potential future direct generation access (currently event-driven via queue)
     pub generation_service: Arc<GenerationService>,
     // Queue services - using QueueBackendEnum for runtime backend selection
     // Note: Services take Arc<Q> where Q implements the port, so Q = QueueBackendEnum<T>
@@ -78,6 +93,8 @@ pub struct AppState {
     // Event bus
     pub event_bus: Arc<dyn EventBusPort<AppEvent>>,
     pub event_notifier: InProcessEventNotifier,
+    pub app_event_repository: Arc<dyn AppEventRepositoryPort>,
+    pub generation_read_state_repository: Arc<dyn GenerationReadStatePort>,
 }
 
 impl AppState {
@@ -177,13 +194,21 @@ impl AppState {
             .map_err(|e| anyhow::anyhow!("Failed to connect to event database: {}", e))?;
         tracing::info!("Connected to event database: {}", event_db_path);
 
-        let app_event_repository = SqliteAppEventRepository::new(event_pool).await
+        let app_event_repository_impl = SqliteAppEventRepository::new(event_pool).await
             .map_err(|e| anyhow::anyhow!("Failed to initialize event repository: {}", e))?;
-        let app_event_repository: Arc<dyn AppEventRepositoryPort> = Arc::new(app_event_repository);
+        // Generation read-state repository shares the same SQLite pool as app events
+        let generation_read_state_repository =
+            SqliteGenerationReadStateRepository::new(app_event_repository_impl.pool().clone());
+        generation_read_state_repository.init_schema().await?;
+        let generation_read_state_repository: Arc<dyn GenerationReadStatePort> =
+            Arc::new(generation_read_state_repository);
+
+        let app_event_repository: Arc<dyn AppEventRepositoryPort> =
+            Arc::new(app_event_repository_impl);
 
         let event_notifier = InProcessEventNotifier::new();
         let event_bus: Arc<dyn EventBusPort<AppEvent>> = Arc::new(SqliteEventBus::new(
-            app_event_repository,
+            app_event_repository.clone(),
             event_notifier.clone(),
         ));
 
@@ -238,24 +263,38 @@ impl AppState {
             generation_event_tx,
         ));
 
+        let sessions = Arc::new(RwLock::new(SessionManager::new(
+            config.session.max_conversation_history,
+        )));
+
         Ok((Self {
             config: config.clone(),
             repository,
             llm_client,
             comfyui_client,
-            sessions: Arc::new(RwLock::new(SessionManager::new(
-                config.session.max_conversation_history
-            ))),
+            sessions: Arc::clone(&sessions),
             relationship_service,
             world_service,
             character_service,
             location_service,
             scene_service,
-            skill_service,
+            skill_service: skill_service.clone(),
             interaction_service,
-            story_event_service,
-            challenge_service,
-            narrative_event_service,
+            story_event_service: story_event_service.clone(),
+            challenge_service: challenge_service.clone(),
+            challenge_resolution_service: Arc::new(ChallengeResolutionService::new(
+                Arc::clone(&sessions),
+                Arc::new(challenge_service.clone()),
+                Arc::new(skill_service.clone()),
+                event_bus.clone(),
+                dm_approval_queue_service.clone(),
+            )),
+            narrative_event_service: narrative_event_service.clone(),
+            narrative_event_approval_service: Arc::new(NarrativeEventApprovalService::new(
+                Arc::clone(&sessions),
+                Arc::new(narrative_event_service),
+                Arc::new(story_event_service),
+            )),
             event_chain_service,
             asset_service,
             workflow_config_service,
@@ -268,6 +307,8 @@ impl AppState {
             dm_approval_queue_service,
             event_bus,
             event_notifier,
+            app_event_repository,
+            generation_read_state_repository,
         }, generation_event_rx))
     }
 }
