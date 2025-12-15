@@ -14,14 +14,17 @@ use crate::application::services::{
 };
 use crate::application::services::generation_service::{GenerationService, GenerationEvent};
 use crate::application::dto::{
-    ApprovalItem, AssetGenerationItem, DMActionItem, LLMRequestItem, PlayerActionItem,
+    AppEvent, ApprovalItem, AssetGenerationItem, DMActionItem, LLMRequestItem, PlayerActionItem,
 };
+use crate::application::ports::outbound::{AppEventRepositoryPort, EventBusPort};
 use crate::infrastructure::comfyui::ComfyUIClient;
 use crate::infrastructure::config::AppConfig;
+use crate::infrastructure::event_bus::{InProcessEventNotifier, SqliteEventBus};
 use crate::infrastructure::export::Neo4jWorldExporter;
 use crate::infrastructure::ollama::OllamaClient;
 use crate::infrastructure::persistence::Neo4jRepository;
 use crate::infrastructure::queues::QueueFactory;
+use crate::infrastructure::repositories::SqliteAppEventRepository;
 use crate::infrastructure::session::SessionManager;
 
 /// Shared application state
@@ -72,6 +75,9 @@ pub struct AppState {
         >,
     >,
     pub dm_approval_queue_service: Arc<DMApprovalQueueService<crate::infrastructure::queues::QueueBackendEnum<ApprovalItem>>>,
+    // Event bus
+    pub event_bus: Arc<dyn EventBusPort<AppEvent>>,
+    pub event_notifier: InProcessEventNotifier,
 }
 
 impl AppState {
@@ -137,9 +143,11 @@ impl AppState {
         let scene_service = SceneServiceImpl::new(scene_repo, location_repo, character_repo);
         let skill_service = SkillServiceImpl::new(skill_repo.clone(), world_repo);
         let interaction_service = InteractionServiceImpl::new(interaction_repo);
-        let story_event_service = StoryEventService::new(story_event_repo);
+        // Temporarily create a simple story event service without event_bus, will update after event_bus is created
+        let story_event_repo_for_service = story_event_repo.clone();
         let challenge_service = ChallengeServiceImpl::new(challenge_repo.clone());
-        let narrative_event_service = NarrativeEventServiceImpl::new(narrative_event_repo.clone());
+        // Narrative event service will be created after event_bus
+        let narrative_event_repo_for_service = narrative_event_repo.clone();
         let event_chain_service = EventChainServiceImpl::new(event_chain_repo);
         let asset_repo_for_service = asset_repo.clone();
         let asset_service = AssetServiceImpl::new(asset_repo_for_service);
@@ -155,6 +163,34 @@ impl AppState {
         let dm_action_queue = queue_factory.create_dm_action_queue().await?;
         let asset_generation_queue = queue_factory.create_asset_generation_queue().await?;
         let approval_queue = queue_factory.create_approval_queue().await?;
+
+        // Initialize event bus infrastructure
+        // For now, use a separate SQLite database for events
+        // In production, this could share the queue pool or use Redis
+        let event_db_path = config.queue.sqlite_path.replace(".db", "_events.db");
+        if let Some(parent) = std::path::Path::new(&event_db_path).parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| anyhow::anyhow!("Failed to create event database directory: {}", e))?;
+        }
+        let event_pool = sqlx::SqlitePool::connect(&format!("sqlite:{}?mode=rwc", event_db_path))
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to connect to event database: {}", e))?;
+        tracing::info!("Connected to event database: {}", event_db_path);
+
+        let app_event_repository = SqliteAppEventRepository::new(event_pool).await
+            .map_err(|e| anyhow::anyhow!("Failed to initialize event repository: {}", e))?;
+        let app_event_repository: Arc<dyn AppEventRepositoryPort> = Arc::new(app_event_repository);
+
+        let event_notifier = InProcessEventNotifier::new();
+        let event_bus: Arc<dyn EventBusPort<AppEvent>> = Arc::new(SqliteEventBus::new(
+            app_event_repository,
+            event_notifier.clone(),
+        ));
+
+        // Create story event service with event bus
+        let story_event_service = StoryEventService::new(story_event_repo_for_service, event_bus.clone());
+        // Create narrative event service with event bus
+        let narrative_event_service = NarrativeEventServiceImpl::new(narrative_event_repo_for_service, event_bus.clone());
 
         // Initialize queue services
         // Services take Arc<Q>, so we pass Arc<QueueBackendEnum<T>> directly
@@ -230,6 +266,8 @@ impl AppState {
             llm_queue_service,
             asset_generation_queue_service,
             dm_approval_queue_service,
+            event_bus,
+            event_notifier,
         }, generation_event_rx))
     }
 }

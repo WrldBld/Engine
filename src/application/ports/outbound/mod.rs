@@ -1,12 +1,18 @@
 //! Outbound ports - Interfaces that the application requires from external systems
 
+mod app_event_repository_port;
 mod comfyui_port;
+mod event_bus_port;
 mod llm_port;
 mod queue_notification_port;
 mod queue_port;
 mod repository_port;
 mod session_management_port;
 mod world_exporter_port;
+
+pub use app_event_repository_port::{AppEventRepositoryError, AppEventRepositoryPort};
+
+pub use event_bus_port::{EventBusError, EventBusPort};
 
 pub use comfyui_port::{
     ComfyUIPort, GeneratedImage, HistoryResponse, NodeOutput, PromptHistory,

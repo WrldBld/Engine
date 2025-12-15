@@ -7,7 +7,8 @@
 use anyhow::Result;
 use std::sync::Arc;
 
-use crate::application::ports::outbound::StoryEventRepositoryPort;
+use crate::application::dto::AppEvent;
+use crate::application::ports::outbound::{EventBusPort, StoryEventRepositoryPort};
 use crate::domain::entities::{
     ChallengeEventOutcome, DmMarkerType, InfoImportance, InfoType,
     ItemSource, MarkerImportance, StoryEvent, StoryEventType,
@@ -20,11 +21,25 @@ use crate::domain::value_objects::{
 /// Service for recording gameplay events to the story timeline
 pub struct StoryEventService {
     repository: Arc<dyn StoryEventRepositoryPort>,
+    event_bus: Arc<dyn EventBusPort<AppEvent>>,
 }
 
 impl StoryEventService {
-    pub fn new(repository: Arc<dyn StoryEventRepositoryPort>) -> Self {
-        Self { repository }
+    pub fn new(repository: Arc<dyn StoryEventRepositoryPort>, event_bus: Arc<dyn EventBusPort<AppEvent>>) -> Self {
+        Self { repository, event_bus }
+    }
+
+    /// Helper to publish StoryEventCreated after persisting
+    async fn publish_event_created(&self, event: &StoryEvent) {
+        let app_event = AppEvent::StoryEventCreated {
+            story_event_id: event.id.to_string(),
+            world_id: event.world_id.to_string(),
+            event_type: format!("{:?}", event.event_type), // Debug format for event type
+        };
+        
+        if let Err(e) = self.event_bus.publish(app_event).await {
+            tracing::error!("Failed to publish StoryEventCreated for {}: {}", event.id, e);
+        }
     }
 
     /// Record a dialogue exchange between player and NPC
@@ -68,6 +83,7 @@ impl StoryEventService {
 
         let event_id = event.id;
         self.repository.create(&event).await?;
+        self.publish_event_created(&event).await;
 
         tracing::debug!("Recorded dialogue exchange event: {}", event_id);
         Ok(event_id)
@@ -125,6 +141,7 @@ impl StoryEventService {
 
         let event_id = event.id;
         self.repository.create(&event).await?;
+        self.publish_event_created(&event).await;
 
         tracing::debug!("Recorded challenge event: {}", event_id);
         Ok(event_id)
@@ -164,6 +181,7 @@ impl StoryEventService {
 
         let event_id = event.id;
         self.repository.create(&event).await?;
+        self.publish_event_created(&event).await;
 
         tracing::debug!("Recorded scene transition event: {}", event_id);
         Ok(event_id)
@@ -212,6 +230,7 @@ impl StoryEventService {
 
         let event_id = event.id;
         self.repository.create(&event).await?;
+        self.publish_event_created(&event).await;
 
         tracing::debug!("Recorded DM marker event: {}", event_id);
         Ok(event_id)
@@ -258,6 +277,7 @@ impl StoryEventService {
 
         let event_id = event.id;
         self.repository.create(&event).await?;
+        self.publish_event_created(&event).await;
 
         tracing::debug!("Recorded information revealed event: {}", event_id);
         Ok(event_id)
@@ -300,6 +320,7 @@ impl StoryEventService {
 
         let event_id = event.id;
         self.repository.create(&event).await?;
+        self.publish_event_created(&event).await;
 
         tracing::debug!("Recorded relationship change event: {}", event_id);
         Ok(event_id)
@@ -343,6 +364,7 @@ impl StoryEventService {
 
         let event_id = event.id;
         self.repository.create(&event).await?;
+        self.publish_event_created(&event).await;
 
         tracing::debug!("Recorded item acquired event: {}", event_id);
         Ok(event_id)
@@ -386,6 +408,7 @@ impl StoryEventService {
 
         let event_id = event.id;
         self.repository.create(&event).await?;
+        self.publish_event_created(&event).await;
 
         tracing::debug!("Recorded narrative event triggered: {}", event_id);
         Ok(event_id)
@@ -411,6 +434,7 @@ impl StoryEventService {
 
         let event_id = event.id;
         self.repository.create(&event).await?;
+        self.publish_event_created(&event).await;
 
         tracing::debug!("Recorded session started event: {}", event_id);
         Ok(event_id)
@@ -433,6 +457,7 @@ impl StoryEventService {
 
         let event_id = event.id;
         self.repository.create(&event).await?;
+        self.publish_event_created(&event).await;
 
         tracing::debug!("Recorded session ended event: {}", event_id);
         Ok(event_id)

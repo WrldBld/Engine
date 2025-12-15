@@ -23,13 +23,34 @@ use crate::domain::value_objects::{AssetId, BatchId};
 #[derive(Debug, Clone)]
 pub enum GenerationEvent {
     /// A batch has been queued
-    BatchQueued { batch_id: BatchId, position: u32 },
+    BatchQueued {
+        batch_id: BatchId,
+        entity_type: EntityType,
+        entity_id: String,
+        asset_type: AssetType,
+        position: u32,
+    },
     /// A batch is generating (progress update)
-    BatchProgress { batch_id: BatchId, progress: u8 },
+    BatchProgress {
+        batch_id: BatchId,
+        progress: u8,
+    },
     /// A batch has completed
-    BatchComplete { batch_id: BatchId, asset_count: u32 },
+    BatchComplete {
+        batch_id: BatchId,
+        entity_type: EntityType,
+        entity_id: String,
+        asset_type: AssetType,
+        asset_count: u32,
+    },
     /// A batch has failed
-    BatchFailed { batch_id: BatchId, error: String },
+    BatchFailed {
+        batch_id: BatchId,
+        entity_type: EntityType,
+        entity_id: String,
+        asset_type: AssetType,
+        error: String,
+    },
     /// A suggestion request has been queued
     SuggestionQueued {
         request_id: String,
@@ -44,11 +65,13 @@ pub enum GenerationEvent {
     /// A suggestion request has completed
     SuggestionComplete {
         request_id: String,
+        field_type: String,
         suggestions: Vec<String>,
     },
     /// A suggestion request has failed
     SuggestionFailed {
         request_id: String,
+        field_type: String,
         error: String,
     },
 }
@@ -138,9 +161,13 @@ impl GenerationService {
         drop(active_batches);
 
         // Send queued event
-        let _ = self
-            .event_sender
-            .send(GenerationEvent::BatchQueued { batch_id, position });
+        let _ = self.event_sender.send(GenerationEvent::BatchQueued {
+            batch_id,
+            entity_type: batch.entity_type,
+            entity_id: batch.entity_id.clone(),
+            asset_type: batch.asset_type,
+            position,
+        });
 
         // Start processing (this would normally be done by a background worker)
         self.start_batch_processing(batch).await?;
@@ -280,6 +307,9 @@ impl GenerationService {
 
             let _ = self.event_sender.send(GenerationEvent::BatchComplete {
                 batch_id,
+                entity_type: batch.entity_type,
+                entity_id: batch.entity_id.clone(),
+                asset_type: batch.asset_type,
                 asset_count: generated_assets.len() as u32,
             });
 

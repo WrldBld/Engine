@@ -22,7 +22,7 @@ use crate::application::services::{
 };
 use crate::application::services::narrative_event_service::NarrativeEventService;
 use crate::domain::entities::OutcomeType;
-use crate::domain::value_objects::{ActionId, ApprovalDecision, ProposedToolInfo, SessionId, WorldId};
+use crate::domain::value_objects::{ActionId, ApprovalDecision, CharacterId, ProposedToolInfo, SessionId, WorldId};
 use crate::infrastructure::session::{ClientId, SessionError, WorldSnapshot};
 use crate::infrastructure::state::AppState;
 
@@ -537,6 +537,23 @@ async fn handle_message(
 
             // Evaluate challenge result
             let (outcome_type, outcome) = evaluate_challenge_result(&challenge, roll, character_modifier);
+            let success = outcome_type == OutcomeType::Success || outcome_type == OutcomeType::CriticalSuccess;
+
+            // Publish AppEvent for challenge resolution
+            let world_id = challenge.world_id;
+            let character_id_placeholder = CharacterId::new(); // TODO: Get actual character_id from session
+            let app_event = crate::application::dto::AppEvent::ChallengeResolved {
+                challenge_id: Some(challenge_id.clone()),
+                challenge_name: challenge.name.clone(),
+                world_id: world_id.to_string(),
+                character_id: character_id_placeholder.to_string(),
+                success,
+                roll: Some(roll),
+                total: Some(roll + character_modifier),
+            };
+            if let Err(e) = state.event_bus.publish(app_event).await {
+                tracing::error!("Failed to publish ChallengeResolved event: {}", e);
+            }
 
             // Broadcast ChallengeResolved to all participants
             if let Some(session_id) = session_id {

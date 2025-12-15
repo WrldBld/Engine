@@ -11,6 +11,7 @@ pub mod dm_approval_queue_service;
 pub mod character_service;
 pub mod dm_action_queue_service;
 pub mod event_chain_service;
+pub mod generation_event_publisher;
 pub mod generation_service;
 pub mod interaction_service;
 pub mod llm_queue_service;
@@ -97,6 +98,7 @@ pub use event_chain_service::{EventChainService, EventChainServiceImpl};
 pub use asset_generation_queue_service::AssetGenerationQueueService;
 pub use dm_action_queue_service::DMActionQueueService;
 pub use dm_approval_queue_service::DMApprovalQueueService;
+pub use generation_event_publisher::GenerationEventPublisher;
 pub use llm_queue_service::LLMQueueService;
 pub use player_action_queue_service::PlayerActionQueueService;
 

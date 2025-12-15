@@ -3,6 +3,7 @@
 //! DTOs are used for data transfer between layers (HTTP routes, services, etc.)
 //! They provide a stable API that is decoupled from domain entities.
 
+mod app_events;
 mod asset;
 mod challenge;
 mod character;
@@ -20,6 +21,9 @@ mod story_event;
 mod suggestion;
 mod workflow;
 mod world;
+
+// Application events (published through event bus)
+pub use app_events::AppEvent;
 
 // Queue items (used by queue services)
 pub use queue_items::{

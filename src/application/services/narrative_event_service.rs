@@ -52,16 +52,20 @@ pub trait NarrativeEventService: Send + Sync {
     async fn reset_triggered(&self, id: NarrativeEventId) -> Result<bool>;
 }
 
+use crate::application::dto::AppEvent;
+use crate::application::ports::outbound::EventBusPort;
+
 /// Default implementation of NarrativeEventService using port abstractions
 #[derive(Clone)]
 pub struct NarrativeEventServiceImpl {
     repository: Arc<dyn NarrativeEventRepositoryPort>,
+    event_bus: Arc<dyn EventBusPort<AppEvent>>,
 }
 
 impl NarrativeEventServiceImpl {
     /// Create a new NarrativeEventServiceImpl with the given repository
-    pub fn new(repository: Arc<dyn NarrativeEventRepositoryPort>) -> Self {
-        Self { repository }
+    pub fn new(repository: Arc<dyn NarrativeEventRepositoryPort>, event_bus: Arc<dyn EventBusPort<AppEvent>>) -> Self {
+        Self { repository, event_bus }
     }
 }
 
@@ -183,10 +187,30 @@ impl NarrativeEventService for NarrativeEventServiceImpl {
             outcome = ?outcome_name,
             "Marking narrative event as triggered"
         );
-        self.repository
-            .mark_triggered(id, outcome_name)
+        
+        // Get the event details before marking as triggered
+        let event = self.repository.get(id).await?;
+        
+        let result = self.repository
+            .mark_triggered(id, outcome_name.clone())
             .await
-            .context("Failed to mark narrative event as triggered")
+            .context("Failed to mark narrative event as triggered")?;
+        
+        // Publish AppEvent if we have the event details
+        if let Some(event) = event {
+            let app_event = AppEvent::NarrativeEventTriggered {
+                event_id: id.to_string(),
+                world_id: event.world_id.to_string(),
+                event_name: event.name.clone(),
+                outcome_name: outcome_name.unwrap_or_else(|| "default".to_string()),
+            };
+            
+            if let Err(e) = self.event_bus.publish(app_event).await {
+                tracing::error!("Failed to publish NarrativeEventTriggered for {}: {}", id, e);
+            }
+        }
+        
+        Ok(result)
     }
 
     #[instrument(skip(self))]

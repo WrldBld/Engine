@@ -241,12 +241,12 @@ pub async fn suggest(
         suggestion_context: Some(context),
         callback_id: request_id.clone(),
     };
-    
+
     // Enqueue to LLM queue
     state.llm_queue_service.enqueue(llm_request)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to enqueue suggestion: {}", e)))?;
-    
+
     Ok(Json(SuggestionQueuedResponse {
         request_id,
         status: "queued".to_string(),

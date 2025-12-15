@@ -391,6 +391,7 @@ impl<Q: ProcessingQueuePort<LLMRequestItem> + 'static, L: LlmPort + Clone + 'sta
                                 tracing::error!("{}", error);
                                 let _ = generation_event_tx_clone.send(GenerationEvent::SuggestionFailed {
                                     request_id: request_id.clone(),
+                                    field_type: field_type_clone.clone(),
                                     error: error.clone(),
                                 });
                                 let _ = queue_clone.fail(item_id, &error).await;
@@ -403,15 +404,17 @@ impl<Q: ProcessingQueuePort<LLMRequestItem> + 'static, L: LlmPort + Clone + 'sta
                                 tracing::info!("Suggestion request {} completed with {} suggestions", request_id, suggestions.len());
                                 let _ = generation_event_tx_clone.send(GenerationEvent::SuggestionComplete {
                                     request_id: request_id.clone(),
+                                    field_type: field_type_clone.clone(),
                                     suggestions,
                                 });
-                                let _ = queue_clone.complete(item_id).await;
+                        let _ = queue_clone.complete(item_id).await;
                             }
                             Err(e) => {
                                 let error = e.to_string();
                                 tracing::error!("Suggestion request {} failed: {}", request_id, error);
                                 let _ = generation_event_tx_clone.send(GenerationEvent::SuggestionFailed {
                                     request_id: request_id.clone(),
+                                    field_type: field_type_clone.clone(),
                                     error: error.clone(),
                                 });
                                 let _ = queue_clone.fail(item_id, &error).await;

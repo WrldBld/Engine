@@ -192,90 +192,35 @@ async fn main() -> anyhow::Result<()> {
         })
     };
 
-    // Generation event broadcaster (broadcasts generation events to WebSocket clients)
+    // Generation event publisher (converts GenerationEvents to AppEvents and publishes to event bus)
     let generation_event_worker = {
-        let sessions = state.sessions.clone();
-        let mut rx = generation_event_rx;
+        use crate::application::services::GenerationEventPublisher;
+        let event_bus = state.event_bus.clone();
+        let publisher = GenerationEventPublisher::new(event_bus);
         tokio::spawn(async move {
-            tracing::info!("Starting generation event broadcaster");
-            while let Some(event) = rx.recv().await {
-                use crate::application::services::generation_service::GenerationEvent;
-                use crate::infrastructure::websocket::ServerMessage;
-                
-                // Convert GenerationEvent to ServerMessage
-                let message = match event {
-                    GenerationEvent::BatchQueued { batch_id, position } => {
-                        tracing::debug!("Broadcasting BatchQueued event: batch_id={}, position={}", batch_id, position);
-                        // We don't have entity details in the event, so we'll use placeholder values
-                        // This should be improved in a future iteration to include entity details
-                        ServerMessage::GenerationQueued {
-                            batch_id: batch_id.to_string(),
-                            entity_type: "unknown".to_string(),
-                            entity_id: "unknown".to_string(),
-                            asset_type: "unknown".to_string(),
-                            position,
-                        }
-                    }
-                    GenerationEvent::BatchProgress { batch_id, progress } => {
-                        tracing::debug!("Broadcasting BatchProgress event: batch_id={}, progress={}%", batch_id, progress);
-                        ServerMessage::GenerationProgress {
-                            batch_id: batch_id.to_string(),
-                            progress,
-                        }
-                    }
-                    GenerationEvent::BatchComplete { batch_id, asset_count } => {
-                        tracing::info!("Broadcasting BatchComplete event: batch_id={}, asset_count={}", batch_id, asset_count);
-                        ServerMessage::GenerationComplete {
-                            batch_id: batch_id.to_string(),
-                            asset_count,
-                        }
-                    }
-                    GenerationEvent::BatchFailed { batch_id, error } => {
-                        tracing::warn!("Broadcasting BatchFailed event: batch_id={}, error={}", batch_id, error);
-                        ServerMessage::GenerationFailed {
-                            batch_id: batch_id.to_string(),
-                            error,
-                        }
-                    }
-                    GenerationEvent::SuggestionQueued { request_id, field_type, entity_id } => {
-                        tracing::debug!("Broadcasting SuggestionQueued event: request_id={}, field_type={}", request_id, field_type);
-                        ServerMessage::SuggestionQueued {
-                            request_id,
-                            field_type,
-                            entity_id,
-                        }
-                    }
-                    GenerationEvent::SuggestionProgress { request_id, status } => {
-                        tracing::debug!("Broadcasting SuggestionProgress event: request_id={}, status={}", request_id, status);
-                        ServerMessage::SuggestionProgress {
-                            request_id,
-                            status,
-                        }
-                    }
-                    GenerationEvent::SuggestionComplete { request_id, suggestions } => {
-                        tracing::info!("Broadcasting SuggestionComplete event: request_id={}, count={}", request_id, suggestions.len());
-                        ServerMessage::SuggestionComplete {
-                            request_id,
-                            suggestions,
-                        }
-                    }
-                    GenerationEvent::SuggestionFailed { request_id, error } => {
-                        tracing::warn!("Broadcasting SuggestionFailed event: request_id={}, error={}", request_id, error);
-                        ServerMessage::SuggestionFailed {
-                            request_id,
-                            error,
-                        }
-                    }
-                };
-                
-                // Broadcast to all connected clients
-                // In a future iteration, we could broadcast only to clients in the relevant session/world
-                let sessions = sessions.read().await;
-                for session_id in sessions.get_session_ids() {
-                    sessions.broadcast_to_session(session_id, &message);
-                }
-            }
-            tracing::info!("Generation event broadcaster stopped");
+            tracing::info!("Starting generation event publisher");
+            publisher.run(generation_event_rx).await;
+        })
+    };
+
+    // WebSocket event subscriber (converts AppEvents to ServerMessages and broadcasts to clients)
+    let websocket_event_subscriber = {
+        use crate::infrastructure::websocket_event_subscriber::WebSocketEventSubscriber;
+        let repository = state.event_bus.clone(); // TODO: need to get repository from state
+        // For now, we need to create a repository instance
+        // In a production system, we'd store the repository in AppState
+        let event_db_path = state.config.queue.sqlite_path.replace(".db", "_events.db");
+        let event_pool = sqlx::SqlitePool::connect(&format!("sqlite:{}?mode=rwc", event_db_path))
+            .await?;
+        let app_event_repository = crate::infrastructure::repositories::SqliteAppEventRepository::new(event_pool).await
+            .map_err(|e| anyhow::anyhow!("Failed to initialize event repository for subscriber: {}", e))?;
+        let app_event_repository: Arc<dyn crate::application::ports::outbound::AppEventRepositoryPort> = Arc::new(app_event_repository);
+        
+        let notifier = state.event_notifier.clone();
+        let sessions = state.sessions.clone();
+        let subscriber = WebSocketEventSubscriber::new(app_event_repository, notifier, sessions, 30);
+        tokio::spawn(async move {
+            subscriber.run().await;
         })
     };
 
@@ -325,6 +270,7 @@ async fn main() -> anyhow::Result<()> {
             dm_action_worker_task.abort();
             cleanup_worker.abort();
             generation_event_worker.abort();
+            websocket_event_subscriber.abort();
             tracing::info!("Workers stopped");
         }
     }
