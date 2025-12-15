@@ -5,38 +5,46 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, DeserializeOwned, Serialize};
-use std::collections::HashMap;
+use serde::{de::DeserializeOwned, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
 
 use crate::application::ports::outbound::{
     ApprovalQueuePort, ProcessingQueuePort, QueueError, QueueItem, QueueItemId, QueueItemStatus,
-    QueuePort,
+    QueueNotificationPort, QueuePort,
 };
 use crate::domain::value_objects::SessionId;
 
 /// In-memory queue implementation
-pub struct InMemoryQueue<T> {
+pub struct InMemoryQueue<T, N: QueueNotificationPort> {
     items: Arc<RwLock<Vec<QueueItem<T>>>>,
     queue_name: String,
+    notifier: N,
 }
 
-impl<T> InMemoryQueue<T>
+impl<T, N: QueueNotificationPort> InMemoryQueue<T, N> {
+    /// Get the notifier for this queue
+    pub fn notifier(&self) -> &N {
+        &self.notifier
+    }
+}
+
+impl<T, N: QueueNotificationPort> InMemoryQueue<T, N>
 where
     T: Send + Sync + Clone + Serialize + DeserializeOwned,
 {
-    pub fn new(queue_name: impl Into<String>) -> Self {
+    pub fn new(queue_name: impl Into<String>, notifier: N) -> Self {
         Self {
             items: Arc::new(RwLock::new(Vec::new())),
             queue_name: queue_name.into(),
+            notifier,
         }
     }
 }
 
 #[async_trait]
-impl<T> QueuePort<T> for InMemoryQueue<T>
+impl<T, N: QueueNotificationPort + 'static> QueuePort<T> for InMemoryQueue<T, N>
 where
     T: Send + Sync + Clone + Serialize + DeserializeOwned,
 {
@@ -45,6 +53,11 @@ where
         let item = QueueItem::new(payload, priority);
         let id = item.id;
         items.push(item);
+        drop(items); // Release the lock before notifying
+        
+        // Notify workers that work is available
+        self.notifier.notify_work_available().await;
+        
         Ok(id)
     }
 
@@ -204,7 +217,7 @@ where
 }
 
 #[async_trait]
-impl<T> ApprovalQueuePort<T> for InMemoryQueue<T>
+impl<T, N: QueueNotificationPort + 'static> ApprovalQueuePort<T> for InMemoryQueue<T, N>
 where
     T: Send + Sync + Clone + Serialize + DeserializeOwned,
 {
@@ -274,7 +287,7 @@ where
 }
 
 #[async_trait]
-impl<T> ProcessingQueuePort<T> for InMemoryQueue<T>
+impl<T, N: QueueNotificationPort + 'static> ProcessingQueuePort<T> for InMemoryQueue<T, N>
 where
     T: Send + Sync + Clone + Serialize + DeserializeOwned,
 {

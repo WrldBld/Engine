@@ -95,6 +95,7 @@ pub trait SceneService: Send + Sync {
 }
 
 /// Default implementation of SceneService using Neo4j repository
+#[derive(Clone)]
 pub struct SceneServiceImpl {
     scene_repository: Arc<dyn SceneRepositoryPort>,
     location_repository: Arc<dyn LocationRepositoryPort>,

@@ -29,6 +29,9 @@ pub struct AppConfig {
 
     /// Queue configuration
     pub queue: QueueConfig,
+
+    /// Session configuration
+    pub session: SessionConfig,
 }
 
 /// Queue system configuration
@@ -46,6 +49,21 @@ pub struct QueueConfig {
     pub history_retention_hours: u64,
     /// How long before pending approvals expire (minutes)
     pub approval_timeout_minutes: u64,
+    /// Polling interval when queue is empty (milliseconds)
+    pub worker_poll_interval_ms: u64,
+    /// Delay after error before retrying (milliseconds)
+    pub worker_error_delay_ms: u64,
+    /// Cleanup worker interval (seconds)
+    pub cleanup_interval_seconds: u64,
+    /// Recovery poll interval for crash recovery (seconds)
+    pub recovery_poll_interval_seconds: u64,
+}
+
+/// Session and conversation configuration
+#[derive(Debug, Clone)]
+pub struct SessionConfig {
+    /// Maximum conversation history turns to retain per session
+    pub max_conversation_history: usize,
 }
 
 impl AppConfig {
@@ -89,6 +107,29 @@ impl AppConfig {
                     .parse()
                     .unwrap_or(24),
                 approval_timeout_minutes: env::var("QUEUE_APPROVAL_TIMEOUT_MINUTES")
+                    .unwrap_or_else(|_| "30".to_string())
+                    .parse()
+                    .unwrap_or(30),
+                worker_poll_interval_ms: env::var("QUEUE_WORKER_POLL_INTERVAL_MS")
+                    .unwrap_or_else(|_| "100".to_string())
+                    .parse()
+                    .unwrap_or(100),
+                worker_error_delay_ms: env::var("QUEUE_WORKER_ERROR_DELAY_MS")
+                    .unwrap_or_else(|_| "1000".to_string())
+                    .parse()
+                    .unwrap_or(1000),
+                cleanup_interval_seconds: env::var("QUEUE_CLEANUP_INTERVAL_SECONDS")
+                    .unwrap_or_else(|_| "3600".to_string())
+                    .parse()
+                    .unwrap_or(3600),
+                recovery_poll_interval_seconds: env::var("QUEUE_RECOVERY_POLL_INTERVAL_SECONDS")
+                    .unwrap_or_else(|_| "30".to_string())
+                    .parse()
+                    .unwrap_or(30),
+            },
+
+            session: SessionConfig {
+                max_conversation_history: env::var("SESSION_MAX_CONVERSATION_HISTORY")
                     .unwrap_or_else(|_| "30".to_string())
                     .parse()
                     .unwrap_or(30),

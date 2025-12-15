@@ -53,6 +53,7 @@ pub trait NarrativeEventService: Send + Sync {
 }
 
 /// Default implementation of NarrativeEventService using port abstractions
+#[derive(Clone)]
 pub struct NarrativeEventServiceImpl {
     repository: Arc<dyn NarrativeEventRepositoryPort>,
 }

@@ -35,6 +35,7 @@ pub trait InteractionService: Send + Sync {
 }
 
 /// Default implementation of InteractionService using port abstractions
+#[derive(Clone)]
 pub struct InteractionServiceImpl {
     repository: Arc<dyn InteractionRepositoryPort>,
 }

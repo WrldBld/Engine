@@ -5,30 +5,38 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, DeserializeOwned, Serialize};
+use serde::{de::DeserializeOwned, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;
 use sqlx::{SqlitePool, Row};
 
 use crate::application::ports::outbound::{
     ApprovalQueuePort, ProcessingQueuePort, QueueError, QueueItem, QueueItemId, QueueItemStatus,
-    QueuePort,
+    QueueNotificationPort, QueuePort,
 };
 use crate::domain::value_objects::SessionId;
 
 /// SQLite queue implementation
-pub struct SqliteQueue<T> {
+pub struct SqliteQueue<T, N: QueueNotificationPort> {
     pool: SqlitePool,
     queue_name: String,
     batch_size: usize,
+    notifier: N,
     _phantom: std::marker::PhantomData<T>,
 }
 
-impl<T> SqliteQueue<T>
+impl<T, N: QueueNotificationPort> SqliteQueue<T, N> {
+    /// Get the notifier for this queue
+    pub fn notifier(&self) -> &N {
+        &self.notifier
+    }
+}
+
+impl<T, N: QueueNotificationPort> SqliteQueue<T, N>
 where
     T: Send + Sync + Clone + Serialize + DeserializeOwned,
 {
-    pub async fn new(pool: SqlitePool, queue_name: impl Into<String>, batch_size: usize) -> Result<Self, QueueError> {
+    pub async fn new(pool: SqlitePool, queue_name: impl Into<String>, batch_size: usize, notifier: N) -> Result<Self, QueueError> {
         let queue_name = queue_name.into();
         
         // Ensure table exists
@@ -80,6 +88,7 @@ where
             pool,
             queue_name,
             batch_size,
+            notifier,
             _phantom: std::marker::PhantomData,
         })
     }
@@ -179,7 +188,7 @@ where
 }
 
 #[async_trait]
-impl<T> QueuePort<T> for SqliteQueue<T>
+impl<T, N: QueueNotificationPort + 'static> QueuePort<T> for SqliteQueue<T, N>
 where
     T: Send + Sync + Clone + Serialize + DeserializeOwned + 'static,
 {
@@ -205,6 +214,9 @@ where
         .execute(&self.pool)
         .await
         .map_err(|e| QueueError::Database(e.to_string()))?;
+
+        // Notify workers that work is available
+        self.notifier.notify_work_available().await;
 
         Ok(id)
     }
@@ -454,7 +466,7 @@ where
 }
 
 #[async_trait]
-impl<T> ApprovalQueuePort<T> for SqliteQueue<T>
+impl<T, N: QueueNotificationPort + 'static> ApprovalQueuePort<T> for SqliteQueue<T, N>
 where
     T: Send + Sync + Clone + Serialize + DeserializeOwned + 'static,
 {
@@ -520,7 +532,7 @@ where
 }
 
 #[async_trait]
-impl<T> ProcessingQueuePort<T> for SqliteQueue<T>
+impl<T, N: QueueNotificationPort + 'static> ProcessingQueuePort<T> for SqliteQueue<T, N>
 where
     T: Send + Sync + Clone + Serialize + DeserializeOwned + 'static,
 {

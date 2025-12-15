@@ -12,8 +12,8 @@ use crate::application::ports::outbound::{
     ApprovalQueuePort, BroadcastMessage, QueueError, QueueItem, QueueItemId,
     SessionManagementPort,
 };
-use crate::application::services::ToolExecutionService;
-use crate::application::dto::{ApprovalItem, DecisionType, DecisionUrgency};
+use crate::application::services::tool_execution_service::ToolExecutionService;
+use crate::application::dto::ApprovalItem;
 use crate::domain::value_objects::{ApprovalDecision, GameTool, SessionId};
 
 /// Maximum number of times a response can be rejected before requiring TakeOver
@@ -120,7 +120,7 @@ impl<Q: ApprovalQueuePort<ApprovalItem>> DMApprovalQueueService<Q> {
         session
             .broadcast_to_session(
                 session_id,
-                BroadcastMessage {
+                &BroadcastMessage {
                     content: message,
                 },
             )
@@ -160,7 +160,7 @@ impl<Q: ApprovalQueuePort<ApprovalItem>> DMApprovalQueueService<Q> {
         approval: &ApprovalItem,
         modified_dialogue: &str,
         approved_tools: &[String],
-        rejected_tools: &[String],
+        _rejected_tools: &[String],
     ) -> Result<ApprovalOutcome, QueueError> {
         // Broadcast the modified dialogue using ServerMessage format
         let message = serde_json::json!({
@@ -174,7 +174,7 @@ impl<Q: ApprovalQueuePort<ApprovalItem>> DMApprovalQueueService<Q> {
         session
             .broadcast_to_session(
                 session_id,
-                BroadcastMessage {
+                &BroadcastMessage {
                     content: message,
                 },
             )
@@ -255,7 +255,7 @@ impl<Q: ApprovalQueuePort<ApprovalItem>> DMApprovalQueueService<Q> {
         session
             .broadcast_to_session(
                 session_id,
-                BroadcastMessage {
+                &BroadcastMessage {
                     content: message,
                 },
             )

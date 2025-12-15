@@ -17,8 +17,8 @@ mod workflow_config;
 mod world;
 
 pub use challenge::{
-    Challenge, ChallengeOutcomes, ChallengeType, Difficulty, DifficultyDescriptor, Outcome,
-    OutcomeTrigger, TriggerCondition, TriggerType,
+    Challenge, ChallengeOutcomes, ChallengeType, Difficulty, DifficultyDescriptor,
+    Outcome, OutcomeType, OutcomeTrigger, TriggerCondition, TriggerType,
 };
 pub use character::{Character, StatBlock};
 pub use event_chain::{ChainStatus, EventChain};

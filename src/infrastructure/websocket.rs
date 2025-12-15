@@ -15,15 +15,15 @@ use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
+use crate::application::dto::{ChallengeSuggestionInfo, DMAction, NarrativeEventSuggestionInfo};
 use crate::application::ports::outbound::PlayerWorldSnapshot;
-use crate::application::services::WorldService;
-use crate::domain::value_objects::{ActionId, SessionId, WorldId};
+use crate::application::services::{
+    ChallengeService, InteractionService, SceneService, WorldService,
+};
+use crate::domain::entities::OutcomeType;
+use crate::domain::value_objects::{ActionId, ApprovalDecision, ProposedToolInfo, SessionId, WorldId};
 use crate::infrastructure::session::{ClientId, SessionError, WorldSnapshot};
 use crate::infrastructure::state::AppState;
-use crate::domain::value_objects::{
-    ActiveNarrativeEventContext, ApprovalDecision, CharacterContext, GamePromptRequest,
-    PlayerActionContext, ProposedToolInfo, SceneContext,
-};
 
 /// WebSocket upgrade handler
 pub async fn ws_handler(
@@ -271,16 +271,131 @@ async fn handle_message(
         ClientMessage::RequestSceneChange { scene_id } => {
             tracing::debug!("Scene change requested: {}", scene_id);
 
-            // Get the client's session
-            let sessions = state.sessions.read().await;
-            if let Some(session_id) = sessions.get_client_session(client_id) {
-                if let Some(_session) = sessions.get_session(session_id) {
-                    // TODO: Load scene from database and broadcast SceneUpdate to all participants
-                    // For now, this is a placeholder
+            // Parse scene_id
+            let scene_uuid = match uuid::Uuid::parse_str(&scene_id) {
+                Ok(uuid) => crate::domain::value_objects::SceneId::from_uuid(uuid),
+                Err(_) => {
+                    return Some(ServerMessage::Error {
+                        code: "INVALID_SCENE_ID".to_string(),
+                        message: "Invalid scene ID format".to_string(),
+                    });
                 }
-            }
+            };
 
-            None // Will implement scene loading
+            // Get the client's session
+            let sessions_read = state.sessions.read().await;
+            let session_id = match sessions_read.get_client_session(client_id) {
+                Some(sid) => sid,
+                None => {
+                    return Some(ServerMessage::Error {
+                        code: "NOT_IN_SESSION".to_string(),
+                        message: "You must join a session before requesting scene changes".to_string(),
+                    });
+                }
+            };
+            drop(sessions_read);
+
+            // Load scene from database with relations
+            let scene_with_relations = match state.scene_service.get_scene_with_relations(scene_uuid).await {
+                Ok(Some(scene_data)) => scene_data,
+                Ok(None) => {
+                    return Some(ServerMessage::Error {
+                        code: "SCENE_NOT_FOUND".to_string(),
+                        message: format!("Scene {} not found", scene_id),
+                    });
+                }
+                Err(e) => {
+                    tracing::error!("Failed to load scene: {}", e);
+                    return Some(ServerMessage::Error {
+                        code: "SCENE_LOAD_ERROR".to_string(),
+                        message: "Failed to load scene".to_string(),
+                    });
+                }
+            };
+
+            // Load interactions for the scene
+            let interactions = match state.interaction_service.list_interactions(scene_uuid).await {
+                Ok(interactions) => interactions
+                    .into_iter()
+                    .map(|i| {
+                        let target_name = match &i.target {
+                            crate::domain::entities::InteractionTarget::Character(_) => {
+                                Some("Character".to_string())
+                            }
+                            crate::domain::entities::InteractionTarget::Item(_) => {
+                                Some("Item".to_string())
+                            }
+                            crate::domain::entities::InteractionTarget::Environment(name) => {
+                                Some(name.clone())
+                            }
+                            crate::domain::entities::InteractionTarget::None => None,
+                        };
+                        InteractionData {
+                            id: i.id.to_string(),
+                            name: i.name.clone(),
+                            interaction_type: format!("{:?}", i.interaction_type),
+                            target_name,
+                            is_available: i.is_available,
+                        }
+                    })
+                    .collect(),
+                Err(e) => {
+                    tracing::warn!("Failed to load interactions for scene: {}", e);
+                    vec![]
+                }
+            };
+
+            // Build character data from featured characters
+            let characters: Vec<CharacterData> = scene_with_relations
+                .featured_characters
+                .iter()
+                .map(|c| CharacterData {
+                    id: c.id.to_string(),
+                    name: c.name.clone(),
+                    sprite_asset: c.sprite_asset.clone(),
+                    portrait_asset: c.portrait_asset.clone(),
+                    position: CharacterPosition::Center, // Default position, could be enhanced
+                    is_speaking: false,
+                })
+                .collect();
+
+            // Build SceneUpdate message
+            let scene_update = ServerMessage::SceneUpdate {
+                scene: SceneData {
+                    id: scene_with_relations.scene.id.to_string(),
+                    name: scene_with_relations.scene.name.clone(),
+                    location_id: scene_with_relations.scene.location_id.to_string(),
+                    location_name: scene_with_relations.location.name.clone(),
+                    backdrop_asset: scene_with_relations
+                        .scene
+                        .backdrop_override
+                        .or(scene_with_relations.location.backdrop_asset.clone()),
+                    time_context: match &scene_with_relations.scene.time_context {
+                        crate::domain::entities::TimeContext::Unspecified => "Unspecified".to_string(),
+                        crate::domain::entities::TimeContext::TimeOfDay(tod) => format!("{:?}", tod),
+                        crate::domain::entities::TimeContext::During(s) => s.clone(),
+                        crate::domain::entities::TimeContext::Custom(s) => s.clone(),
+                    },
+                    directorial_notes: scene_with_relations.scene.directorial_notes.clone(),
+                },
+                characters,
+                interactions,
+            };
+
+            // Update session's current scene and broadcast to all participants
+            let mut sessions_write = state.sessions.write().await;
+            if let Some(session) = sessions_write.get_session_mut(session_id) {
+                // Update current scene in session
+                session.current_scene_id = Some(scene_id.clone());
+                
+                // Broadcast SceneUpdate to all participants
+                sessions_write.broadcast_to_session(session_id, &scene_update);
+            }
+            drop(sessions_write);
+
+            tracing::info!("Scene change to {} broadcast to session {}", scene_id, session_id);
+
+            None // SceneUpdate is broadcast, no direct response needed
         }
 
         ClientMessage::DirectorialUpdate { context: _ } => {
@@ -329,7 +444,7 @@ async fn handle_message(
             if let (Some(session_id), Some(dm_id)) = (session_id, dm_id) {
                 // Enqueue to DMActionQueue - returns immediately
                 // The DM action queue worker will process this asynchronously
-                let dm_action = crate::domain::value_objects::DMAction::ApprovalDecision {
+                let dm_action = DMAction::ApprovalDecision {
                     request_id: request_id.clone(),
                     decision: decision.clone(),
                 };
@@ -342,21 +457,21 @@ async fn handle_message(
                     Ok(_) => {
                         tracing::info!("Enqueued approval decision for request {}", request_id);
                         // Return acknowledgment - processing happens in background worker
-                        None
+                        return None;
                     }
                     Err(e) => {
                         tracing::error!("Failed to enqueue approval decision: {}", e);
-                        Some(ServerMessage::Error {
+                        return Some(ServerMessage::Error {
                             code: "QUEUE_ERROR".to_string(),
                             message: format!("Failed to queue approval: {}", e),
-                        })
+                        });
                     }
                 }
             } else {
-                Some(ServerMessage::Error {
+                return Some(ServerMessage::Error {
                     code: "NOT_AUTHORIZED".to_string(),
                     message: "Only the DM can approve responses".to_string(),
-                })
+                });
             }
 
             None
@@ -367,9 +482,80 @@ async fn handle_message(
             roll,
         } => {
             tracing::debug!("Received challenge roll: {} for challenge {}", roll, challenge_id);
-            // TODO: Implement challenge roll handling
-            // This would validate the roll, look up the challenge, and broadcast results
-            None
+
+            // Parse challenge_id
+            let challenge_uuid = match uuid::Uuid::parse_str(&challenge_id) {
+                Ok(uuid) => crate::domain::value_objects::ChallengeId::from_uuid(uuid),
+                Err(_) => {
+                    return Some(ServerMessage::Error {
+                        code: "INVALID_CHALLENGE_ID".to_string(),
+                        message: "Invalid challenge ID format".to_string(),
+                    });
+                }
+            };
+
+            // Load challenge from service
+            let challenge = match state.challenge_service.get_challenge(challenge_uuid).await {
+                Ok(Some(challenge)) => challenge,
+                Ok(None) => {
+                    return Some(ServerMessage::Error {
+                        code: "CHALLENGE_NOT_FOUND".to_string(),
+                        message: format!("Challenge {} not found", challenge_id),
+                    });
+                }
+                Err(e) => {
+                    tracing::error!("Failed to load challenge: {}", e);
+                    return Some(ServerMessage::Error {
+                        code: "CHALLENGE_LOAD_ERROR".to_string(),
+                        message: "Failed to load challenge".to_string(),
+                    });
+                }
+            };
+
+            // Get session and player info
+            let sessions_read = state.sessions.read().await;
+            let (session_id, player_name) = match sessions_read.get_client_session(client_id) {
+                Some(sid) => {
+                    let session = sessions_read.get_session(sid);
+                    let player_name = session
+                        .and_then(|s| s.participants.get(&client_id))
+                        .map(|p| p.user_id.clone())
+                        .unwrap_or_else(|| "Unknown Player".to_string());
+                    (Some(sid), player_name)
+                }
+                None => {
+                    return Some(ServerMessage::Error {
+                        code: "NOT_IN_SESSION".to_string(),
+                        message: "You must join a session before submitting challenge rolls".to_string(),
+                    });
+                }
+            };
+
+            // TODO: Get actual character modifier from character sheet
+            // For now, use a placeholder modifier of 0
+            let character_modifier = 0;
+
+            // Evaluate challenge result
+            let (outcome_type, outcome) = evaluate_challenge_result(&challenge, roll, character_modifier);
+
+            // Broadcast ChallengeResolved to all participants
+            if let Some(session_id) = session_id {
+                let result_msg = ServerMessage::ChallengeResolved {
+                    challenge_id: challenge_id.clone(),
+                    challenge_name: challenge.name.clone(),
+                    character_name: player_name,
+                    roll,
+                    modifier: character_modifier,
+                    total: roll + character_modifier,
+                    outcome: outcome_type.display_name().to_string(),
+                    outcome_description: outcome.description.clone(),
+                };
+                drop(sessions_read);
+                let sessions_write = state.sessions.write().await;
+                sessions_write.broadcast_to_session(session_id, &result_msg);
+            }
+
+            None // ChallengeResolved is broadcast, no direct response needed
         }
 
         ClientMessage::TriggerChallenge {
@@ -381,8 +567,87 @@ async fn handle_message(
                 challenge_id,
                 target_character_id
             );
-            // TODO: Implement manual challenge triggering
-            // This would send a ChallengePrompt message to the target character
+
+            // Verify sender is DM
+            let sessions_read = state.sessions.read().await;
+            let session_id = sessions_read.get_client_session(client_id);
+            let is_dm = session_id
+                .and_then(|sid| sessions_read.get_session(sid))
+                .and_then(|s| s.get_dm())
+                .filter(|dm| dm.client_id == client_id)
+                .is_some();
+
+            if !is_dm {
+                return Some(ServerMessage::Error {
+                    code: "NOT_AUTHORIZED".to_string(),
+                    message: "Only the DM can trigger challenges".to_string(),
+                });
+            }
+
+            // Parse challenge_id
+            let challenge_uuid = match uuid::Uuid::parse_str(&challenge_id) {
+                Ok(uuid) => crate::domain::value_objects::ChallengeId::from_uuid(uuid),
+                Err(_) => {
+                    return Some(ServerMessage::Error {
+                        code: "INVALID_CHALLENGE_ID".to_string(),
+                        message: "Invalid challenge ID format".to_string(),
+                    });
+                }
+            };
+
+            // Load challenge from service
+            let challenge = match state.challenge_service.get_challenge(challenge_uuid).await {
+                Ok(Some(challenge)) => challenge,
+                Ok(None) => {
+                    return Some(ServerMessage::Error {
+                        code: "CHALLENGE_NOT_FOUND".to_string(),
+                        message: format!("Challenge {} not found", challenge_id),
+                    });
+                }
+                Err(e) => {
+                    tracing::error!("Failed to load challenge: {}", e);
+                    return Some(ServerMessage::Error {
+                        code: "CHALLENGE_LOAD_ERROR".to_string(),
+                        message: "Failed to load challenge".to_string(),
+                    });
+                }
+            };
+
+            // TODO: Get skill name from skill service using challenge.skill_id
+            let skill_name = challenge.skill_id.to_string(); // Placeholder
+
+            // TODO: Get character modifier from character sheet
+            let character_modifier = 0; // Placeholder
+
+            // Build ChallengePrompt message
+            let prompt = ServerMessage::ChallengePrompt {
+                challenge_id: challenge_id.clone(),
+                challenge_name: challenge.name.clone(),
+                skill_name,
+                difficulty_display: challenge.difficulty.display(),
+                description: challenge.description.clone(),
+                character_modifier,
+            };
+
+            // Send to target player by character_id
+            // Note: This requires a method to send to a specific character/player
+            // For now, broadcast to all players in the session
+            if let Some(session_id) = session_id {
+                drop(sessions_read);
+                let mut sessions_write = state.sessions.write().await;
+                if let Some(session) = sessions_write.get_session_mut(session_id) {
+                    // Broadcast to all players (targeting will be enhanced later)
+                    session.broadcast_to_players(&prompt);
+                }
+            }
+
+            tracing::info!(
+                "DM triggered challenge {} for character {} in session {:?}",
+                challenge_id,
+                target_character_id,
+                session_id
+            );
+
             None
         }
 
@@ -397,8 +662,39 @@ async fn handle_message(
                 approved,
                 modified_difficulty
             );
-            // TODO: Implement challenge suggestion approval/rejection
-            // This would either trigger the challenge or discard the suggestion
+
+            // Verify sender is DM
+            let sessions_read = state.sessions.read().await;
+            let session_id = sessions_read.get_client_session(client_id);
+            let is_dm = session_id
+                .and_then(|sid| sessions_read.get_session(sid))
+                .and_then(|s| s.get_dm())
+                .filter(|dm| dm.client_id == client_id)
+                .is_some();
+
+            if !is_dm {
+                return Some(ServerMessage::Error {
+                    code: "NOT_AUTHORIZED".to_string(),
+                    message: "Only the DM can approve challenge suggestions".to_string(),
+                });
+            }
+
+            if approved {
+                // TODO: Extract challenge_id from request_id (approval item)
+                // For now, the challenge suggestion is stored in the approval item
+                // This would require looking up the approval item and extracting the challenge_id
+                tracing::info!(
+                    "DM approved challenge suggestion for request {}",
+                    request_id
+                );
+                // TODO: Trigger the challenge with modified_difficulty if provided
+            } else {
+                tracing::info!(
+                    "DM rejected challenge suggestion for request {}",
+                    request_id
+                );
+            }
+
             None
         }
 
@@ -683,6 +979,112 @@ fn convert_to_internal_snapshot(player_snapshot: &PlayerWorldSnapshot) -> WorldS
     }
 }
 
+/// Evaluate a challenge roll result
+fn evaluate_challenge_result(
+    challenge: &crate::domain::entities::Challenge,
+    roll: i32,
+    modifier: i32,
+) -> (OutcomeType, &crate::domain::entities::Outcome) {
+    let total = roll + modifier;
+
+    match &challenge.difficulty {
+        crate::domain::entities::Difficulty::DC(dc) => {
+            // Check for critical success (natural 20) or critical failure (natural 1)
+            if roll == 20 {
+                if let Some(ref critical_success) = challenge.outcomes.critical_success {
+                    return (
+                        OutcomeType::CriticalSuccess,
+                        critical_success,
+                    );
+                }
+            }
+            if roll == 1 {
+                if let Some(ref critical_failure) = challenge.outcomes.critical_failure {
+                    return (
+                        OutcomeType::CriticalFailure,
+                        critical_failure,
+                    );
+                }
+            }
+
+            // Check success/failure
+            if total >= *dc as i32 {
+                (
+                    OutcomeType::Success,
+                    &challenge.outcomes.success,
+                )
+            } else {
+                (
+                    OutcomeType::Failure,
+                    &challenge.outcomes.failure,
+                )
+            }
+        }
+        crate::domain::entities::Difficulty::Percentage(target) => {
+            // D100-style: roll <= target percentage
+            if roll == 1 {
+                if let Some(ref critical_success) = challenge.outcomes.critical_success {
+                    return (
+                        OutcomeType::CriticalSuccess,
+                        critical_success,
+                    );
+                }
+            }
+            if roll == 100 {
+                if let Some(ref critical_failure) = challenge.outcomes.critical_failure {
+                    return (
+                        OutcomeType::CriticalFailure,
+                        critical_failure,
+                    );
+                }
+            }
+
+            if roll <= *target as i32 {
+                (
+                    OutcomeType::Success,
+                    &challenge.outcomes.success,
+                )
+            } else {
+                (
+                    OutcomeType::Failure,
+                    &challenge.outcomes.failure,
+                )
+            }
+        }
+        crate::domain::entities::Difficulty::Descriptor(_) => {
+            // Narrative systems: use descriptor-based evaluation
+            // For now, treat as success if roll is above average (assuming d20)
+            if roll >= 11 {
+                (
+                    OutcomeType::Success,
+                    &challenge.outcomes.success,
+                )
+            } else {
+                (
+                    OutcomeType::Failure,
+                    &challenge.outcomes.failure,
+                )
+            }
+        }
+        crate::domain::entities::Difficulty::Opposed => {
+            // Opposed checks require opponent's roll - for now, treat as success
+            // This should be enhanced when opposed check system is implemented
+            (
+                crate::domain::entities::OutcomeType::Success,
+                &challenge.outcomes.success,
+            )
+        }
+        crate::domain::entities::Difficulty::Custom(_) => {
+            // Custom difficulty - default to success for now
+            // This should be enhanced with custom evaluation logic
+            (
+                crate::domain::entities::OutcomeType::Success,
+                &challenge.outcomes.success,
+            )
+        }
+    }
+}
+
 /// Create a demo world snapshot for testing
 fn create_demo_world() -> WorldSnapshot {
     use crate::domain::entities::World;
@@ -964,27 +1366,5 @@ pub struct NpcMotivationData {
     pub secret_agenda: Option<String>,
 }
 
-// ApprovalDecision and ProposedToolInfo are now imported from domain::value_objects
-
-/// Challenge suggestion information for DM approval
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChallengeSuggestionInfo {
-    pub challenge_id: String,
-    pub challenge_name: String,
-    pub skill_name: String,
-    pub difficulty_display: String,
-    pub confidence: String,
-    pub reasoning: String,
-}
-
-/// Narrative event suggestion information for DM approval
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NarrativeEventSuggestionInfo {
-    pub event_id: String,
-    pub event_name: String,
-    pub description: String,
-    pub scene_direction: String,
-    pub confidence: String,
-    pub reasoning: String,
-    pub matched_triggers: Vec<String>,
-}
+// ChallengeSuggestionInfo and NarrativeEventSuggestionInfo are imported from application::dto
+// ApprovalDecision and ProposedToolInfo are imported from domain::value_objects

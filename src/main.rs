@@ -13,7 +13,9 @@ mod infrastructure;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use std::time::Duration;
 use axum::{routing::get, Router};
+use crate::application::ports::outbound::{ApprovalQueuePort, QueueNotificationPort, QueuePort};
 use tower_http::{
     cors::{Any, CorsLayer},
     trace::TraceLayer,
@@ -54,20 +56,26 @@ async fn main() -> anyhow::Result<()> {
     let state = Arc::new(state);
     tracing::info!("Application state initialized");
 
+    // Clone queue config for workers
+    let queue_config = state.config.queue.clone();
+    let recovery_interval = std::time::Duration::from_secs(queue_config.recovery_poll_interval_seconds);
+
     // Start background queue workers
     let llm_worker = {
         let service = state.llm_queue_service.clone();
+        let recovery_interval_clone = recovery_interval;
         tokio::spawn(async move {
             tracing::info!("Starting LLM queue worker");
-            service.run_worker().await;
+            service.run_worker(recovery_interval_clone).await;
         })
     };
 
     let asset_worker = {
         let service = state.asset_generation_queue_service.clone();
+        let recovery_interval_clone = recovery_interval;
         tokio::spawn(async move {
             tracing::info!("Starting asset generation queue worker");
-            service.run_worker().await;
+            service.run_worker(recovery_interval_clone).await;
         })
     };
 
@@ -75,20 +83,30 @@ async fn main() -> anyhow::Result<()> {
     let player_action_worker = {
         let service = state.player_action_queue_service.clone();
         let sessions = state.sessions.clone();
-        let challenge_service = state.challenge_service.clone();
-        let narrative_event_service = state.narrative_event_service.clone();
+        let challenge_service = Arc::new(state.challenge_service.clone());
+        let narrative_event_service = Arc::new(state.narrative_event_service.clone());
+        let notifier = service.queue.notifier();
+        let recovery_interval_clone = recovery_interval;
         tokio::spawn(async move {
             tracing::info!("Starting player action queue worker");
             loop {
+                let sessions_clone = sessions.clone();
+                let challenge_service_clone = challenge_service.clone();
+                let narrative_event_service_clone = narrative_event_service.clone();
                 match service
-                    .process_next(|action| async move {
+                    .process_next(|action| {
+                        let sessions = sessions_clone.clone();
+                        let challenge_service = challenge_service_clone.clone();
+                        let narrative_event_service = narrative_event_service_clone.clone();
+                        async move {
                         build_prompt_from_action(
                             &sessions,
                             &challenge_service,
                             &narrative_event_service,
-                            action,
+                                &action,
                         )
                         .await
+                        }
                     })
                     .await
                 {
@@ -96,8 +114,8 @@ async fn main() -> anyhow::Result<()> {
                         tracing::debug!("Processed player action: {}", action_id);
                     }
                     Ok(None) => {
-                        // Queue empty, wait a bit before checking again
-                        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                        // Queue empty - wait for notification or recovery timeout
+                        let _ = notifier.wait_for_work(recovery_interval_clone).await;
                     }
                     Err(e) => {
                         tracing::error!("Error processing player action: {}", e);
@@ -112,8 +130,9 @@ async fn main() -> anyhow::Result<()> {
     let approval_notification_worker_task = {
         let service = state.dm_approval_queue_service.clone();
         let sessions = state.sessions.clone();
+        let recovery_interval_clone = recovery_interval;
         tokio::spawn(async move {
-            approval_notification_worker(service, sessions).await;
+            approval_notification_worker(service, sessions, recovery_interval_clone).await;
         })
     };
 
@@ -121,9 +140,22 @@ async fn main() -> anyhow::Result<()> {
     let dm_action_worker_task = {
         let service = state.dm_action_queue_service.clone();
         let approval_service = state.dm_approval_queue_service.clone();
+        let narrative_event_service = Arc::new(state.narrative_event_service.clone());
+        let scene_service = Arc::new(state.scene_service.clone());
+        let interaction_service = Arc::new(state.interaction_service.clone());
         let sessions = state.sessions.clone();
+        let recovery_interval_clone = recovery_interval;
         tokio::spawn(async move {
-            dm_action_worker(service, approval_service, sessions).await;
+            dm_action_worker(
+                service,
+                approval_service,
+                narrative_event_service,
+                scene_service,
+                interaction_service,
+                sessions,
+                recovery_interval_clone,
+            )
+            .await;
         })
     };
 
@@ -133,11 +165,11 @@ async fn main() -> anyhow::Result<()> {
         let llm_service = state.llm_queue_service.clone();
         let approval_service = state.dm_approval_queue_service.clone();
         let asset_service = state.asset_generation_queue_service.clone();
-        let config = state.config.queue.clone();
+        let queue_config_clone = queue_config.clone();
         tokio::spawn(async move {
             tracing::info!("Starting queue cleanup worker");
             loop {
-                let retention = std::time::Duration::from_secs(config.history_retention_hours * 3600);
+                let retention = std::time::Duration::from_secs(queue_config_clone.history_retention_hours * 3600);
                 
                 // Cleanup all queues
                 let _ = player_action_service.queue.cleanup(retention).await;
@@ -146,16 +178,21 @@ async fn main() -> anyhow::Result<()> {
                 let _ = asset_service.queue.cleanup(retention).await;
                 
                 // Expire old approvals
-                let approval_timeout = std::time::Duration::from_secs(config.approval_timeout_minutes * 60);
+                let approval_timeout = std::time::Duration::from_secs(queue_config_clone.approval_timeout_minutes * 60);
                 let _ = approval_service.queue.expire_old(approval_timeout).await;
                 
-                // Run cleanup every hour
-                tokio::time::sleep(tokio::time::Duration::from_secs(3600)).await;
+                // Run cleanup using configured interval
+                tokio::time::sleep(tokio::time::Duration::from_secs(
+                    queue_config_clone.cleanup_interval_seconds
+                )).await;
             }
         })
     };
 
     tracing::info!("Background queue workers started");
+
+    // Get server port before moving state
+    let server_port = state.config.server_port;
 
     // Build the router
     let app = Router::new()
@@ -173,7 +210,7 @@ async fn main() -> anyhow::Result<()> {
         .with_state(state);
 
     // Start the server
-    let addr = SocketAddr::from(([0, 0, 0, 0], 3000));
+    let addr = SocketAddr::from(([0, 0, 0, 0], server_port));
     tracing::info!("Listening on {}", addr);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;

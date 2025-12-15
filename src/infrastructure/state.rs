@@ -32,7 +32,7 @@ pub struct AppState {
     pub llm_client: OllamaClient,
     pub comfyui_client: ComfyUIClient,
     /// Active WebSocket sessions
-    pub sessions: RwLock<SessionManager>,
+    pub sessions: Arc<RwLock<SessionManager>>,
     // Application services
     pub world_service: WorldServiceImpl,
     pub character_service: CharacterServiceImpl,
@@ -49,20 +49,22 @@ pub struct AppState {
     pub workflow_config_service: WorkflowConfigService,
     pub sheet_template_service: SheetTemplateService,
     // Queue services - using QueueBackendEnum for runtime backend selection
+    // Note: Services take Arc<Q> where Q implements the port, so Q = QueueBackendEnum<T>
+    // (not Arc<QueueBackendEnum<T>>) since Arc<QueueBackendEnum<T>> implements the port
     pub player_action_queue_service: Arc<PlayerActionQueueService<
-        Arc<crate::infrastructure::queues::QueueBackendEnum<PlayerActionItem>>,
-        Arc<crate::infrastructure::queues::QueueBackendEnum<LLMRequestItem>>,
+        crate::infrastructure::queues::QueueBackendEnum<PlayerActionItem>,
+        crate::infrastructure::queues::QueueBackendEnum<LLMRequestItem>,
     >>,
-    pub dm_action_queue_service: Arc<DMActionQueueService<Arc<crate::infrastructure::queues::QueueBackendEnum<DMActionItem>>>>,
-    pub llm_queue_service: Arc<LLMQueueService<Arc<crate::infrastructure::queues::QueueBackendEnum<LLMRequestItem>>, OllamaClient>>,
+    pub dm_action_queue_service: Arc<DMActionQueueService<crate::infrastructure::queues::QueueBackendEnum<DMActionItem>>>,
+    pub llm_queue_service: Arc<LLMQueueService<crate::infrastructure::queues::QueueBackendEnum<LLMRequestItem>, OllamaClient, crate::infrastructure::queues::InProcessNotifier>>,
     pub asset_generation_queue_service: Arc<
         AssetGenerationQueueService<
-            Arc<crate::infrastructure::queues::QueueBackendEnum<AssetGenerationItem>>,
+            crate::infrastructure::queues::QueueBackendEnum<AssetGenerationItem>,
             ComfyUIClient,
-            Arc<dyn crate::application::ports::outbound::AssetRepositoryPort>,
+            crate::infrastructure::queues::InProcessNotifier,
         >,
     >,
-    pub dm_approval_queue_service: Arc<DMApprovalQueueService<Arc<crate::infrastructure::queues::QueueBackendEnum<ApprovalItem>>>>,
+    pub dm_approval_queue_service: Arc<DMApprovalQueueService<crate::infrastructure::queues::QueueBackendEnum<ApprovalItem>>>,
 }
 
 impl AppState {
@@ -132,7 +134,8 @@ impl AppState {
         let challenge_service = ChallengeServiceImpl::new(challenge_repo);
         let narrative_event_service = NarrativeEventServiceImpl::new(narrative_event_repo);
         let event_chain_service = EventChainServiceImpl::new(event_chain_repo);
-        let asset_service = AssetServiceImpl::new(asset_repo);
+        let asset_repo_for_service = asset_repo.clone();
+        let asset_service = AssetServiceImpl::new(asset_repo_for_service);
         let workflow_config_service = WorkflowConfigService::new(workflow_repo);
         let sheet_template_service = SheetTemplateService::new(sheet_template_repo);
 
@@ -147,12 +150,13 @@ impl AppState {
         let approval_queue = queue_factory.create_approval_queue().await?;
 
         // Initialize queue services
+        // Services take Arc<Q>, so we pass Arc<QueueBackendEnum<T>> directly
         let player_action_queue_service = Arc::new(PlayerActionQueueService::new(
             player_action_queue.clone(),
             llm_queue.clone(),
         ));
 
-        let dm_action_queue_service = Arc::new(DMActionQueueService::new(dm_action_queue));
+        let dm_action_queue_service = Arc::new(DMActionQueueService::new(dm_action_queue.clone()));
 
         let llm_client_arc = Arc::new(llm_client.clone());
         let llm_queue_service = Arc::new(LLMQueueService::new(
@@ -160,23 +164,28 @@ impl AppState {
             llm_client_arc,
             approval_queue.clone(),
             queue_factory.config().llm_batch_size,
+            queue_factory.llm_notifier(),
         ));
 
+        let asset_repo_for_queue = asset_repo.clone();
         let asset_generation_queue_service = Arc::new(AssetGenerationQueueService::new(
-            asset_generation_queue,
+            asset_generation_queue.clone(),
             Arc::new(comfyui_client.clone()),
-            asset_repo.clone(),
+            asset_repo_for_queue,
             queue_factory.config().asset_batch_size,
+            queue_factory.asset_generation_notifier(),
         ));
 
-        let dm_approval_queue_service = Arc::new(DMApprovalQueueService::new(approval_queue));
+        let dm_approval_queue_service = Arc::new(DMApprovalQueueService::new(approval_queue.clone()));
 
         Ok(Self {
-            config,
+            config: config.clone(),
             repository,
             llm_client,
             comfyui_client,
-            sessions: RwLock::new(SessionManager::new()),
+            sessions: Arc::new(RwLock::new(SessionManager::new(
+                config.session.max_conversation_history
+            ))),
             relationship_service,
             world_service,
             character_service,

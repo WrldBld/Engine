@@ -16,7 +16,7 @@ use crate::application::ports::outbound::{
 use crate::domain::value_objects::{
     ActiveChallengeContext, ActiveNarrativeEventContext, ChangeAmount, CharacterContext,
     ConversationTurn, DirectorialNotes, GamePromptRequest, GameTool, InfoImportance,
-    PlayerActionContext, RelationshipChange, SceneContext,
+    RelationshipChange, SceneContext,
 };
 
 /// Service for generating AI-powered game responses

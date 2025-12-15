@@ -11,7 +11,7 @@ use crate::application::dto::{DMAction, DMActionItem};
 
 /// Service for managing the DM action queue
 pub struct DMActionQueueService<Q: QueuePort<DMActionItem>> {
-    queue: Arc<Q>,
+    pub(crate) queue: Arc<Q>,
 }
 
 impl<Q: QueuePort<DMActionItem>> DMActionQueueService<Q> {
@@ -49,15 +49,15 @@ impl<Q: QueuePort<DMActionItem>> DMActionQueueService<Q> {
         process_action: F,
     ) -> Result<Option<QueueItemId>, QueueError>
     where
-        F: FnOnce(&DMActionItem) -> Fut,
+        F: FnOnce(DMActionItem) -> Fut,
         Fut: std::future::Future<Output = Result<(), QueueError>>,
     {
         let Some(item) = self.queue.dequeue().await? else {
             return Ok(None);
         };
 
-        // Process the action (async)
-        match process_action(&item.payload).await {
+        // Clone payload before passing to callback (item.payload is already Clone)
+        match process_action(item.payload.clone()).await {
             Ok(()) => {
                 self.queue.complete(item.id).await?;
                 Ok(Some(item.id))

@@ -61,33 +61,38 @@ impl<Q: QueuePort<PlayerActionItem>, LQ: ProcessingQueuePort<LLMRequestItem>>
         build_prompt: F,
     ) -> Result<Option<QueueItemId>, QueueError>
     where
-        F: FnOnce(&PlayerActionItem) -> Fut,
+        F: FnOnce(PlayerActionItem) -> Fut,
         Fut: std::future::Future<Output = Result<GamePromptRequest, QueueError>>,
     {
         let Some(item) = self.queue.dequeue().await? else {
             return Ok(None);
         };
 
+        // Clone payload before passing to callback (item.payload is already Clone)
+        let payload = item.payload.clone();
+        let session_id = payload.session_id;
+        let item_id = item.id;
+
         // Build the prompt request from the action (async)
-        let prompt = build_prompt(&item.payload).await?;
+        let prompt = build_prompt(payload).await?;
 
         // Create LLM request item
         let llm_request = LLMRequestItem {
             request_type: LLMRequestType::NPCResponse {
-                action_item_id: item.id,
+                action_item_id: item_id,
             },
-            session_id: Some(item.payload.session_id),
+            session_id: Some(session_id),
             prompt,
-            callback_id: item.id.to_string(),
+            callback_id: item_id.to_string(),
         };
 
         // Enqueue to LLM queue (normal priority)
         self.llm_queue.enqueue(llm_request, 0).await?;
 
         // Mark action as completed (LLM queue handles the rest)
-        self.queue.complete(item.id).await?;
+        self.queue.complete(item_id).await?;
 
-        Ok(Some(item.id))
+        Ok(Some(item_id))
     }
 
     /// Get queue depth (number of pending actions)

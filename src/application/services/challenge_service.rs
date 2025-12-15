@@ -47,6 +47,7 @@ pub trait ChallengeService: Send + Sync {
 }
 
 /// Default implementation of ChallengeService using port abstractions
+#[derive(Clone)]
 pub struct ChallengeServiceImpl {
     repository: Arc<dyn ChallengeRepositoryPort>,
 }

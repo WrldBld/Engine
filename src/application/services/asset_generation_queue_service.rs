@@ -9,7 +9,7 @@ use std::time::Duration;
 use tokio::sync::Semaphore;
 
 use crate::application::ports::outbound::{
-    AssetRepositoryPort, ComfyUIPort, ProcessingQueuePort, QueueError, QueueItemId, QueuePort,
+    AssetRepositoryPort, ComfyUIPort, ProcessingQueuePort, QueueError, QueueItemId, QueueNotificationPort,
 };
 use crate::application::dto::AssetGenerationItem;
 
@@ -20,16 +20,17 @@ const PRIORITY_NORMAL: u8 = 0;
 pub struct AssetGenerationQueueService<
     Q: ProcessingQueuePort<AssetGenerationItem>,
     C: ComfyUIPort,
-    R: AssetRepositoryPort,
+    N: QueueNotificationPort,
 > {
     pub(crate) queue: Arc<Q>,
     comfyui_client: Arc<C>,
-    asset_repository: Arc<R>,
+    asset_repository: Arc<dyn AssetRepositoryPort>,
     semaphore: Arc<Semaphore>,
+    notifier: N,
 }
 
-impl<Q: ProcessingQueuePort<AssetGenerationItem>, C: ComfyUIPort, R: AssetRepositoryPort>
-    AssetGenerationQueueService<Q, C, R>
+impl<Q: ProcessingQueuePort<AssetGenerationItem> + 'static, C: ComfyUIPort + 'static, N: QueueNotificationPort + 'static>
+    AssetGenerationQueueService<Q, C, N>
 {
     /// Create a new asset generation queue service
     ///
@@ -39,17 +40,20 @@ impl<Q: ProcessingQueuePort<AssetGenerationItem>, C: ComfyUIPort, R: AssetReposi
     /// * `comfyui_client` - The ComfyUI client for processing requests
     /// * `asset_repository` - The asset repository for persisting results
     /// * `batch_size` - Maximum concurrent ComfyUI requests (typically 1)
+    /// * `notifier` - The notifier for waking workers
     pub fn new(
         queue: Arc<Q>,
         comfyui_client: Arc<C>,
-        asset_repository: Arc<R>,
+        asset_repository: Arc<dyn AssetRepositoryPort>,
         batch_size: usize,
+        notifier: N,
     ) -> Self {
         Self {
             queue,
             comfyui_client,
             asset_repository,
             semaphore: Arc::new(Semaphore::new(batch_size.max(1))),
+            notifier,
         }
     }
 
@@ -63,43 +67,44 @@ impl<Q: ProcessingQueuePort<AssetGenerationItem>, C: ComfyUIPort, R: AssetReposi
     /// This method runs in a loop, processing items from the queue with
     /// concurrency control via semaphore. Each request is processed in
     /// a spawned task to allow parallel processing up to batch_size.
-    pub async fn run_worker(&self) {
+    ///
+    /// # Arguments
+    /// * `recovery_interval` - Fallback poll interval for crash recovery
+    pub async fn run_worker(self: Arc<Self>, recovery_interval: Duration) {
         loop {
-            // Wait for capacity
-            let permit = match self.semaphore.acquire().await {
-                Ok(p) => p,
-                Err(e) => {
-                    tracing::error!("Semaphore error: {}", e);
-                    tokio::time::sleep(Duration::from_secs(1)).await;
-                    continue;
-                }
-            };
-
             // Try to get next item
             let item = match self.queue.dequeue().await {
                 Ok(Some(item)) => item,
                 Ok(None) => {
-                    drop(permit);
-                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    // Queue empty - wait for notification or recovery timeout
+                    let _ = self.notifier.wait_for_work(recovery_interval).await;
                     continue;
                 }
                 Err(e) => {
                     tracing::error!("Failed to dequeue asset generation request: {}", e);
-                    drop(permit);
                     tokio::time::sleep(Duration::from_secs(1)).await;
                     continue;
                 }
             };
 
-            // Process in spawned task (permit moves into task)
+            // Process in spawned task - acquire permit inside the task for proper lifetime
+            // Clone all needed data before spawning to avoid lifetime issues
+            let semaphore = self.semaphore.clone();
             let client = self.comfyui_client.clone();
-            let repository = self.asset_repository.clone();
-            let queue = self.queue.clone();
+            let _repository = self.asset_repository.clone();
+            let queue_clone = self.queue.clone();
             let request = item.payload.clone();
             let item_id = item.id;
 
             tokio::spawn(async move {
-                let _permit = permit; // Keep permit alive during processing
+                // Wait for capacity inside the spawned task
+                let _permit = match semaphore.acquire().await {
+                    Ok(p) => p,
+                    Err(e) => {
+                        tracing::error!("Semaphore error: {}", e);
+                        return;
+                    }
+                };
 
                 tracing::info!(
                     "Processing asset generation: entity_type={}, entity_id={}, workflow_id={}",
@@ -132,7 +137,7 @@ impl<Q: ProcessingQueuePort<AssetGenerationItem>, C: ComfyUIPort, R: AssetReposi
                         // Create asset records in repository
                         // TODO: Download images and create proper asset records
                         // For now, we'll just mark as completed
-                        match queue.complete(item_id).await {
+                        match queue_clone.complete(item_id).await {
                             Ok(()) => {
                                 tracing::info!("Asset generation completed: {}", item_id);
                             }
@@ -143,7 +148,7 @@ impl<Q: ProcessingQueuePort<AssetGenerationItem>, C: ComfyUIPort, R: AssetReposi
                     }
                     Err(e) => {
                         tracing::error!("Failed to queue ComfyUI prompt: {}", e);
-                        let _ = queue.fail(item_id, &format!("ComfyUI error: {}", e)).await;
+                        let _ = queue_clone.fail(item_id, &format!("ComfyUI error: {}", e)).await;
                     }
                 }
             });

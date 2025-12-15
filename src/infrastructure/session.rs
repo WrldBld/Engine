@@ -13,12 +13,12 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
 use crate::application::ports::outbound::{
-    BroadcastMessage, CharacterContextInfo, PendingApprovalInfo, ProposedToolInfo,
+    BroadcastMessage, CharacterContextInfo, PendingApprovalInfo,
     SessionManagementError, SessionManagementPort, SessionWorldContext,
 };
 use crate::domain::entities::{Character, Location, Scene, World};
-use crate::domain::value_objects::{SessionId, WorldId};
-use crate::infrastructure::websocket::{ParticipantRole, ServerMessage, ProposedTool};
+use crate::domain::value_objects::{ProposedToolInfo, SessionId, WorldId};
+use crate::infrastructure::websocket::{ParticipantRole, ServerMessage};
 
 /// Unique identifier for a connected client
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -95,7 +95,7 @@ pub struct PendingApproval {
     /// Internal reasoning from LLM
     pub internal_reasoning: String,
     /// Proposed tool calls
-    pub proposed_tools: Vec<ProposedTool>,
+    pub proposed_tools: Vec<ProposedToolInfo>,
     /// Number of rejection retries already used
     pub retry_count: u32,
     /// Timestamp when approval was requested
@@ -108,7 +108,7 @@ impl PendingApproval {
         npc_name: String,
         proposed_dialogue: String,
         internal_reasoning: String,
-        proposed_tools: Vec<ProposedTool>,
+        proposed_tools: Vec<ProposedToolInfo>,
     ) -> Self {
         Self {
             request_id,
@@ -188,11 +188,8 @@ pub struct GameSession {
 }
 
 impl GameSession {
-    /// Default maximum history length (30 turns = ~15 exchanges)
-    const DEFAULT_MAX_HISTORY_LENGTH: usize = 30;
-
     /// Create a new game session for a world
-    pub fn new(world_id: WorldId, world_snapshot: WorldSnapshot) -> Self {
+    pub fn new(world_id: WorldId, world_snapshot: WorldSnapshot, max_history_length: usize) -> Self {
         Self {
             id: SessionId::new(),
             world_id,
@@ -201,7 +198,7 @@ impl GameSession {
             created_at: Utc::now(),
             current_scene_id: None,
             conversation_history: Vec::new(),
-            max_history_length: Self::DEFAULT_MAX_HISTORY_LENGTH,
+            max_history_length,
             pending_approvals: HashMap::new(),
         }
     }
@@ -442,16 +439,24 @@ pub struct SessionManager {
     client_sessions: HashMap<ClientId, SessionId>,
     /// Maps world IDs to active sessions (for finding existing sessions)
     world_sessions: HashMap<WorldId, SessionId>,
+    /// Maximum conversation history turns to retain per session
+    max_conversation_history: usize,
 }
 
 impl SessionManager {
     /// Create a new session manager
-    pub fn new() -> Self {
+    pub fn new(max_conversation_history: usize) -> Self {
         Self {
             sessions: HashMap::new(),
             client_sessions: HashMap::new(),
             world_sessions: HashMap::new(),
+            max_conversation_history,
         }
+    }
+
+    /// Get all active session IDs
+    pub fn get_session_ids(&self) -> Vec<SessionId> {
+        self.sessions.keys().copied().collect()
     }
 
     /// Create a new session for a world
@@ -460,7 +465,7 @@ impl SessionManager {
         world_id: WorldId,
         world_snapshot: WorldSnapshot,
     ) -> SessionId {
-        let session = GameSession::new(world_id, world_snapshot);
+        let session = GameSession::new(world_id, world_snapshot, self.max_conversation_history);
         let session_id = session.id;
 
         self.world_sessions.insert(world_id, session_id);
@@ -585,7 +590,7 @@ impl SessionManager {
 
 impl Default for SessionManager {
     fn default() -> Self {
-        Self::new()
+        Self::new(30) // Default to 30 conversation turns
     }
 }
 
@@ -649,16 +654,7 @@ impl SessionManagementPort for SessionManager {
             npc_name: pending.npc_name.clone(),
             proposed_dialogue: pending.proposed_dialogue.clone(),
             internal_reasoning: pending.internal_reasoning.clone(),
-            proposed_tools: pending
-                .proposed_tools
-                .iter()
-                .map(|t| ProposedToolInfo {
-                    id: t.id.clone(),
-                    name: t.name.clone(),
-                    description: t.description.clone(),
-                    arguments: t.arguments.clone(),
-                })
-                .collect(),
+            proposed_tools: pending.proposed_tools.clone(),
             retry_count: pending.retry_count,
         })
     }
@@ -678,16 +674,7 @@ impl SessionManagementPort for SessionManager {
             npc_name: approval.npc_name,
             proposed_dialogue: approval.proposed_dialogue,
             internal_reasoning: approval.internal_reasoning,
-            proposed_tools: approval
-                .proposed_tools
-                .into_iter()
-                .map(|t| ProposedTool {
-                    id: t.id,
-                    name: t.name,
-                    description: t.description,
-                    arguments: t.arguments,
-                })
-                .collect(),
+            proposed_tools: approval.proposed_tools,
             retry_count: approval.retry_count,
             requested_at: Utc::now(),
         };
@@ -917,7 +904,7 @@ mod tests {
 
     #[test]
     fn test_create_session() {
-        let mut manager = SessionManager::new();
+        let mut manager = SessionManager::new(30);
         let world = create_test_world();
         let world_id = world.id;
         let snapshot = create_test_snapshot(world);
@@ -930,7 +917,7 @@ mod tests {
 
     #[test]
     fn test_join_session() {
-        let mut manager = SessionManager::new();
+        let mut manager = SessionManager::new(30);
         let world = create_test_world();
         let world_id = world.id;
         let snapshot = create_test_snapshot(world);
@@ -953,7 +940,7 @@ mod tests {
 
     #[test]
     fn test_leave_session() {
-        let mut manager = SessionManager::new();
+        let mut manager = SessionManager::new(30);
         let world = create_test_world();
         let world_id = world.id;
         let snapshot = create_test_snapshot(world);
@@ -980,7 +967,7 @@ mod tests {
 
     #[test]
     fn test_dm_restriction() {
-        let mut manager = SessionManager::new();
+        let mut manager = SessionManager::new(30);
         let world = create_test_world();
         let world_id = world.id;
         let snapshot = create_test_snapshot(world);

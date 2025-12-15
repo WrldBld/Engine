@@ -362,14 +362,48 @@ pub async fn queue_generation(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    // TODO: Actually queue the generation job with GenerationService
-    // For now, just create the batch record
+    // Queue generation jobs for each image in the batch
+    for i in 0..batch.count {
+        let generation_item = crate::application::dto::AssetGenerationItem {
+            session_id: None, // Generation requests don't require session context
+            entity_type: format!("{:?}", batch.entity_type),
+            entity_id: batch.entity_id.clone(),
+            workflow_id: batch.workflow.clone(),
+            prompt: batch.prompt.clone(),
+            count: 1, // Each item generates one image
+        };
+
+        match state
+            .asset_generation_queue_service
+            .enqueue(generation_item)
+            .await
+        {
+            Ok(item_id) => {
+                tracing::debug!(
+                    "Queued generation item {} for batch {} (image {}/{})",
+                    item_id,
+                    batch.id,
+                    i + 1,
+                    batch.count
+                );
+            }
+            Err(e) => {
+                tracing::error!(
+                    "Failed to queue generation job for batch {}: {}",
+                    batch.id,
+                    e
+                );
+                // Continue queuing other items even if one fails
+            }
+        }
+    }
 
     tracing::info!(
-        "Queued generation batch: {} for {} {}",
+        "Queued generation batch: {} for {} {} ({} images)",
         batch.id,
         entity_type,
-        req.entity_id
+        req.entity_id,
+        batch.count
     );
 
     Ok((

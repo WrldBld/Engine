@@ -4,6 +4,7 @@ use axum::{extract::State, routing::get, Json, Router};
 use serde_json::json;
 use std::sync::Arc;
 
+use crate::application::ports::outbound::{ProcessingQueuePort, QueuePort};
 use crate::infrastructure::state::AppState;
 
 /// Create queue-related routes

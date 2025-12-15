@@ -11,10 +11,4 @@
 mod json_exporter;
 mod world_snapshot;
 
-pub use json_exporter::{JsonExporter, WorldSnapshot};
-pub use world_snapshot::{load_world_snapshot, Neo4jWorldExporter, WorldSnapshotBuilder};
-
-// Re-export application layer types for backwards compatibility
-pub use crate::application::ports::outbound::{
-    CharacterData, ExportOptions, LocationData, PlayerWorldSnapshot, SceneData, WorldData,
-};
+pub use world_snapshot::Neo4jWorldExporter;

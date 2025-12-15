@@ -29,10 +29,6 @@ pub mod workflow_config_service;
 pub mod workflow_service;
 pub mod world_service;
 
-// Re-export LLM service types
-pub use llm_service::{
-    LLMGameResponse, LLMService, NarrativeEventSuggestion,
-};
 // Note: ActiveNarrativeEventContext and GamePromptRequest are now in domain::value_objects
 
 // Re-export world service types (used in HTTP routes and websocket)
@@ -86,9 +82,7 @@ pub use challenge_service::{ChallengeService, ChallengeServiceImpl};
 pub use relationship_service::{RelationshipService, RelationshipServiceImpl};
 
 // Re-export asset service types (used in HTTP routes)
-pub use asset_service::{
-    AssetService, AssetServiceImpl, CreateAssetRequest, UpdateAssetLabelRequest,
-};
+pub use asset_service::{AssetService, AssetServiceImpl, CreateAssetRequest};
 
 // Re-export sheet template service types
 pub use sheet_template_service::SheetTemplateService;
@@ -98,5 +92,12 @@ pub use narrative_event_service::{NarrativeEventService, NarrativeEventServiceIm
 
 // Re-export event chain service types (used in HTTP routes)
 pub use event_chain_service::{EventChainService, EventChainServiceImpl};
+
+// Re-export queue service types (used in infrastructure layer)
+pub use asset_generation_queue_service::AssetGenerationQueueService;
+pub use dm_action_queue_service::DMActionQueueService;
+pub use dm_approval_queue_service::DMApprovalQueueService;
+pub use llm_queue_service::LLMQueueService;
+pub use player_action_queue_service::PlayerActionQueueService;
 
 // Note: PlayerActionService and ApprovalService were removed - functionality moved to queue services

@@ -12,6 +12,7 @@ use crate::application::ports::outbound::{
 };
 
 /// Client for ComfyUI API
+#[derive(Clone)]
 pub struct ComfyUIClient {
     client: Client,
     base_url: String,

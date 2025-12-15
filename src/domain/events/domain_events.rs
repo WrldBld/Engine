@@ -10,7 +10,7 @@
 use chrono::{DateTime, Utc};
 
 use crate::domain::value_objects::{
-    WorldId, ActId, SceneId, CharacterId, LocationId, InteractionId,
+    WorldId, SceneId, CharacterId, LocationId, InteractionId,
 };
 
 /// Base data for all events

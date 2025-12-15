@@ -89,6 +89,35 @@ pub struct ApprovalItem {
     pub internal_reasoning: String,
     pub proposed_tools: Vec<ProposedToolInfo>,
     pub retry_count: u32,
+    /// Optional challenge suggestion from LLM
+    #[serde(default)]
+    pub challenge_suggestion: Option<ChallengeSuggestionInfo>,
+    /// Optional narrative event suggestion from LLM
+    #[serde(default)]
+    pub narrative_event_suggestion: Option<NarrativeEventSuggestionInfo>,
+}
+
+/// Challenge suggestion information for DM approval
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChallengeSuggestionInfo {
+    pub challenge_id: String,
+    pub challenge_name: String,
+    pub skill_name: String,
+    pub difficulty_display: String,
+    pub confidence: String,
+    pub reasoning: String,
+}
+
+/// Narrative event suggestion information for DM approval
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NarrativeEventSuggestionInfo {
+    pub event_id: String,
+    pub event_name: String,
+    pub description: String,
+    pub scene_direction: String,
+    pub confidence: String,
+    pub reasoning: String,
+    pub matched_triggers: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

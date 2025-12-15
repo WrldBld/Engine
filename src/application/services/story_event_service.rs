@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use crate::application::ports::outbound::StoryEventRepositoryPort;
 use crate::domain::entities::{
-    ChallengeEventOutcome, CombatEventType, CombatOutcome, DmMarkerType, InfoImportance, InfoType,
+    ChallengeEventOutcome, DmMarkerType, InfoImportance, InfoType,
     ItemSource, MarkerImportance, StoryEvent, StoryEventType,
 };
 use crate::domain::value_objects::{

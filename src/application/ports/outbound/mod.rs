@@ -2,6 +2,7 @@
 
 mod comfyui_port;
 mod llm_port;
+mod queue_notification_port;
 mod queue_port;
 mod repository_port;
 mod session_management_port;
@@ -19,24 +20,24 @@ pub use llm_port::{
 
 pub use repository_port::{
     AssetRepositoryPort, ChallengeRepositoryPort, CharacterNode, CharacterRepositoryPort,
-    EventChainRepositoryPort, GridMapRepositoryPort, InteractionRepositoryPort,
-    LocationRepositoryPort, NarrativeEventRepositoryPort, RelationshipEdge,
-    RelationshipRepositoryPort, RepositoryProvider, SceneRepositoryPort,
-    SheetTemplateRepositoryPort, SkillRepositoryPort, SocialNetwork, StoryEventRepositoryPort,
-    WorkflowRepositoryPort, WorldRepositoryPort,
+    EventChainRepositoryPort, InteractionRepositoryPort, LocationRepositoryPort,
+    NarrativeEventRepositoryPort, RelationshipEdge, RelationshipRepositoryPort,
+    SceneRepositoryPort, SheetTemplateRepositoryPort, SkillRepositoryPort, SocialNetwork,
+    StoryEventRepositoryPort, WorkflowRepositoryPort, WorldRepositoryPort,
 };
 
 pub use session_management_port::{
-    BroadcastMessage, CharacterContextInfo, ParticipantRoleDto, ParticipantSummary,
-    PendingApprovalInfo, SessionJoinResult, SessionLifecyclePort,
-    SessionManagementError, SessionManagementPort, SessionWorldContext,
+    BroadcastMessage, CharacterContextInfo, PendingApprovalInfo, SessionManagementError,
+    SessionManagementPort, SessionWorldContext,
 };
 // Note: ProposedToolInfo is now in domain::value_objects
 
+pub use queue_notification_port::{QueueNotificationPort, WaitResult};
+
 pub use queue_port::{
-    ApprovalQueuePort, ProcessingQueuePort, QueueError, QueueItem, QueueItemId, QueueItemStatus,
-    QueuePort,
+    ApprovalQueuePort, ProcessingQueuePort, QueueError, QueueItem, QueueItemStatus, QueuePort,
 };
+pub use crate::domain::value_objects::QueueItemId;
 
 pub use world_exporter_port::{
     CharacterData, ExportOptions, LocationData, PlayerWorldSnapshot, SceneData,

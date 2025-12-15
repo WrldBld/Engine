@@ -3,22 +3,24 @@
 //! These functions assist with building prompts and processing queue items
 //! in the WebSocket handler and background workers.
 
-use crate::application::services::{ChallengeServiceImpl, NarrativeEventServiceImpl};
-use crate::domain::value_objects::{
-    CharacterContext, GamePromptRequest, PlayerActionContext, SceneContext,
-};
 use crate::application::dto::PlayerActionItem;
+use crate::application::ports::outbound::QueueError;
+use crate::application::services::{
+    ChallengeService, ChallengeServiceImpl, NarrativeEventService, NarrativeEventServiceImpl,
+};
+use crate::domain::value_objects::{
+    ActiveChallengeContext, ActiveNarrativeEventContext, CharacterContext, ConversationTurn,
+    GamePromptRequest, PlayerActionContext, SceneContext,
+};
 use crate::infrastructure::session::SessionManager;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use crate::application::ports::outbound::QueueError;
-
 /// Build a GamePromptRequest from a PlayerActionItem using session context
 pub async fn build_prompt_from_action(
     sessions: &Arc<RwLock<SessionManager>>,
-    _challenge_service: &ChallengeServiceImpl,
-    _narrative_event_service: &NarrativeEventServiceImpl,
+    challenge_service: &Arc<ChallengeServiceImpl>,
+    narrative_event_service: &Arc<NarrativeEventServiceImpl>,
     action: &PlayerActionItem,
 ) -> Result<GamePromptRequest, QueueError> {
     // Get session context
@@ -117,17 +119,77 @@ pub async fn build_prompt_from_action(
     let conversation_history = session
         .get_recent_history(20) // Get last 20 turns for context
         .iter()
-        .map(|turn| crate::application::services::llm_service::ConversationTurn {
+        .map(|turn| ConversationTurn {
             speaker: turn.speaker.clone(),
             text: turn.content.clone(),
         })
         .collect();
 
-    // Get active challenges (simplified - would need world_id and scene_id)
-    let active_challenges = vec![]; // TODO: Implement challenge lookup when challenge service supports it
+    // Extract world_id from the session's world snapshot
+    let world_id = world_snapshot.world.id;
 
-    // Get active narrative events (simplified)
-    let active_narrative_events = vec![]; // TODO: Implement narrative event lookup when service supports it
+    // Query active challenges and convert to ActiveChallengeContext
+    let active_challenges: Vec<ActiveChallengeContext> = match challenge_service
+        .list_active(world_id)
+        .await
+    {
+        Ok(challenges) => challenges
+            .into_iter()
+            .map(|c| ActiveChallengeContext {
+                id: c.id.to_string(),
+                name: c.name,
+                skill_name: c.skill_id.to_string(), // TODO: Look up actual skill name from skill service
+                difficulty_display: c.difficulty.display(),
+                description: c.description,
+                trigger_hints: c
+                    .trigger_conditions
+                    .iter()
+                    .map(|t| t.description.clone())
+                    .collect(),
+            })
+            .collect(),
+        Err(e) => {
+            tracing::warn!("Failed to load active challenges: {}", e);
+            vec![]
+        }
+    };
+
+    // Query active narrative events and convert to ActiveNarrativeEventContext
+    let active_narrative_events: Vec<ActiveNarrativeEventContext> = match narrative_event_service
+        .list_active(world_id)
+        .await
+    {
+        Ok(events) => events
+            .into_iter()
+            .map(|e| ActiveNarrativeEventContext {
+                id: e.id.to_string(),
+                name: e.name,
+                description: e.description,
+                scene_direction: e.scene_direction,
+                priority: e.priority,
+                trigger_hints: e
+                    .trigger_conditions
+                    .iter()
+                    .map(|t| t.description.clone())
+                    .collect(),
+                featured_npc_names: e
+                    .featured_npcs
+                    .iter()
+                    .filter_map(|npc_id| {
+                        world_snapshot
+                            .characters
+                            .iter()
+                            .find(|c| c.id == *npc_id)
+                            .map(|c| c.name.clone())
+                    })
+                    .collect(),
+            })
+            .collect(),
+        Err(e) => {
+            tracing::warn!("Failed to load active narrative events: {}", e);
+            vec![]
+        }
+    };
 
     // Build the prompt request
     Ok(GamePromptRequest {
