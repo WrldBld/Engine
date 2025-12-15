@@ -6,16 +6,21 @@ use anyhow::Result;
 use tokio::sync::RwLock;
 
 use crate::application::services::{
-    AssetServiceImpl, ChallengeServiceImpl, CharacterServiceImpl, EventChainServiceImpl,
-    InteractionServiceImpl, LocationServiceImpl, NarrativeEventServiceImpl, SceneServiceImpl,
-    SheetTemplateService, SkillServiceImpl, StoryEventService, RelationshipServiceImpl,
-    WorkflowConfigService, WorldServiceImpl,
+    AssetGenerationQueueService, AssetServiceImpl, ChallengeServiceImpl, CharacterServiceImpl,
+    DMActionQueueService, DMApprovalQueueService, EventChainServiceImpl, InteractionServiceImpl,
+    LLMQueueService, LocationServiceImpl, NarrativeEventServiceImpl, PlayerActionQueueService,
+    SceneServiceImpl, SheetTemplateService, SkillServiceImpl, StoryEventService,
+    RelationshipServiceImpl, WorkflowConfigService, WorldServiceImpl,
+};
+use crate::domain::value_objects::{
+    ApprovalItem, AssetGenerationItem, DMActionItem, LLMRequestItem, PlayerActionItem,
 };
 use crate::infrastructure::comfyui::ComfyUIClient;
 use crate::infrastructure::config::AppConfig;
 use crate::infrastructure::export::Neo4jWorldExporter;
 use crate::infrastructure::ollama::OllamaClient;
 use crate::infrastructure::persistence::Neo4jRepository;
+use crate::infrastructure::queues::QueueFactory;
 use crate::infrastructure::session::SessionManager;
 
 /// Shared application state
@@ -43,6 +48,21 @@ pub struct AppState {
     pub asset_service: AssetServiceImpl,
     pub workflow_config_service: WorkflowConfigService,
     pub sheet_template_service: SheetTemplateService,
+    // Queue services - using QueueBackendEnum for runtime backend selection
+    pub player_action_queue_service: Arc<PlayerActionQueueService<
+        Arc<crate::infrastructure::queues::QueueBackendEnum<PlayerActionItem>>,
+        Arc<crate::infrastructure::queues::QueueBackendEnum<LLMRequestItem>>,
+    >>,
+    pub dm_action_queue_service: Arc<DMActionQueueService<Arc<crate::infrastructure::queues::QueueBackendEnum<DMActionItem>>>>,
+    pub llm_queue_service: Arc<LLMQueueService<Arc<crate::infrastructure::queues::QueueBackendEnum<LLMRequestItem>>, OllamaClient>>,
+    pub asset_generation_queue_service: Arc<
+        AssetGenerationQueueService<
+            Arc<crate::infrastructure::queues::QueueBackendEnum<AssetGenerationItem>>,
+            ComfyUIClient,
+            Arc<dyn crate::application::ports::outbound::AssetRepositoryPort>,
+        >,
+    >,
+    pub dm_approval_queue_service: Arc<DMApprovalQueueService<Arc<crate::infrastructure::queues::QueueBackendEnum<ApprovalItem>>>>,
 }
 
 impl AppState {
@@ -116,6 +136,41 @@ impl AppState {
         let workflow_config_service = WorkflowConfigService::new(workflow_repo);
         let sheet_template_service = SheetTemplateService::new(sheet_template_repo);
 
+        // Initialize queue infrastructure using factory
+        let queue_factory = QueueFactory::new(config.queue.clone()).await?;
+        tracing::info!("Queue backend: {}", queue_factory.config().backend);
+
+        let player_action_queue = queue_factory.create_player_action_queue().await?;
+        let llm_queue = queue_factory.create_llm_queue().await?;
+        let dm_action_queue = queue_factory.create_dm_action_queue().await?;
+        let asset_generation_queue = queue_factory.create_asset_generation_queue().await?;
+        let approval_queue = queue_factory.create_approval_queue().await?;
+
+        // Initialize queue services
+        let player_action_queue_service = Arc::new(PlayerActionQueueService::new(
+            player_action_queue.clone(),
+            llm_queue.clone(),
+        ));
+
+        let dm_action_queue_service = Arc::new(DMActionQueueService::new(dm_action_queue));
+
+        let llm_client_arc = Arc::new(llm_client.clone());
+        let llm_queue_service = Arc::new(LLMQueueService::new(
+            llm_queue.clone(),
+            llm_client_arc,
+            approval_queue.clone(),
+            queue_factory.config().llm_batch_size,
+        ));
+
+        let asset_generation_queue_service = Arc::new(AssetGenerationQueueService::new(
+            asset_generation_queue,
+            Arc::new(comfyui_client.clone()),
+            asset_repo.clone(),
+            queue_factory.config().asset_batch_size,
+        ));
+
+        let dm_approval_queue_service = Arc::new(DMApprovalQueueService::new(approval_queue));
+
         Ok(Self {
             config,
             repository,
@@ -136,6 +191,11 @@ impl AppState {
             asset_service,
             workflow_config_service,
             sheet_template_service,
+            player_action_queue_service,
+            dm_action_queue_service,
+            llm_queue_service,
+            asset_generation_queue_service,
+            dm_approval_queue_service,
         })
     }
 }

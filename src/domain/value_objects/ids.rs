@@ -69,3 +69,4 @@ define_id!(ChallengeId);
 define_id!(StoryEventId);
 define_id!(NarrativeEventId);
 define_id!(EventChainId);
+define_id!(QueueItemId);

@@ -115,225 +115,6 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     tracing::info!("WebSocket connection terminated: {}", client_id);
 }
 
-/// Process a player action through the LLM and send approval request to DM
-async fn process_player_action_with_llm(
-    state: &AppState,
-    session_id: SessionId,
-    action_id: String,
-    action_type: String,
-    target: Option<String>,
-    dialogue: Option<String>,
-) {
-    // Acquire session and world snapshot
-    let (session_data, npc_name) = {
-        let sessions = state.sessions.read().await;
-        let Some(session) = sessions.get_session(session_id) else {
-            tracing::warn!("Session {} not found for LLM processing", session_id);
-            return;
-        };
-
-        // Get the current scene from the snapshot
-        let world_snapshot = &session.world_snapshot;
-        let current_scene = match &world_snapshot.current_scene_id {
-            Some(scene_id_str) => {
-                world_snapshot
-                    .scenes
-                    .iter()
-                    .find(|s| s.id.to_string() == *scene_id_str)
-            }
-            None => {
-                tracing::warn!("No current scene set in world snapshot");
-                world_snapshot.scenes.first()
-            }
-        };
-
-        let Some(current_scene) = current_scene else {
-            tracing::warn!("No scenes available in world snapshot");
-            return;
-        };
-
-        // Get the location for scene context
-        let location = world_snapshot
-            .locations
-            .iter()
-            .find(|l| l.id == current_scene.location_id);
-
-        // Determine the responding character (target NPC or first available character)
-        let responding_character = if let Some(target_name) = &target {
-            world_snapshot
-                .characters
-                .iter()
-                .find(|c| c.name.eq_ignore_ascii_case(target_name))
-        } else {
-            // Use first featured character in scene if no target specified
-            current_scene
-                .featured_characters
-                .first()
-                .and_then(|char_id| {
-                    world_snapshot.characters.iter().find(|c| c.id == *char_id)
-                })
-        };
-
-        let Some(responding_character) = responding_character else {
-            tracing::warn!(
-                "No responding character found for action in scene {}",
-                current_scene.id
-            );
-            return;
-        };
-
-        // Build the scene context
-        let scene_context = SceneContext {
-            scene_name: current_scene.name.clone(),
-            location_name: location.map(|l| l.name.clone()).unwrap_or_else(|| "Unknown".to_string()),
-            time_context: match &current_scene.time_context {
-                crate::domain::entities::TimeContext::Unspecified => "Unspecified".to_string(),
-                crate::domain::entities::TimeContext::TimeOfDay(tod) => format!("{:?}", tod),
-                crate::domain::entities::TimeContext::During(s) => s.clone(),
-                crate::domain::entities::TimeContext::Custom(s) => s.clone(),
-            },
-            present_characters: current_scene
-                .featured_characters
-                .iter()
-                .filter_map(|char_id| {
-                    world_snapshot
-                        .characters
-                        .iter()
-                        .find(|c| c.id == *char_id)
-                        .map(|c| c.name.clone())
-                })
-                .collect(),
-        };
-
-        // Build the character context
-        let character_context = CharacterContext {
-            name: responding_character.name.clone(),
-            archetype: format!("{:?}", responding_character.current_archetype),
-            current_mood: None, // TODO: Load from character state/session storage
-            wants: responding_character
-                .wants
-                .iter()
-                .map(|w| format!("{:?}", w))
-                .collect(),
-            relationship_to_player: None, // TODO: Load from relationship tracking
-        };
-
-        // Build the directorial notes (empty for now; would come from DM updates)
-        let directorial_notes = current_scene.directorial_notes.clone();
-
-        // Build the game prompt request with empty active challenges for now
-        // TODO: Fetch active challenges from the repository when available
-        let prompt_request = GamePromptRequest {
-            player_action: PlayerActionContext {
-                action_type: action_type.clone(),
-                target: target.clone(),
-                dialogue: dialogue.clone(),
-            },
-            scene_context,
-            directorial_notes,
-            conversation_history: vec![], // TODO: Load from conversation history
-            responding_character: character_context.clone(),
-            active_challenges: vec![], // TODO: Fetch from challenge repository
-            active_narrative_events: vec![], // TODO: Fetch from narrative events repository
-        };
-
-        (prompt_request, character_context.name.clone())
-    }; // Release the read lock here
-
-    // Call the LLM service
-    let llm_service = crate::application::services::LLMService::new(state.llm_client.clone());
-    match llm_service.generate_npc_response(session_data).await {
-        Ok(response) => {
-            // Convert proposed tool calls to ProposedTool format for the message
-            let proposed_tools: Vec<ProposedTool> = response
-                .proposed_tool_calls
-                .iter()
-                .map(|tool| ProposedTool {
-                    id: format!("{}_{}", tool.tool_name, uuid::Uuid::new_v4()),
-                    name: tool.tool_name.clone(),
-                    description: tool.description.clone(),
-                    arguments: tool.arguments.clone(),
-                })
-                .collect();
-
-            // Convert challenge suggestion if present
-            let challenge_suggestion = response.challenge_suggestion.as_ref().map(|cs| {
-                ChallengeSuggestionInfo {
-                    challenge_id: cs.challenge_id.clone(),
-                    challenge_name: String::new(), // Will be enriched from challenge data
-                    skill_name: String::new(),
-                    difficulty_display: String::new(),
-                    confidence: format!("{:?}", cs.confidence).to_lowercase(),
-                    reasoning: cs.reasoning.clone(),
-                }
-            });
-
-            // Convert narrative event suggestion if present
-            let narrative_event_suggestion = response.narrative_event_suggestion.as_ref().map(|nes| {
-                NarrativeEventSuggestionInfo {
-                    event_id: nes.event_id.clone(),
-                    event_name: String::new(), // Will be enriched from event data
-                    description: String::new(),
-                    scene_direction: String::new(),
-                    confidence: format!("{:?}", nes.confidence).to_lowercase(),
-                    reasoning: nes.reasoning.clone(),
-                    matched_triggers: nes.matched_triggers.clone(),
-                }
-            });
-
-            // Send ApprovalRequired message to DM
-            let approval_msg = ServerMessage::ApprovalRequired {
-                request_id: action_id.clone(),
-                npc_name: npc_name.clone(),
-                proposed_dialogue: response.npc_dialogue.clone(),
-                internal_reasoning: response.internal_reasoning.clone(),
-                proposed_tools: proposed_tools.clone(),
-                challenge_suggestion,
-                narrative_event_suggestion,
-            };
-
-            // Store pending approval and send to DM
-            let mut sessions = state.sessions.write().await;
-            if let Some(session) = sessions.get_session_mut(session_id) {
-                // Create and store the pending approval
-                let pending = crate::infrastructure::session::PendingApproval::new(
-                    action_id.clone(),
-                    npc_name,
-                    response.npc_dialogue,
-                    response.internal_reasoning,
-                    proposed_tools,
-                );
-                session.add_pending_approval(pending);
-
-                // Send approval request to DM
-                session.send_to_dm(&approval_msg);
-                tracing::info!(
-                    "Sent ApprovalRequired for action {} to DM",
-                    action_id
-                );
-            }
-        }
-        Err(e) => {
-            tracing::error!(
-                "LLM processing failed for action {}: {:?}",
-                action_id,
-                e
-            );
-
-            // Send error notification to DM
-            let error_msg = ServerMessage::Error {
-                code: "LLM_ERROR".to_string(),
-                message: format!("Failed to generate NPC response: {}", e),
-            };
-
-            let sessions = state.sessions.read().await;
-            if let Some(session) = sessions.get_session(session_id) {
-                session.send_to_dm(&error_msg);
-            }
-        }
-    }
-}
-
 /// Handle a parsed client message
 async fn handle_message(
     msg: ClientMessage,
@@ -423,54 +204,65 @@ async fn handle_message(
             };
 
             let session_id = session_id.expect("session_id should exist at this point");
+            drop(sessions); // Release lock before async queue operation
 
-            if let Some(session) = sessions.get_session(session_id) {
-                // Send ActionReceived acknowledgment to the acting player
-                let action_received = ServerMessage::ActionReceived {
-                    action_id: action_id_str.clone(),
-                    player_id: player_id.clone(),
-                    action_type: action_type.clone(),
-                };
-
-                // Send acknowledgment back to the player (will be returned below)
-                // Also broadcast to DM for awareness
-                if session.has_dm() {
-                    // Send LLM processing notification to DM
-                    let processing_msg = ServerMessage::LLMProcessing {
-                        action_id: action_id_str.clone(),
-                    };
-                    session.send_to_dm(&processing_msg);
-
-                    // Broadcast action received to DM as well
-                    session.send_to_dm(&action_received);
-
-                    // Process action through LLM and send ApprovalRequired to DM
-                    process_player_action_with_llm(
-                        &state,
-                        session_id,
-                        action_id_str.clone(),
-                        action_type.clone(),
-                        target.clone(),
-                        dialogue.clone(),
-                    )
-                    .await;
-                }
-
-                tracing::info!(
-                    "Action {} from player {} in session {}: {} -> {:?}",
-                    action_id_str,
-                    player_id,
+            // Enqueue to PlayerActionQueue - returns immediately
+            match state
+                .player_action_queue_service
+                .enqueue_action(
                     session_id,
-                    action_type,
-                    target
-                );
+                    player_id.clone(),
+                    action_type.clone(),
+                    target.clone(),
+                    dialogue.clone(),
+                )
+                .await
+            {
+                Ok(_) => {
+                    // Get queue depth for status update
+                    let depth = state
+                        .player_action_queue_service
+                        .depth()
+                        .await
+                        .unwrap_or(0);
 
-                // Send ActionReceived acknowledgment to the player
-                let _ = sender.send(ServerMessage::ActionReceived {
-                    action_id: action_id_str,
-                    player_id,
-                    action_type: action_type.clone(),
-                });
+                    // Send ActionQueued event to DM
+                    let sessions = state.sessions.read().await;
+                    if let Some(session) = sessions.get_session(session_id) {
+                        if session.has_dm() {
+                            session.send_to_dm(&ServerMessage::ActionQueued {
+                                action_id: action_id_str.clone(),
+                                player_name: player_id.clone(),
+                                action_type: action_type.clone(),
+                                queue_depth: depth,
+                            });
+                        }
+                    }
+                    drop(sessions);
+
+                    tracing::info!(
+                        "Enqueued action {} from player {} in session {}: {} -> {:?}",
+                        action_id_str,
+                        player_id,
+                        session_id,
+                        action_type,
+                        target
+                    );
+
+                    // Send ActionReceived acknowledgment to the player
+                    let _ = sender.send(ServerMessage::ActionReceived {
+                        action_id: action_id_str,
+                        player_id,
+                        action_type: action_type.clone(),
+                    });
+                }
+                Err(e) => {
+                    tracing::error!("Failed to enqueue player action: {}", e);
+                    return Some(ServerMessage::Error {
+                        code: "QUEUE_ERROR".to_string(),
+                        message: format!("Failed to queue action: {}", e),
+                    });
+                }
             }
 
             None // No response from here; responses come from LLM processing or DM approval
@@ -525,174 +317,46 @@ async fn handle_message(
             );
 
             // Only DMs should approve
-            let mut sessions = state.sessions.write().await;
-            if let Some(session_id) = sessions.get_client_session(client_id) {
-                if let Some(session) = sessions.get_session_mut(session_id) {
-                    // Verify this client is the DM
-                    if let Some(dm) = session.get_dm() {
-                        if dm.client_id == client_id {
-                            match decision {
-                                ApprovalDecision::Accept => {
-                                    // Task 1.2.1: Handle Accept - broadcast approved response
-                                    if let Some(pending) = session.get_pending_approval(&request_id)
-                                    {
-                                        let npc_name = pending.npc_name.clone();
-                                        let dialogue = pending.proposed_dialogue.clone();
-                                        let executed_tools: Vec<String> = pending
-                                            .proposed_tools
-                                            .iter()
-                                            .map(|t| t.id.clone())
-                                            .collect();
+            let sessions = state.sessions.read().await;
+            let session_id = sessions.get_client_session(client_id);
+            let dm_id = session_id
+                .and_then(|sid| sessions.get_session(sid))
+                .and_then(|s| s.get_dm())
+                .filter(|dm| dm.client_id == client_id)
+                .map(|dm| dm.user_id.clone());
+            drop(sessions);
 
-                                        // Broadcast approved response to all players
-                                        let response = ServerMessage::DialogueResponse {
-                                            speaker_id: npc_name.clone(),
-                                            speaker_name: npc_name.clone(),
-                                            text: dialogue.clone(),
-                                            choices: vec![],
-                                        };
-                                        session.broadcast_to_players(&response);
+            if let (Some(session_id), Some(dm_id)) = (session_id, dm_id) {
+                // Enqueue to DMActionQueue - returns immediately
+                // The DM action queue worker will process this asynchronously
+                let dm_action = crate::domain::value_objects::DMAction::ApprovalDecision {
+                    request_id: request_id.clone(),
+                    decision: decision.clone(),
+                };
 
-                                        // Store in conversation history
-                                        session.add_npc_response(&npc_name, &dialogue);
-
-                                        // Remove from pending approvals
-                                        session.remove_pending_approval(&request_id);
-
-                                        tracing::info!(
-                                            "Approved NPC response for request {}. Executed tools: {:?}",
-                                            request_id,
-                                            executed_tools
-                                        );
-                                        return None;
-                                    }
-                                }
-                                ApprovalDecision::AcceptWithModification {
-                                    modified_dialogue,
-                                    approved_tools,
-                                    rejected_tools: _,
-                                } => {
-                                    // Task 1.2.2: Handle AcceptWithModification - use modified dialogue
-                                    if let Some(pending) = session.get_pending_approval(&request_id)
-                                    {
-                                        let npc_name = pending.npc_name.clone();
-
-                                        // Filter tools to only approved ones
-                                        let filtered_tools: Vec<String> = pending
-                                            .proposed_tools
-                                            .iter()
-                                            .filter(|t| approved_tools.contains(&t.id))
-                                            .map(|t| t.id.clone())
-                                            .collect();
-
-                                        // Broadcast modified response to all players
-                                        let response = ServerMessage::DialogueResponse {
-                                            speaker_id: npc_name.clone(),
-                                            speaker_name: npc_name.clone(),
-                                            text: modified_dialogue.clone(),
-                                            choices: vec![],
-                                        };
-                                        session.broadcast_to_players(&response);
-
-                                        // Store modified dialogue in conversation history
-                                        session.add_npc_response(&npc_name, &modified_dialogue);
-
-                                        // Remove from pending approvals
-                                        session.remove_pending_approval(&request_id);
-
-                                        tracing::info!(
-                                            "Approved modified NPC response for request {}. Approved tools: {:?}",
-                                            request_id,
-                                            filtered_tools
-                                        );
-                                        return None;
-                                    }
-                                }
-                                ApprovalDecision::Reject { feedback } => {
-                                    // Task 1.2.3: Handle Reject - re-call LLM with feedback
-                                    if let Some(pending) =
-                                        session.get_pending_approval_mut(&request_id)
-                                    {
-                                        pending.retry_count += 1;
-
-                                        // Check max retries (limit to 3)
-                                        if pending.retry_count >= 3 {
-                                            tracing::warn!(
-                                                "Max retries (3) exceeded for request {}. Rejecting.",
-                                                request_id
-                                            );
-                                            session.remove_pending_approval(&request_id);
-                                            let error_msg = ServerMessage::Error {
-                                                code: "APPROVAL_MAX_RETRIES".to_string(),
-                                                message: "Maximum approval retries exceeded. Please use TakeOver instead.".to_string(),
-                                            };
-                                            session.send_to_dm(&error_msg);
-                                            return None;
-                                        }
-
-                                        tracing::info!(
-                                            "Rejection #{} for request {}. Feedback: {}",
-                                            pending.retry_count,
-                                            request_id,
-                                            feedback
-                                        );
-
-                                        // Store the rejection feedback for LLM context
-                                        // This would be used in the next LLM call
-                                        let _rejection_context = format!(
-                                            "Previous response was rejected with feedback: {}",
-                                            feedback
-                                        );
-
-                                        // Send a notification to DM that re-processing is happening
-                                        let processing_msg = ServerMessage::LLMProcessing {
-                                            action_id: request_id.clone(),
-                                        };
-                                        session.send_to_dm(&processing_msg);
-
-                                        tracing::info!(
-                                            "Queuing LLM reprocessing for request {} with feedback",
-                                            request_id
-                                        );
-
-                                        // Note: The actual re-call to LLM would happen asynchronously
-                                        // For now, we just track that it should be re-processed
-                                        // This would be implemented as a separate task in production
-                                    }
-                                    return None;
-                                }
-                                ApprovalDecision::TakeOver { dm_response } => {
-                                    // Task 1.2.4: Handle TakeOver - use DM's custom response
-                                    if let Some(pending) = session.get_pending_approval(&request_id)
-                                    {
-                                        let npc_name = pending.npc_name.clone();
-
-                                        // Broadcast DM's response as NPC dialogue (no tool calls)
-                                        let response = ServerMessage::DialogueResponse {
-                                            speaker_id: npc_name.clone(),
-                                            speaker_name: npc_name.clone(),
-                                            text: dm_response.clone(),
-                                            choices: vec![],
-                                        };
-                                        session.broadcast_to_players(&response);
-
-                                        // Store DM takeover in conversation history
-                                        session.add_npc_response(&npc_name, &dm_response);
-
-                                        // Remove from pending approvals
-                                        session.remove_pending_approval(&request_id);
-
-                                        tracing::info!(
-                                            "DM took over response for request {}",
-                                            request_id
-                                        );
-                                        return None;
-                                    }
-                                }
-                            }
-                        }
+                match state
+                    .dm_action_queue_service
+                    .enqueue_action(session_id, dm_id, dm_action)
+                    .await
+                {
+                    Ok(_) => {
+                        tracing::info!("Enqueued approval decision for request {}", request_id);
+                        // Return acknowledgment - processing happens in background worker
+                        None
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to enqueue approval decision: {}", e);
+                        Some(ServerMessage::Error {
+                            code: "QUEUE_ERROR".to_string(),
+                            message: format!("Failed to queue approval: {}", e),
+                        })
                     }
                 }
+            } else {
+                Some(ServerMessage::Error {
+                    code: "NOT_AUTHORIZED".to_string(),
+                    message: "Only the DM can approve responses".to_string(),
+                })
             }
 
             None
@@ -1142,6 +806,20 @@ pub enum ServerMessage {
     },
     /// LLM is processing (shown to DM)
     LLMProcessing { action_id: String },
+    /// Action queued for processing
+    ActionQueued {
+        action_id: String,
+        player_name: String,
+        action_type: String,
+        queue_depth: usize,
+    },
+    /// Queue status update (sent to DM)
+    QueueStatus {
+        player_actions_pending: usize,
+        llm_requests_pending: usize,
+        llm_requests_processing: usize,
+        approvals_pending: usize,
+    },
     /// Approval required (sent to DM)
     ApprovalRequired {
         request_id: String,

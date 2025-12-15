@@ -50,6 +50,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 config = "0.14"
 dotenvy = "0.15"
 
+# SQLite for queue persistence
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite", "chrono", "uuid"] }
+
 [[bin]]
 name = "wrldbldr-engine"
 path = "src/main.rs"

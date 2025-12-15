@@ -26,6 +26,26 @@ pub struct AppConfig {
 
     /// WebSocket server port
     pub server_port: u16,
+
+    /// Queue configuration
+    pub queue: QueueConfig,
+}
+
+/// Queue system configuration
+#[derive(Debug, Clone)]
+pub struct QueueConfig {
+    /// Queue storage backend: "memory" or "sqlite"
+    pub backend: String,
+    /// SQLite database path (if using sqlite backend)
+    pub sqlite_path: String,
+    /// Max concurrent LLM requests
+    pub llm_batch_size: usize,
+    /// Max concurrent ComfyUI requests (always 1 recommended)
+    pub asset_batch_size: usize,
+    /// How long to keep completed items before cleanup (hours)
+    pub history_retention_hours: u64,
+    /// How long before pending approvals expire (minutes)
+    pub approval_timeout_minutes: u64,
 }
 
 impl AppConfig {
@@ -50,6 +70,29 @@ impl AppConfig {
                 .unwrap_or_else(|_| "3000".to_string())
                 .parse()
                 .context("SERVER_PORT must be a valid port number")?,
+
+            queue: QueueConfig {
+                backend: env::var("QUEUE_BACKEND")
+                    .unwrap_or_else(|_| "sqlite".to_string()),
+                sqlite_path: env::var("QUEUE_SQLITE_PATH")
+                    .unwrap_or_else(|_| "./data/queues.db".to_string()),
+                llm_batch_size: env::var("QUEUE_LLM_BATCH_SIZE")
+                    .unwrap_or_else(|_| "1".to_string())
+                    .parse()
+                    .unwrap_or(1),
+                asset_batch_size: env::var("QUEUE_ASSET_BATCH_SIZE")
+                    .unwrap_or_else(|_| "1".to_string())
+                    .parse()
+                    .unwrap_or(1),
+                history_retention_hours: env::var("QUEUE_HISTORY_RETENTION_HOURS")
+                    .unwrap_or_else(|_| "24".to_string())
+                    .parse()
+                    .unwrap_or(24),
+                approval_timeout_minutes: env::var("QUEUE_APPROVAL_TIMEOUT_MINUTES")
+                    .unwrap_or_else(|_| "30".to_string())
+                    .parse()
+                    .unwrap_or(30),
+            },
         })
     }
 }

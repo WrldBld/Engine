@@ -5,15 +5,20 @@
 //! accepting repository dependencies and returning domain entities or DTOs.
 
 pub mod approval_service;
+pub mod asset_generation_queue_service;
 pub mod asset_service;
 pub mod challenge_service;
+pub mod dm_approval_queue_service;
 pub mod character_service;
+pub mod dm_action_queue_service;
 pub mod event_chain_service;
 pub mod generation_service;
 pub mod interaction_service;
+pub mod llm_queue_service;
 pub mod llm_service;
 pub mod location_service;
 pub mod narrative_event_service;
+pub mod player_action_queue_service;
 pub mod player_action_service;
 pub mod relationship_service;
 pub mod scene_service;

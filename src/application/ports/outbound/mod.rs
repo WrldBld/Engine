@@ -3,6 +3,7 @@
 mod comfyui_port;
 mod game_session_port;
 mod llm_port;
+mod queue_port;
 mod repository_port;
 mod session_management_port;
 mod world_exporter_port;
@@ -32,6 +33,11 @@ pub use session_management_port::{
     BroadcastMessage, CharacterContextInfo, ParticipantRoleDto, ParticipantSummary,
     PendingApprovalInfo, ProposedToolInfo, SessionJoinResult, SessionLifecyclePort,
     SessionManagementError, SessionManagementPort, SessionWorldContext,
+};
+
+pub use queue_port::{
+    ApprovalQueuePort, ProcessingQueuePort, QueueError, QueueItem, QueueItemId, QueueItemStatus,
+    QueuePort,
 };
 
 pub use world_exporter_port::{

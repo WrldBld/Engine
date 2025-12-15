@@ -8,6 +8,7 @@ mod export_routes;
 mod interaction_routes;
 mod location_routes;
 mod narrative_event_routes;
+mod queue_routes;
 mod rule_system_routes;
 mod scene_routes;
 mod sheet_template_routes;
@@ -533,4 +534,6 @@ pub fn create_routes() -> Router<Arc<AppState>> {
             "/api/event-chains/{chain_id}/events/{event_id}/complete",
             post(event_chain_routes::complete_event_in_chain),
         )
+        // Queue health check
+        .merge(queue_routes::create_queue_routes())
 }
