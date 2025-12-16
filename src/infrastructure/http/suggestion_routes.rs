@@ -1,7 +1,7 @@
 //! Suggestion API routes - LLM-powered content suggestions for world-building
 
 use axum::{
-    extract::State,
+    extract::{State, Path},
     http::StatusCode,
     Json,
 };
@@ -258,4 +258,57 @@ pub async fn suggest(
 pub struct SuggestionQueuedResponse {
     pub request_id: String,
     pub status: String,
+}
+
+/// Cancel a pending suggestion request
+pub async fn cancel_suggestion(
+    State(state): State<Arc<AppState>>,
+    Path(request_id): Path<String>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    match state.llm_queue_service.cancel_suggestion(&request_id).await {
+        Ok(true) => Ok(StatusCode::NO_CONTENT),
+        Ok(false) => Err((StatusCode::NOT_FOUND, "Suggestion request not found or already processed".to_string())),
+        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
+    }
+}
+
+/// Retry a failed suggestion request
+/// Note: This requires the client to provide the original request parameters
+#[derive(Debug, serde::Deserialize)]
+pub struct RetrySuggestionRequest {
+    pub field_type: String,
+    pub context: SuggestionRequestDto,
+}
+
+pub async fn retry_suggestion(
+    State(state): State<Arc<AppState>>,
+    Path(request_id): Path<String>,
+    Json(req): Json<RetrySuggestionRequest>,
+) -> Result<Json<SuggestionQueuedResponse>, (StatusCode, String)> {
+    // Generate new request ID for the retry
+    let new_request_id = Uuid::new_v4().to_string();
+    
+    let context: SuggestionContext = req.context.into();
+    
+    // Create LLM request item
+    let llm_request = LLMRequestItem {
+        request_type: LLMRequestType::Suggestion {
+            field_type: req.field_type.clone(),
+            entity_id: None,
+        },
+        session_id: None,
+        prompt: None,
+        suggestion_context: Some(context),
+        callback_id: new_request_id.clone(),
+    };
+
+    // Enqueue to LLM queue
+    state.llm_queue_service.enqueue(llm_request)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to enqueue retry: {}", e)))?;
+
+    Ok(Json(SuggestionQueuedResponse {
+        request_id: new_request_id,
+        status: "queued".to_string(),
+    }))
 }

@@ -587,3 +587,59 @@ pub async fn cancel_batch(
 
     Ok(StatusCode::NO_CONTENT)
 }
+
+/// Retry a failed batch by creating a new batch with the same parameters
+pub async fn retry_batch(
+    State(state): State<Arc<AppState>>,
+    Path(batch_id): Path<String>,
+) -> Result<Json<GenerationBatchResponseDto>, (StatusCode, String)> {
+    let uuid = Uuid::parse_str(&batch_id)
+        .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid batch ID".to_string()))?;
+
+    // Get the original batch
+    let original_batch = state
+        .asset_service
+        .get_batch(BatchId::from_uuid(uuid))
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "Batch not found".to_string()))?;
+
+    // Can only retry failed batches
+    if !matches!(original_batch.status, BatchStatus::Failed { .. }) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Can only retry failed batches".to_string(),
+        ));
+    }
+
+    // Create new batch with same parameters
+    use crate::domain::entities::generation_batch::GenerationRequest;
+    let retry_request = GenerationRequest {
+        entity_type: original_batch.entity_type,
+        entity_id: original_batch.entity_id,
+        asset_type: original_batch.asset_type,
+        workflow: original_batch.workflow,
+        prompt: original_batch.prompt,
+        negative_prompt: original_batch.negative_prompt,
+        count: original_batch.count,
+        style_reference_id: original_batch.style_reference_id,
+    };
+
+    let new_batch = retry_request.into_batch();
+    
+    // Create the new batch
+    let created_batch = state
+        .asset_service
+        .create_batch(new_batch.clone())
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    // Start processing the new batch
+    state
+        .generation_service
+        .start_batch_processing(created_batch.clone())
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    Ok(Json(GenerationBatchResponseDto::from(created_batch)))
+}

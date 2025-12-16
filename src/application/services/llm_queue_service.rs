@@ -11,7 +11,7 @@ use tokio::sync::Semaphore;
 
 use crate::application::ports::outbound::{
     ApprovalQueuePort, ChallengeRepositoryPort, LlmPort, NarrativeEventRepositoryPort,
-    ProcessingQueuePort, QueueError, QueueItemId, QueueNotificationPort, SkillRepositoryPort,
+    ProcessingQueuePort, QueueError, QueueItemId, QueueItemStatus, QueueNotificationPort, SkillRepositoryPort,
 };
 use crate::application::services::llm_service::LLMService;
 use crate::application::services::generation_service::GenerationEvent;
@@ -81,6 +81,35 @@ impl<Q: ProcessingQueuePort<LLMRequestItem> + 'static, L: LlmPort + Clone + 'sta
     /// Enqueue an LLM request
     pub async fn enqueue(&self, request: LLMRequestItem) -> Result<QueueItemId, QueueError> {
         self.queue.enqueue(request, PRIORITY_NORMAL).await
+    }
+
+    /// Cancel a suggestion request by its callback_id (request_id)
+    pub async fn cancel_suggestion(&self, request_id: &str) -> Result<bool, QueueError> {
+        // Search through pending and processing items
+        let pending_items = self.queue.list_by_status(QueueItemStatus::Pending).await?;
+        let processing_items = self.queue.list_by_status(QueueItemStatus::Processing).await?;
+        
+        // Find item with matching callback_id
+        for item in pending_items.iter().chain(processing_items.iter()) {
+            if item.payload.callback_id == request_id {
+                // Mark as failed with cancellation message
+                self.queue.fail(item.id, "Cancelled by user").await?;
+                
+                // Emit cancellation event
+                let _ = self.generation_event_tx.send(GenerationEvent::SuggestionFailed {
+                    request_id: request_id.to_string(),
+                    field_type: match &item.payload.request_type {
+                        LLMRequestType::Suggestion { field_type, .. } => field_type.clone(),
+                        _ => String::new(),
+                    },
+                    error: "Cancelled by user".to_string(),
+                });
+                
+                return Ok(true);
+            }
+        }
+        
+        Ok(false) // Not found
     }
 
     /// Background worker that processes LLM requests

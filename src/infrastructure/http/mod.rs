@@ -265,8 +265,20 @@ pub fn create_routes() -> Router<Arc<AppState>> {
             "/api/assets/batch/{batch_id}",
             delete(asset_routes::cancel_batch),
         )
+        .route(
+            "/api/assets/batch/{batch_id}/retry",
+            post(asset_routes::retry_batch),
+        )
         // Suggestion routes
         .route("/api/suggest", post(suggestion_routes::suggest))
+        .route(
+            "/api/suggest/{request_id}/cancel",
+            delete(suggestion_routes::cancel_suggestion),
+        )
+        .route(
+            "/api/suggest/{request_id}/retry",
+            post(suggestion_routes::retry_suggestion),
+        )
         .route(
             "/api/suggest/character/name",
             post(suggestion_routes::suggest_character_names),
