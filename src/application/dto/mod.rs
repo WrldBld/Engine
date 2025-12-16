@@ -29,8 +29,8 @@ pub use app_events::AppEvent;
 // Queue items (used by queue services)
 pub use queue_items::{
     ApprovalItem, AssetGenerationItem, ChallengeSuggestionInfo, DMAction, DMActionItem,
-    DecisionType, DecisionUrgency, LLMRequestItem, LLMRequestType, NarrativeEventSuggestionInfo,
-    PlayerActionItem,
+    DecisionType, DecisionUrgency, EnhancedChallengeSuggestion, EnhancedOutcomes, LLMRequestItem,
+    LLMRequestType, NarrativeEventSuggestionInfo, OutcomeDetail, PlayerActionItem,
 };
 
 // Asset DTOs

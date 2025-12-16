@@ -111,6 +111,55 @@ pub struct ChallengeSuggestionInfo {
     pub reasoning: String,
 }
 
+/// Enhanced challenge suggestion with detailed outcomes and tool receipts
+///
+/// This structure allows the LLM to suggest a skill challenge with
+/// pre-defined outcomes for each result tier, including proposed tool calls.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EnhancedChallengeSuggestion {
+    /// Optional reference to a predefined challenge (None for ad-hoc)
+    pub challenge_id: Option<String>,
+    /// Name of the challenge (e.g., "Persuasion Check", "Stealth Attempt")
+    pub challenge_name: String,
+    /// The skill being tested (e.g., "Persuasion", "Stealth", "Athletics")
+    pub skill_name: String,
+    /// Difficulty display (e.g., "DC 15", "Moderate", "70%")
+    pub difficulty_display: String,
+    /// What the NPC says before the challenge
+    pub npc_reply: String,
+    /// Detailed outcomes for each result tier
+    pub outcomes: EnhancedOutcomes,
+    /// Internal LLM reasoning (shown to DM only)
+    pub reasoning: String,
+}
+
+/// Outcomes for each challenge result tier
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EnhancedOutcomes {
+    /// Outcome for natural 20 or exceptional success (optional)
+    #[serde(default)]
+    pub critical_success: Option<OutcomeDetail>,
+    /// Outcome for meeting or exceeding the DC
+    pub success: OutcomeDetail,
+    /// Outcome for failing to meet the DC
+    pub failure: OutcomeDetail,
+    /// Outcome for natural 1 or catastrophic failure (optional)
+    #[serde(default)]
+    pub critical_failure: Option<OutcomeDetail>,
+}
+
+/// Detailed outcome information including narrative and tool calls
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OutcomeDetail {
+    /// Narrative flavor text describing what happens
+    pub flavor_text: String,
+    /// Scene direction (what actions/changes occur)
+    pub scene_direction: String,
+    /// Tool calls that would be executed for this outcome
+    #[serde(default)]
+    pub proposed_tools: Vec<ProposedToolInfo>,
+}
+
 /// Narrative event suggestion information for DM approval
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NarrativeEventSuggestionInfo {

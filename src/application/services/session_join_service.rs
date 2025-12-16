@@ -2,6 +2,39 @@
 //!
 //! This service is responsible for joining or creating a session for a given world,
 //! exporting the world snapshot for the Player, and gathering participant info.
+//!
+//! # Architecture Note: Hexagonal Violation
+//!
+//! This service currently imports `SessionManager` directly from the infrastructure layer:
+//! ```ignore
+//! use crate::infrastructure::session::{ClientId, SessionError, SessionManager, WorldSnapshot};
+//! ```
+//!
+//! This violates hexagonal architecture rules where application services should depend only
+//! on domain types and port traits, not infrastructure implementations.
+//!
+//! ## Planned Refactoring
+//!
+//! To fix this violation, the service should be refactored to:
+//! 1. Accept `AsyncSessionPort` trait bound instead of concrete `SessionManager`
+//! 2. Replace all `SessionManager` method calls with equivalent `AsyncSessionPort` methods
+//! 3. Move `ClientId`, `SessionError`, `WorldSnapshot` to domain or port definitions
+//!
+//! The port trait already exists at: `application/ports/outbound/async_session_port.rs`
+//! The adapter already exists at: `infrastructure/session_adapter.rs`
+//!
+//! Example of the fix:
+//! ```ignore
+//! use crate::application::ports::outbound::AsyncSessionPort;
+//!
+//! pub struct SessionJoinService<S: AsyncSessionPort> {
+//!     sessions: S,
+//!     world_service: WorldServiceImpl,
+//! }
+//! ```
+//!
+//! This refactoring should be done as a complete pass (with tests) rather than partially
+//! applied, as the service has multiple complex flows that depend on SessionManager's API.
 
 use std::sync::Arc;
 
@@ -25,6 +58,12 @@ pub struct SessionJoinedInfo {
 /// This is intentionally a small, stateful service that holds references to
 /// `SessionManager` and `WorldServiceImpl` so that the WebSocket handler and
 /// HTTP layer can depend on a single injected instance from `AppState`.
+///
+/// # TODO: Architecture Violation
+///
+/// This service depends on `SessionManager` (a concrete infrastructure type) rather than
+/// `AsyncSessionPort` (the port trait). This violates hexagonal architecture rules.
+/// See module documentation for planned refactoring approach.
 pub struct SessionJoinService {
     sessions: Arc<RwLock<SessionManager>>,
     world_service: WorldServiceImpl,

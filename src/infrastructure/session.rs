@@ -28,6 +28,16 @@ impl ClientId {
     pub fn new() -> Self {
         Self(uuid::Uuid::new_v4())
     }
+
+    /// Create a ClientId from an existing UUID
+    pub fn from_uuid(uuid: uuid::Uuid) -> Self {
+        Self(uuid)
+    }
+
+    /// Get the inner UUID
+    pub fn as_uuid(&self) -> uuid::Uuid {
+        self.0
+    }
 }
 
 impl Default for ClientId {
@@ -169,6 +179,24 @@ impl WorldSnapshot {
             })).collect::<Vec<_>>(),
             "current_scene_id": &self.current_scene_id
         })
+    }
+}
+
+impl Default for WorldSnapshot {
+    /// Create a minimal empty world snapshot with placeholder values.
+    ///
+    /// This is used as a fallback when JSON deserialization fails during
+    /// session creation. In normal operation, proper world data should be
+    /// provided, but this ensures the system remains functional with a
+    /// basic empty world containing no locations, characters, or scenes.
+    fn default() -> Self {
+        Self {
+            world: World::new("Empty World", "A placeholder world"),
+            locations: Vec::new(),
+            characters: Vec::new(),
+            scenes: Vec::new(),
+            current_scene_id: None,
+        }
     }
 }
 
@@ -1153,6 +1181,7 @@ mod tests {
         let mut session = GameSession::new(
             WorldId::new(),
             create_test_snapshot(create_test_world()),
+            30,
         );
 
         session.add_player_action("Alice", "I try to negotiate with the merchant");
@@ -1169,6 +1198,7 @@ mod tests {
         let mut session = GameSession::new(
             WorldId::new(),
             create_test_snapshot(create_test_world()),
+            30,
         );
 
         session.add_npc_response("Merchant", "That will cost you 50 gold pieces");
@@ -1185,6 +1215,7 @@ mod tests {
         let mut session = GameSession::new(
             WorldId::new(),
             create_test_snapshot(create_test_world()),
+            30,
         );
 
         session.add_player_action("Bob", "I cast fireball");
@@ -1206,6 +1237,7 @@ mod tests {
         let mut session = GameSession::new(
             WorldId::new(),
             create_test_snapshot(create_test_world()),
+            30,
         );
 
         // Set a small limit for testing
@@ -1230,6 +1262,7 @@ mod tests {
         let mut session = GameSession::new(
             WorldId::new(),
             create_test_snapshot(create_test_world()),
+            30,
         );
 
         // Add 5 turns
@@ -1249,6 +1282,7 @@ mod tests {
         let mut session = GameSession::new(
             WorldId::new(),
             create_test_snapshot(create_test_world()),
+            30,
         );
 
         session.add_player_action("Player", "Action 1");
@@ -1264,6 +1298,7 @@ mod tests {
         let mut session = GameSession::new(
             WorldId::new(),
             create_test_snapshot(create_test_world()),
+            30,
         );
 
         session.add_player_action("Player", "Action 1");
@@ -1280,6 +1315,7 @@ mod tests {
         let mut session = GameSession::new(
             WorldId::new(),
             create_test_snapshot(create_test_world()),
+            30,
         );
 
         // Add 10 turns with default limit (30)

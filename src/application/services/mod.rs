@@ -22,6 +22,7 @@ pub mod llm_service;
 pub mod location_service;
 pub mod narrative_event_service;
 pub mod narrative_event_approval_service;
+pub mod outcome_trigger_service;
 pub mod player_action_queue_service;
 pub mod player_character_service;
 pub mod relationship_service;
@@ -135,5 +136,8 @@ pub use generation_queue_projection_service::{
     GenerationBatchResponseDtoWithRead,
     SuggestionTaskSnapshot,
 };
+
+// Re-export outcome trigger service
+pub use outcome_trigger_service::{OutcomeTriggerService, TriggerExecutionResult};
 
 // Note: PlayerActionService and ApprovalService were removed - functionality moved to queue services

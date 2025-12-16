@@ -725,6 +725,21 @@ async fn handle_message(
                 .await
         }
 
+        ClientMessage::ChallengeRollInput {
+            challenge_id,
+            input_type,
+        } => {
+            tracing::debug!(
+                "Received challenge roll input: {:?} for challenge {}",
+                input_type,
+                challenge_id
+            );
+            state
+                .challenge_resolution_service
+                .handle_roll_input(client_id, challenge_id, input_type)
+                .await
+        }
+
         ClientMessage::TriggerChallenge {
             challenge_id,
             target_character_id,
@@ -753,6 +768,67 @@ async fn handle_message(
             .narrative_event_approval_service
             .handle_decision(client_id, request_id, event_id, approved, selected_outcome)
             .await,
+
+        ClientMessage::RegenerateOutcome {
+            request_id,
+            outcome_type,
+            guidance,
+        } => {
+            tracing::debug!(
+                "DM requested outcome regeneration for request {} outcome {:?}",
+                request_id,
+                outcome_type
+            );
+            // TODO: Implement regeneration via LLM service
+            // For now, send acknowledgment
+            Some(ServerMessage::Error {
+                code: "NOT_IMPLEMENTED".to_string(),
+                message: "Outcome regeneration not yet implemented".to_string(),
+            })
+        }
+
+        ClientMessage::DiscardChallenge {
+            request_id,
+            feedback,
+        } => {
+            tracing::info!(
+                "DM discarded challenge for request {}, feedback: {:?}",
+                request_id,
+                feedback
+            );
+            // Remove the challenge suggestion from the approval queue
+            // The approval will be re-queued for a non-challenge response
+            state
+                .dm_approval_queue_service
+                .discard_challenge(&client_id.to_string(), &request_id)
+                .await;
+            Some(ServerMessage::ChallengeDiscarded { request_id })
+        }
+
+        ClientMessage::CreateAdHocChallenge {
+            challenge_name,
+            skill_name,
+            difficulty,
+            target_pc_id,
+            outcomes,
+        } => {
+            tracing::info!(
+                "DM creating ad-hoc challenge '{}' for PC {}",
+                challenge_name,
+                target_pc_id
+            );
+            state
+                .challenge_resolution_service
+                .handle_adhoc_challenge(
+                    client_id,
+                    challenge_name,
+                    skill_name,
+                    difficulty,
+                    target_pc_id,
+                    outcomes,
+                )
+                .await
+        }
     }
 }
 

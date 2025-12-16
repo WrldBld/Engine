@@ -37,10 +37,16 @@ pub enum ClientMessage {
         request_id: String,
         decision: ApprovalDecision,
     },
-    /// Player submits a challenge roll
+    /// Player submits a challenge roll (legacy - accepts raw roll value)
     ChallengeRoll {
         challenge_id: String,
         roll: i32,
+    },
+    /// Player submits a challenge roll with dice input (formula or manual)
+    ChallengeRollInput {
+        challenge_id: String,
+        /// Dice input - either "formula" with dice string, or "manual" with result
+        input_type: DiceInputType,
     },
     /// DM triggers a challenge manually
     TriggerChallenge {
@@ -63,6 +69,39 @@ pub enum ClientMessage {
     },
     /// Heartbeat ping
     Heartbeat,
+
+    /// DM requests regeneration of challenge outcome(s)
+    RegenerateOutcome {
+        /// The approval request ID this relates to
+        request_id: String,
+        /// Which outcome to regenerate ("success", "failure", "critical_success", "critical_failure")
+        /// If None, regenerate all outcomes
+        outcome_type: Option<String>,
+        /// Optional guidance for regeneration
+        guidance: Option<String>,
+    },
+
+    /// DM discards a challenge suggestion
+    DiscardChallenge {
+        /// The approval request ID containing the challenge
+        request_id: String,
+        /// Feedback on why discarding (optional, for LLM learning)
+        feedback: Option<String>,
+    },
+
+    /// DM creates an ad-hoc challenge (no LLM involved)
+    CreateAdHocChallenge {
+        /// Name of the challenge
+        challenge_name: String,
+        /// Skill being tested
+        skill_name: String,
+        /// Difficulty display (e.g., "DC 15", "Hard")
+        difficulty: String,
+        /// Target PC ID
+        target_pc_id: String,
+        /// Outcome descriptions
+        outcomes: AdHocOutcomes,
+    },
 }
 
 /// Messages from server (Engine) to client (Player)
@@ -142,6 +181,12 @@ pub enum ServerMessage {
         difficulty_display: String,
         description: String,
         character_modifier: i32,
+        /// Suggested dice formula based on rule system (e.g., "1d20", "1d100", "2d6")
+        #[serde(default)]
+        suggested_dice: Option<String>,
+        /// Human-readable hint about the rule system (e.g., "Roll d20, add your Persuasion modifier")
+        #[serde(default)]
+        rule_system_hint: Option<String>,
     },
     /// Challenge result broadcast to all
     ChallengeResolved {
@@ -153,6 +198,12 @@ pub enum ServerMessage {
         total: i32,
         outcome: String,
         outcome_description: String,
+        /// Roll breakdown string (e.g., "1d20(14) + 3 = 17" or "Manual: 18")
+        #[serde(default)]
+        roll_breakdown: Option<String>,
+        /// Individual dice results if rolled with formula
+        #[serde(default)]
+        individual_rolls: Option<Vec<i32>>,
     },
     /// Narrative event has been triggered
     NarrativeEventTriggered {
@@ -215,6 +266,28 @@ pub enum ServerMessage {
         state: String, // "connected", "degraded", "disconnected", "circuit_open"
         message: Option<String>, // Human-readable status
         retry_in_seconds: Option<u32>, // Countdown for reconnect
+    },
+
+    /// Outcome has been regenerated (sent to DM)
+    OutcomeRegenerated {
+        /// The approval request ID this relates to
+        request_id: String,
+        /// Which outcome was regenerated
+        outcome_type: String,
+        /// New outcome details
+        new_outcome: OutcomeDetailData,
+    },
+
+    /// Challenge was discarded (confirmation to DM)
+    ChallengeDiscarded {
+        request_id: String,
+    },
+
+    /// Ad-hoc challenge created and sent to player
+    AdHocChallengeCreated {
+        challenge_id: String,
+        challenge_name: String,
+        target_pc_id: String,
     },
 }
 
@@ -309,6 +382,43 @@ pub struct NpcMotivationData {
     pub mood: String,
     pub immediate_goal: String,
     pub secret_agenda: Option<String>,
+}
+
+/// Dice input type for challenge rolls
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value")]
+pub enum DiceInputType {
+    /// Roll dice using a formula string like "1d20+5"
+    Formula(String),
+    /// Use a manual result (physical dice roll)
+    Manual(i32),
+}
+
+/// Ad-hoc challenge outcomes for DM-created challenges
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdHocOutcomes {
+    /// What happens on success
+    pub success: String,
+    /// What happens on failure
+    pub failure: String,
+    /// Optional critical success outcome
+    #[serde(default)]
+    pub critical_success: Option<String>,
+    /// Optional critical failure outcome
+    #[serde(default)]
+    pub critical_failure: Option<String>,
+}
+
+/// Outcome detail data for regenerated outcomes
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OutcomeDetailData {
+    /// Narrative flavor text
+    pub flavor_text: String,
+    /// Scene direction (what happens)
+    pub scene_direction: String,
+    /// Proposed tool calls for this outcome
+    #[serde(default)]
+    pub proposed_tools: Vec<ProposedToolInfo>,
 }
 
 

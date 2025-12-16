@@ -3,50 +3,116 @@
 //!
 //! This moves challenge-related business logic out of the websocket handler into a
 //! dedicated application service, keeping the transport layer thin.
+//!
+//! # Architecture Note: Hexagonal Violation
+//!
+//! This service currently imports `SessionManager` directly from the infrastructure layer:
+//! ```ignore
+//! use crate::infrastructure::session::{ClientId, SessionManager};
+//! ```
+//!
+//! This violates hexagonal architecture rules where application services should depend only
+//! on domain types and port traits, not infrastructure implementations.
+//!
+//! ## Planned Refactoring
+//!
+//! To fix this violation, the service should be refactored to:
+//! 1. Accept `AsyncSessionPort` trait bound instead of concrete `SessionManager`
+//! 2. Replace all `SessionManager` method calls with equivalent `AsyncSessionPort` methods
+//! 3. Move `ClientId` to domain or port definitions if it's not already there
+//!
+//! The port trait already exists at: `application/ports/outbound/async_session_port.rs`
+//! The adapter already exists at: `infrastructure/session_adapter.rs`
+//!
+//! This service is tightly coupled to SessionManager's session and participant management API
+//! and broadcasts directly to sessions. A full refactoring should carefully preserve this
+//! functionality while routing through the port trait.
 
 use std::sync::Arc;
 
 use tokio::sync::RwLock;
 
 use crate::application::dto::AppEvent;
-use crate::application::services::{ChallengeService, SkillService};
+use crate::application::services::{ChallengeService, SkillService, PlayerCharacterService, OutcomeTriggerService};
 use crate::domain::entities::OutcomeType;
-use crate::domain::value_objects::ChallengeId;
+use crate::domain::value_objects::{ChallengeId, DiceRollInput, SessionId, PlayerCharacterId};
 use crate::infrastructure::session::{ClientId, SessionManager};
-use crate::infrastructure::websocket::messages::ServerMessage;
+use crate::infrastructure::websocket::messages::{DiceInputType, ServerMessage};
 use crate::application::ports::outbound::EventBusPort;
 use crate::application::services::dm_approval_queue_service::DMApprovalQueueService;
 use crate::application::ports::outbound::ApprovalQueuePort;
+use crate::application::ports::outbound::{SessionManagementPort, ChallengeRepositoryPort};
+use tracing::{debug, info};
 
 /// Service responsible for challenge-related flows.
-pub struct ChallengeResolutionService<S: ChallengeService, K: SkillService, Q: ApprovalQueuePort<crate::application::dto::ApprovalItem>> {
+///
+/// # TODO: Architecture Violation
+///
+/// This service depends on `SessionManager` (a concrete infrastructure type) rather than
+/// `AsyncSessionPort` (the port trait). This violates hexagonal architecture rules.
+/// See module documentation for planned refactoring approach.
+pub struct ChallengeResolutionService<S: ChallengeService, K: SkillService, Q: ApprovalQueuePort<crate::application::dto::ApprovalItem>, P: PlayerCharacterService> {
     sessions: Arc<RwLock<SessionManager>>,
     challenge_service: Arc<S>,
     skill_service: Arc<K>,
+    player_character_service: Arc<P>,
     event_bus: Arc<dyn EventBusPort<AppEvent>>,
     dm_approval_queue_service: Arc<DMApprovalQueueService<Q>>,
+    outcome_trigger_service: Arc<OutcomeTriggerService>,
 }
 
-impl<S, K, Q> ChallengeResolutionService<S, K, Q>
+impl<S, K, Q, P> ChallengeResolutionService<S, K, Q, P>
 where
     S: ChallengeService,
     K: SkillService,
     Q: ApprovalQueuePort<crate::application::dto::ApprovalItem>,
+    P: PlayerCharacterService,
 {
     pub fn new(
         sessions: Arc<RwLock<SessionManager>>,
         challenge_service: Arc<S>,
         skill_service: Arc<K>,
+        player_character_service: Arc<P>,
         event_bus: Arc<dyn EventBusPort<AppEvent>>,
         dm_approval_queue_service: Arc<DMApprovalQueueService<Q>>,
+        outcome_trigger_service: Arc<OutcomeTriggerService>,
     ) -> Self {
         Self {
             sessions,
             challenge_service,
             skill_service,
+            player_character_service,
             event_bus,
             dm_approval_queue_service,
+            outcome_trigger_service,
         }
+    }
+
+    /// Get a player character ID for a client in a session.
+    ///
+    /// This looks up the client's PC by matching their user_id in the session
+    /// participants with a PlayerCharacter in the session.
+    async fn get_client_player_character(
+        &self,
+        client_id: ClientId,
+        session_id: SessionId,
+    ) -> Option<PlayerCharacterId> {
+        let sessions_read = self.sessions.read().await;
+
+        // Get the client's user_id from session participants
+        let session = sessions_read.get_session(session_id)?;
+        let participant = session.participants.get(&client_id)?;
+        let user_id = &participant.user_id;
+
+        // We would need access to PlayerCharacterRepository to do a proper lookup,
+        // but for now we return None. The caller will use a default modifier of 0.
+        debug!(
+            client_id = %client_id,
+            session_id = %session_id,
+            user_id = %user_id,
+            "Could not map client to player character (requires repository access)"
+        );
+        None
     }
 
     /// Handle a player submitting a challenge roll.
@@ -117,8 +183,15 @@ where
         // Publish AppEvent for challenge resolution
         let world_id = challenge.world_id;
 
-        // TODO: derive real character_id from session participant mapping
-        let character_id = "unknown".to_string();
+        // Get character ID from player character lookup
+        let character_id = if let Some(session_id_val) = session_id {
+            self.get_client_player_character(client_id, session_id_val)
+                .await
+                .map(|id| id.to_string())
+                .unwrap_or_else(|| player_name.clone())
+        } else {
+            player_name.clone()
+        };
 
         let app_event = AppEvent::ChallengeResolved {
             challenge_id: Some(challenge_id_str.clone()),
@@ -145,10 +218,212 @@ where
                 total: roll + character_modifier,
                 outcome: outcome_type.display_name().to_string(),
                 outcome_description: outcome.description.clone(),
+                roll_breakdown: None, // Legacy method doesn't have formula info
+                individual_rolls: None,
             };
             drop(sessions_read);
             let sessions_write = self.sessions.write().await;
             sessions_write.broadcast_to_session(session_id, &result_msg);
+        }
+
+        None
+    }
+
+    /// Handle a player submitting a challenge roll with dice input (formula or manual).
+    /// This is the enhanced version that supports dice formulas like "1d20+5".
+    pub async fn handle_roll_input(
+        &self,
+        client_id: ClientId,
+        challenge_id_str: String,
+        dice_input: DiceInputType,
+    ) -> Option<ServerMessage> {
+        // Convert DiceInputType to DiceRollInput
+        let roll_input = match dice_input {
+            DiceInputType::Formula(formula) => DiceRollInput::Formula(formula),
+            DiceInputType::Manual(value) => DiceRollInput::ManualResult(value),
+        };
+
+        // Parse challenge_id
+        let challenge_uuid = match uuid::Uuid::parse_str(&challenge_id_str) {
+            Ok(uuid) => ChallengeId::from_uuid(uuid),
+            Err(_) => {
+                return Some(ServerMessage::Error {
+                    code: "INVALID_CHALLENGE_ID".to_string(),
+                    message: "Invalid challenge ID format".to_string(),
+                });
+            }
+        };
+
+        // Load challenge from service
+        let challenge = match self.challenge_service.get_challenge(challenge_uuid).await {
+            Ok(Some(challenge)) => challenge,
+            Ok(None) => {
+                return Some(ServerMessage::Error {
+                    code: "CHALLENGE_NOT_FOUND".to_string(),
+                    message: format!("Challenge {} not found", challenge_id_str),
+                });
+            }
+            Err(e) => {
+                tracing::error!("Failed to load challenge: {}", e);
+                return Some(ServerMessage::Error {
+                    code: "CHALLENGE_LOAD_ERROR".to_string(),
+                    message: "Failed to load challenge".to_string(),
+                });
+            }
+        };
+
+        // Get session and player info
+        let sessions_read = self.sessions.read().await;
+        let (session_id, player_name) = match sessions_read.get_client_session(client_id) {
+            Some(sid) => {
+                let session = sessions_read.get_session(sid);
+                let player_name = session
+                    .and_then(|s| s.participants.get(&client_id))
+                    .map(|p| p.user_id.clone())
+                    .unwrap_or_else(|| "Unknown Player".to_string());
+                (Some(sid), player_name)
+            }
+            None => {
+                return Some(ServerMessage::Error {
+                    code: "NOT_IN_SESSION".to_string(),
+                    message:
+                        "You must join a session before submitting challenge rolls".to_string(),
+                });
+            }
+        };
+
+        // Look up character's skill modifier from PlayerCharacterService
+        let character_modifier = if let Some(session_id_val) = session_id {
+            if let Some(pc_id) = self.get_client_player_character(client_id, session_id_val).await {
+                // Try to get the skill modifier from the player character service
+                match self.player_character_service
+                    .get_skill_modifier(pc_id, challenge.skill_id.clone())
+                    .await
+                {
+                    Ok(modifier) => {
+                        debug!(
+                            pc_id = %pc_id,
+                            skill_id = %challenge.skill_id,
+                            modifier = modifier,
+                            "Found skill modifier for player character"
+                        );
+                        modifier
+                    }
+                    Err(e) => {
+                        debug!(
+                            pc_id = %pc_id,
+                            skill_id = %challenge.skill_id,
+                            error = %e,
+                            "Failed to get skill modifier, defaulting to 0"
+                        );
+                        0
+                    }
+                }
+            } else {
+                debug!(
+                    session_id = %session_id_val,
+                    client_id = %client_id,
+                    "Could not find player character for client"
+                );
+                0
+            }
+        } else {
+            0
+        };
+
+        // Resolve the dice roll
+        let roll_result = match roll_input.resolve_with_modifier(character_modifier) {
+            Ok(result) => result,
+            Err(e) => {
+                return Some(ServerMessage::Error {
+                    code: "INVALID_DICE_FORMULA".to_string(),
+                    message: format!("Invalid dice formula: {}", e),
+                });
+            }
+        };
+
+        // For d20 systems, check natural 1/20 using the raw die roll (before modifier)
+        let raw_roll = if roll_result.is_manual() {
+            roll_result.total // For manual, we use the total as the "roll"
+        } else {
+            roll_result.dice_total // For formula, use just the dice total
+        };
+
+        // Evaluate challenge result
+        let (outcome_type, outcome) =
+            evaluate_challenge_result(&challenge, raw_roll, character_modifier);
+        let success =
+            outcome_type == OutcomeType::Success || outcome_type == OutcomeType::CriticalSuccess;
+
+        // Publish AppEvent for challenge resolution
+        let world_id = challenge.world_id;
+
+        // Get character ID from player character lookup
+        let character_id = if let Some(session_id_val) = session_id {
+            self.get_client_player_character(client_id, session_id_val)
+                .await
+                .map(|id| id.to_string())
+                .unwrap_or_else(|| player_name.clone())
+        } else {
+            player_name.clone()
+        };
+
+        let app_event = AppEvent::ChallengeResolved {
+            challenge_id: Some(challenge_id_str.clone()),
+            challenge_name: challenge.name.clone(),
+            world_id: world_id.to_string(),
+            character_id,
+            success,
+            roll: Some(raw_roll),
+            total: Some(roll_result.total),
+            session_id: session_id.map(|sid| sid.to_string()),
+        };
+        if let Err(e) = self.event_bus.publish(app_event).await {
+            tracing::error!("Failed to publish ChallengeResolved event: {}", e);
+        }
+
+        // Execute outcome triggers (Phase 22D integration)
+        // Before broadcasting the resolution, execute any triggers defined in the outcome
+        let mut trigger_state_changes = Vec::new();
+        if let Some(sid) = session_id {
+            drop(sessions_read);
+            let mut sessions_write = self.sessions.write().await;
+            let trigger_result = self
+                .outcome_trigger_service
+                .execute_triggers(&outcome.triggers, &mut *sessions_write, sid)
+                .await;
+            trigger_state_changes = trigger_result.state_changes;
+
+            if !trigger_result.warnings.is_empty() {
+                info!(
+                    trigger_count = trigger_result.trigger_count,
+                    warnings = ?trigger_result.warnings,
+                    "Outcome triggers executed with warnings"
+                );
+            }
+            drop(sessions_write);
+        }
+
+        // Broadcast ChallengeResolved to all participants
+        if let Some(session_id) = session_id {
+            let result_msg = ServerMessage::ChallengeResolved {
+                challenge_id: challenge_id_str.clone(),
+                challenge_name: challenge.name.clone(),
+                character_name: player_name,
+                roll: raw_roll,
+                modifier: roll_result.modifier_applied,
+                total: roll_result.total,
+                outcome: outcome_type.display_name().to_string(),
+                outcome_description: outcome.description.clone(),
+                roll_breakdown: Some(roll_result.breakdown()),
+                individual_rolls: if roll_result.is_manual() {
+                    None
+                } else {
+                    Some(roll_result.individual_rolls.clone())
+                },
+            };
+            let sessions_read_broadcast = self.sessions.read().await;
+            sessions_read_broadcast.broadcast_to_session(session_id, &result_msg);
         }
 
         None
@@ -220,13 +495,18 @@ where
 
         let character_modifier = 0;
 
+        // Get suggested dice based on difficulty type
+        let (suggested_dice, rule_system_hint) = get_dice_suggestion_for_challenge(&challenge);
+
         let prompt = ServerMessage::ChallengePrompt {
             challenge_id: challenge_id_str.clone(),
             challenge_name: challenge.name.clone(),
-            skill_name,
+            skill_name: skill_name.clone(),
             difficulty_display: challenge.difficulty.display(),
             description: challenge.description.clone(),
             character_modifier,
+            suggested_dice: Some(suggested_dice),
+            rule_system_hint: Some(rule_system_hint),
         };
 
         if let Some(session_id) = session_id {
@@ -321,6 +601,10 @@ where
 
                         let character_modifier = 0;
 
+                        // Get suggested dice based on difficulty type
+                        let (suggested_dice, rule_system_hint) =
+                            get_dice_suggestion_for_challenge(&challenge);
+
                         let prompt = ServerMessage::ChallengePrompt {
                             challenge_id: challenge_suggestion.challenge_id.clone(),
                             challenge_name: challenge.name.clone(),
@@ -328,6 +612,8 @@ where
                             difficulty_display,
                             description: challenge.description.clone(),
                             character_modifier,
+                            suggested_dice: Some(suggested_dice),
+                            rule_system_hint: Some(rule_system_hint),
                         };
 
                         let sessions_read_inner = self.sessions.read().await;
@@ -371,6 +657,121 @@ where
         }
 
         None
+    }
+
+    /// Handle DM creating an ad-hoc challenge (no LLM involved)
+    pub async fn handle_adhoc_challenge(
+        &self,
+        client_id: ClientId,
+        challenge_name: String,
+        skill_name: String,
+        difficulty: String,
+        target_pc_id: String,
+        outcomes: crate::infrastructure::websocket::messages::AdHocOutcomes,
+    ) -> Option<ServerMessage> {
+        let sessions_read = self.sessions.read().await;
+        let session_id = sessions_read.get_client_session(client_id);
+
+        // Verify DM
+        let is_dm = session_id
+            .and_then(|sid| sessions_read.get_session(sid))
+            .and_then(|s| s.get_dm())
+            .filter(|dm| dm.client_id == client_id)
+            .is_some();
+
+        if !is_dm {
+            return Some(ServerMessage::Error {
+                code: "NOT_AUTHORIZED".to_string(),
+                message: "Only the DM can create ad-hoc challenges".to_string(),
+            });
+        }
+
+        // Generate a temporary challenge ID for this ad-hoc challenge
+        let adhoc_challenge_id = uuid::Uuid::new_v4().to_string();
+
+        // Store the ad-hoc outcomes in the session for later resolution
+        // For now, we just broadcast the challenge prompt to the target player
+        tracing::info!(
+            "DM created ad-hoc challenge '{}' for PC {}: difficulty {}",
+            challenge_name,
+            target_pc_id,
+            difficulty
+        );
+
+        // Determine suggested dice from difficulty string
+        let (suggested_dice, rule_system_hint) = if difficulty.to_uppercase().starts_with("DC") {
+            ("1d20".to_string(), "Roll 1d20 and add your modifier".to_string())
+        } else if difficulty.ends_with('%') {
+            ("1d100".to_string(), "Roll percentile dice".to_string())
+        } else {
+            ("2d6".to_string(), "Roll 2d6 and add your modifier".to_string())
+        };
+
+        let prompt = ServerMessage::ChallengePrompt {
+            challenge_id: adhoc_challenge_id.clone(),
+            challenge_name: challenge_name.clone(),
+            skill_name,
+            difficulty_display: difficulty,
+            description: format!("Ad-hoc challenge created by DM"),
+            character_modifier: 0, // DM would need to specify this
+            suggested_dice: Some(suggested_dice),
+            rule_system_hint: Some(rule_system_hint),
+        };
+
+        // Broadcast to session (the target player will see it)
+        if let Some(sid) = session_id {
+            sessions_read.broadcast_to_session(sid, &prompt);
+        }
+
+        // Notify DM that challenge was created
+        Some(ServerMessage::AdHocChallengeCreated {
+            challenge_id: adhoc_challenge_id,
+            challenge_name,
+            target_pc_id,
+        })
+    }
+}
+
+/// Get suggested dice and rule system hint based on challenge difficulty type.
+fn get_dice_suggestion_for_challenge(
+    challenge: &crate::domain::entities::Challenge,
+) -> (String, String) {
+    match &challenge.difficulty {
+        crate::domain::entities::Difficulty::DC(_) => {
+            // D20 systems (D&D, Pathfinder, etc.)
+            (
+                "1d20".to_string(),
+                "Roll 1d20 and add your skill modifier".to_string(),
+            )
+        }
+        crate::domain::entities::Difficulty::Percentage(_) => {
+            // Percentile systems (Call of Cthulhu, etc.)
+            (
+                "1d100".to_string(),
+                "Roll percentile dice (1d100), lower is better".to_string(),
+            )
+        }
+        crate::domain::entities::Difficulty::Descriptor(desc) => {
+            // Narrative systems - suggest 2d6 for PbtA-style games
+            (
+                "2d6".to_string(),
+                format!("Roll 2d6 for {} difficulty", desc.display_name()),
+            )
+        }
+        crate::domain::entities::Difficulty::Opposed => {
+            // Opposed rolls - both parties roll
+            (
+                "1d20".to_string(),
+                "Opposed roll - both parties roll and compare".to_string(),
+            )
+        }
+        crate::domain::entities::Difficulty::Custom(desc) => {
+            // Custom difficulty - let the hint explain
+            (
+                "1d20".to_string(),
+                format!("Custom difficulty: {}", desc),
+            )
+        }
     }
 }
 

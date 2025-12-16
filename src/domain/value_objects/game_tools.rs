@@ -63,6 +63,94 @@ pub enum GameTool {
         event_type: String,
         description: String,
     },
+
+    /// Modify an NPC's motivation
+    ///
+    /// # Fields
+    /// - `npc_id`: The ID of the NPC
+    /// - `motivation_type`: Type of motivation (goal, fear, desire, secret)
+    /// - `new_value`: The new motivation value
+    /// - `reason`: Why the motivation is changing
+    ModifyNpcMotivation {
+        npc_id: String,
+        motivation_type: String,
+        new_value: String,
+        reason: String,
+    },
+
+    /// Modify a character's description
+    ///
+    /// # Fields
+    /// - `character_id`: The ID of the character (NPC or PC)
+    /// - `change_type`: Type of change (appearance, personality, backstory)
+    /// - `description`: Description of what changed
+    ModifyCharacterDescription {
+        character_id: String,
+        change_type: String,
+        description: String,
+    },
+
+    /// Modify an NPC's opinion of a player character
+    ///
+    /// # Fields
+    /// - `npc_id`: The ID of the NPC
+    /// - `target_pc_id`: The ID of the player character
+    /// - `opinion_change`: How the opinion changes (e.g., "more trusting", "suspicious")
+    /// - `reason`: Why the opinion is changing
+    ModifyNpcOpinion {
+        npc_id: String,
+        target_pc_id: String,
+        opinion_change: String,
+        reason: String,
+    },
+
+    /// Transfer an item between characters
+    ///
+    /// # Fields
+    /// - `from_id`: The ID of the character giving the item
+    /// - `to_id`: The ID of the character receiving the item
+    /// - `item_name`: The name of the item
+    TransferItem {
+        from_id: String,
+        to_id: String,
+        item_name: String,
+    },
+
+    /// Add a condition to a character
+    ///
+    /// # Fields
+    /// - `character_id`: The ID of the character
+    /// - `condition_name`: The name of the condition (e.g., "Poisoned", "Frightened")
+    /// - `description`: Description of the condition's effects
+    /// - `duration`: Optional duration (e.g., "1 hour", "until rest", "permanent")
+    AddCondition {
+        character_id: String,
+        condition_name: String,
+        description: String,
+        duration: Option<String>,
+    },
+
+    /// Remove a condition from a character
+    ///
+    /// # Fields
+    /// - `character_id`: The ID of the character
+    /// - `condition_name`: The name of the condition to remove
+    RemoveCondition {
+        character_id: String,
+        condition_name: String,
+    },
+
+    /// Update a character's stat value
+    ///
+    /// # Fields
+    /// - `character_id`: The ID of the character
+    /// - `stat_name`: The name of the stat (e.g., "health", "mana", "gold")
+    /// - `delta`: The change amount (positive or negative)
+    UpdateCharacterStat {
+        character_id: String,
+        stat_name: String,
+        delta: i32,
+    },
 }
 
 impl GameTool {
@@ -73,6 +161,13 @@ impl GameTool {
             Self::RevealInfo { .. } => "reveal_info",
             Self::ChangeRelationship { .. } => "change_relationship",
             Self::TriggerEvent { .. } => "trigger_event",
+            Self::ModifyNpcMotivation { .. } => "modify_npc_motivation",
+            Self::ModifyCharacterDescription { .. } => "modify_character_description",
+            Self::ModifyNpcOpinion { .. } => "modify_npc_opinion",
+            Self::TransferItem { .. } => "transfer_item",
+            Self::AddCondition { .. } => "add_condition",
+            Self::RemoveCondition { .. } => "remove_condition",
+            Self::UpdateCharacterStat { .. } => "update_character_stat",
         }
     }
 
@@ -105,6 +200,68 @@ impl GameTool {
                 reason
             ),
             Self::TriggerEvent { event_type, .. } => format!("Trigger {} event", event_type),
+            Self::ModifyNpcMotivation {
+                npc_id,
+                motivation_type,
+                new_value,
+                reason,
+            } => format!(
+                "Change NPC {} {}: '{}' ({})",
+                npc_id, motivation_type, new_value, reason
+            ),
+            Self::ModifyCharacterDescription {
+                character_id,
+                change_type,
+                description,
+            } => format!(
+                "Update {} {} for character {}",
+                change_type, description, character_id
+            ),
+            Self::ModifyNpcOpinion {
+                npc_id,
+                target_pc_id,
+                opinion_change,
+                reason,
+            } => format!(
+                "NPC {} becomes {} toward PC {} ({})",
+                npc_id, opinion_change, target_pc_id, reason
+            ),
+            Self::TransferItem {
+                from_id,
+                to_id,
+                item_name,
+            } => format!("Transfer '{}' from {} to {}", item_name, from_id, to_id),
+            Self::AddCondition {
+                character_id,
+                condition_name,
+                duration,
+                ..
+            } => {
+                let dur = duration.as_deref().unwrap_or("permanent");
+                format!(
+                    "Add condition '{}' to {} ({})",
+                    condition_name, character_id, dur
+                )
+            }
+            Self::RemoveCondition {
+                character_id,
+                condition_name,
+            } => format!(
+                "Remove condition '{}' from {}",
+                condition_name, character_id
+            ),
+            Self::UpdateCharacterStat {
+                character_id,
+                stat_name,
+                delta,
+            } => {
+                let change = if *delta >= 0 {
+                    format!("+{}", delta)
+                } else {
+                    format!("{}", delta)
+                };
+                format!("Update {} {} by {} for {}", stat_name, change, delta, character_id)
+            }
         }
     }
 }

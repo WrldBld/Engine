@@ -13,7 +13,7 @@ use crate::application::services::{
     NarrativeEventServiceImpl, PlayerActionQueueService, PlayerCharacterServiceImpl,
     SceneResolutionServiceImpl, SceneServiceImpl, SheetTemplateService,
     SkillServiceImpl, StoryEventService, RelationshipServiceImpl, WorkflowConfigService,
-    WorldServiceImpl, GenerationQueueProjectionService, SessionJoinService,
+    WorldServiceImpl, GenerationQueueProjectionService, SessionJoinService, OutcomeTriggerService,
 };
 use crate::application::services::generation_service::{GenerationService, GenerationEvent};
 use crate::application::dto::{
@@ -64,6 +64,7 @@ pub struct AppState {
             ChallengeServiceImpl,
             SkillServiceImpl,
             crate::infrastructure::queues::QueueBackendEnum<ApprovalItem>,
+            PlayerCharacterServiceImpl,
         >,
     >,
     pub narrative_event_approval_service: Arc<NarrativeEventApprovalService<NarrativeEventServiceImpl>>,
@@ -188,6 +189,11 @@ impl AppState {
             scene_repo_for_resolution,
         );
 
+        // Create outcome trigger service for challenge resolution (Phase 22D)
+        let outcome_trigger_service = Arc::new(OutcomeTriggerService::new(
+            challenge_repo.clone(),
+        ));
+
         // Initialize queue infrastructure using factory
         let queue_factory = QueueFactory::new(config.queue.clone()).await?;
         tracing::info!("Queue backend: {}", queue_factory.config().backend);
@@ -303,8 +309,10 @@ impl AppState {
                 Arc::clone(&sessions),
                 Arc::new(challenge_service.clone()),
                 Arc::new(skill_service.clone()),
+                Arc::new(player_character_service.clone()),
                 event_bus.clone(),
                 dm_approval_queue_service.clone(),
+                outcome_trigger_service,
             )),
             narrative_event_service: narrative_event_service.clone(),
             narrative_event_approval_service: Arc::new(NarrativeEventApprovalService::new(

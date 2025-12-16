@@ -23,6 +23,7 @@ pub mod queue_workers;
 pub mod queues;
 pub mod repositories;
 pub mod session;
+pub mod session_adapter;
 pub mod state;
 pub mod websocket;
 pub mod websocket_event_subscriber;

@@ -14,7 +14,7 @@ use crate::application::ports::outbound::{
 use crate::domain::entities::PlayerCharacter;
 use crate::domain::entities::CharacterSheetData;
 use crate::domain::value_objects::{
-    LocationId, PlayerCharacterId, SessionId, WorldId,
+    LocationId, PlayerCharacterId, SessionId, SkillId, WorldId,
 };
 
 /// Request to create a new player character
@@ -76,6 +76,10 @@ pub trait PlayerCharacterService: Send + Sync {
 
     /// Delete a player character
     async fn delete_pc(&self, id: PlayerCharacterId) -> Result<()>;
+
+    /// Get a player character's modifier for a specific skill.
+    /// Returns 0 if the PC doesn't have the skill or doesn't have sheet data.
+    async fn get_skill_modifier(&self, id: PlayerCharacterId, skill_id: SkillId) -> Result<i32>;
 }
 
 /// Default implementation of PlayerCharacterService using port abstractions
@@ -311,6 +315,28 @@ impl PlayerCharacterService for PlayerCharacterServiceImpl {
 
         info!(pc_id = %id, "Deleted player character: {}", pc.name);
         Ok(())
+    }
+
+    #[instrument(skip(self), fields(pc_id = %id, skill_id = %skill_id))]
+    async fn get_skill_modifier(&self, id: PlayerCharacterId, skill_id: SkillId) -> Result<i32> {
+        let pc = self
+            .pc_repository
+            .get(id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Player character not found: {}", id))?;
+
+        // If the PC has sheet data, look up the skill modifier
+        if let Some(sheet_data) = &pc.sheet_data {
+            let skill_id_str = skill_id.to_string();
+            if let Some(modifier) = sheet_data.get_skill_modifier(&skill_id_str) {
+                debug!(pc_id = %id, skill_id = %skill_id, modifier = modifier, "Found skill modifier");
+                return Ok(modifier);
+            }
+        }
+
+        // Default to 0 if no sheet data or skill not found
+        debug!(pc_id = %id, skill_id = %skill_id, "No skill modifier found, defaulting to 0");
+        Ok(0)
     }
 }
 

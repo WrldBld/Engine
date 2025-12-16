@@ -345,6 +345,46 @@ impl CharacterSheetData {
             _ => None,
         }
     }
+
+    /// Get skill modifier by skill ID.
+    /// Searches all FieldValue::SkillEntry values for a matching skill_id and returns the bonus.
+    pub fn get_skill_modifier(&self, skill_id: &str) -> Option<i32> {
+        for value in self.values.values() {
+            if let FieldValue::SkillEntry {
+                skill_id: entry_skill_id,
+                bonus,
+                ..
+            } = value
+            {
+                if entry_skill_id == skill_id {
+                    return Some(*bonus);
+                }
+            }
+        }
+        None
+    }
+
+    /// Get skill modifier by skill name (case-insensitive match).
+    /// Useful when the skill ID isn't available but the name is.
+    pub fn get_skill_modifier_by_name(&self, skill_name: &str) -> Option<i32> {
+        let skill_name_lower = skill_name.to_lowercase();
+        for value in self.values.values() {
+            if let FieldValue::SkillEntry {
+                skill_id,
+                bonus,
+                ..
+            } = value
+            {
+                // Match if skill_id contains the skill name (case-insensitive)
+                if skill_id.to_lowercase().contains(&skill_name_lower)
+                    || skill_name_lower.contains(&skill_id.to_lowercase())
+                {
+                    return Some(*bonus);
+                }
+            }
+        }
+        None
+    }
 }
 
 /// A value stored for a field

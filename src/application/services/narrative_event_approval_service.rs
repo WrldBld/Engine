@@ -1,6 +1,30 @@
 //! Narrative event approval service - encapsulates DM approval of narrative
 //! event suggestions, marking events as triggered, recording story events, and
 //! constructing `ServerMessage::NarrativeEventTriggered`.
+//!
+//! # Architecture Note: Hexagonal Violation
+//!
+//! This service currently imports `SessionManager` directly from the infrastructure layer:
+//! ```ignore
+//! use crate::infrastructure::session::{ClientId, SessionManager};
+//! ```
+//!
+//! This violates hexagonal architecture rules where application services should depend only
+//! on domain types and port traits, not infrastructure implementations.
+//!
+//! ## Planned Refactoring
+//!
+//! To fix this violation, the service should be refactored to:
+//! 1. Accept `AsyncSessionPort` trait bound instead of concrete `SessionManager`
+//! 2. Replace all `SessionManager` method calls with equivalent `AsyncSessionPort` methods
+//! 3. Move `ClientId` to domain or port definitions if it's not already there
+//!
+//! The port trait already exists at: `application/ports/outbound/async_session_port.rs`
+//! The adapter already exists at: `infrastructure/session_adapter.rs`
+//!
+//! This service primarily uses SessionManager for DM authorization checks and sending
+//! messages to DMs. A refactoring should preserve these authorization and messaging semantics
+//! via the port trait.
 
 use std::sync::Arc;
 
@@ -12,6 +36,12 @@ use crate::infrastructure::session::{ClientId, SessionManager};
 use crate::infrastructure::websocket::messages::ServerMessage;
 
 /// Service responsible for narrative suggestion approval flows.
+///
+/// # TODO: Architecture Violation
+///
+/// This service depends on `SessionManager` (a concrete infrastructure type) rather than
+/// `AsyncSessionPort` (the port trait). This violates hexagonal architecture rules.
+/// See module documentation for planned refactoring approach.
 pub struct NarrativeEventApprovalService<N: NarrativeEventService> {
     sessions: Arc<RwLock<SessionManager>>,
     narrative_event_service: Arc<N>,

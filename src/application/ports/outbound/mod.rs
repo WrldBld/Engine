@@ -1,6 +1,7 @@
 //! Outbound ports - Interfaces that the application requires from external systems
 
 mod app_event_repository_port;
+mod async_session_port;
 mod comfyui_port;
 mod event_bus_port;
 mod llm_port;
@@ -53,3 +54,8 @@ pub use world_exporter_port::{
 };
 
 pub use generation_read_state_port::{GenerationReadKind, GenerationReadStatePort};
+
+pub use async_session_port::{
+    AsyncSessionError, AsyncSessionPort, MessageSender, SessionJoinInfo,
+    SessionParticipantInfo, SessionParticipantRole, SessionWorldData,
+};

@@ -313,6 +313,31 @@ impl<Q: ApprovalQueuePort<ApprovalItem>> DMApprovalQueueService<Q> {
         self.queue.expire_old(older_than).await
     }
 
+    /// Discard a challenge suggestion from an approval item
+    ///
+    /// This is called when the DM doesn't want a challenge suggested by the LLM.
+    /// The approval item is marked as failed since the DM rejected the challenge.
+    /// A new LLM request should be made for a non-challenge response.
+    pub async fn discard_challenge(&self, _client_id: &str, request_id: &str) {
+        // Parse request_id to item ID
+        if let Ok(uuid) = uuid::Uuid::parse_str(request_id) {
+            let item_id = QueueItemId::from_uuid(uuid);
+
+            // Mark the item as failed since the DM rejected the challenge
+            if let Err(e) = self.queue.fail(item_id, "Challenge discarded by DM").await {
+                tracing::warn!("Failed to mark approval as failed: {}", e);
+            }
+
+            // TODO: Re-enqueue to LLM queue with guidance to not suggest a challenge
+            tracing::info!(
+                "Challenge discarded for approval {}. Should re-queue for non-challenge response.",
+                request_id
+            );
+        } else {
+            tracing::warn!("Invalid request_id format: {}", request_id);
+        }
+    }
+
     /// Parse ProposedToolInfo into GameTool
     fn parse_tool_from_info(
         &self,

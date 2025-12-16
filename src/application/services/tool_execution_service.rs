@@ -46,6 +46,50 @@ pub enum StateChange {
     EventTriggered {
         name: String,
     },
+    /// An NPC's motivation was modified
+    NpcMotivationChanged {
+        npc_id: String,
+        motivation_type: String,
+        new_value: String,
+        reason: String,
+    },
+    /// A character's description was updated
+    CharacterDescriptionUpdated {
+        character_id: String,
+        change_type: String,
+        description: String,
+    },
+    /// An NPC's opinion of a PC changed
+    NpcOpinionChanged {
+        npc_id: String,
+        target_pc_id: String,
+        opinion_change: String,
+        reason: String,
+    },
+    /// An item was transferred between characters
+    ItemTransferred {
+        from_id: String,
+        to_id: String,
+        item_name: String,
+    },
+    /// A condition was added to a character
+    ConditionAdded {
+        character_id: String,
+        condition_name: String,
+        description: String,
+        duration: Option<String>,
+    },
+    /// A condition was removed from a character
+    ConditionRemoved {
+        character_id: String,
+        condition_name: String,
+    },
+    /// A character's stat was updated
+    CharacterStatUpdated {
+        character_id: String,
+        stat_name: String,
+        delta: i32,
+    },
 }
 
 /// Errors that can occur during tool execution
@@ -127,6 +171,64 @@ impl ToolExecutionService {
                 description,
             } => {
                 self.execute_trigger_event(event_type, description, session, session_id)
+                    .await
+            }
+            GameTool::ModifyNpcMotivation {
+                npc_id,
+                motivation_type,
+                new_value,
+                reason,
+            } => {
+                self.execute_modify_npc_motivation(npc_id, motivation_type, new_value, reason, session, session_id)
+                    .await
+            }
+            GameTool::ModifyCharacterDescription {
+                character_id,
+                change_type,
+                description,
+            } => {
+                self.execute_modify_character_description(character_id, change_type, description, session, session_id)
+                    .await
+            }
+            GameTool::ModifyNpcOpinion {
+                npc_id,
+                target_pc_id,
+                opinion_change,
+                reason,
+            } => {
+                self.execute_modify_npc_opinion(npc_id, target_pc_id, opinion_change, reason, session, session_id)
+                    .await
+            }
+            GameTool::TransferItem {
+                from_id,
+                to_id,
+                item_name,
+            } => {
+                self.execute_transfer_item(from_id, to_id, item_name, session, session_id)
+                    .await
+            }
+            GameTool::AddCondition {
+                character_id,
+                condition_name,
+                description,
+                duration,
+            } => {
+                self.execute_add_condition(character_id, condition_name, description, duration.as_deref(), session, session_id)
+                    .await
+            }
+            GameTool::RemoveCondition {
+                character_id,
+                condition_name,
+            } => {
+                self.execute_remove_condition(character_id, condition_name, session, session_id)
+                    .await
+            }
+            GameTool::UpdateCharacterStat {
+                character_id,
+                stat_name,
+                delta,
+            } => {
+                self.execute_update_character_stat(character_id, stat_name, *delta, session, session_id)
                     .await
             }
         }
@@ -302,6 +404,283 @@ impl ToolExecutionService {
 
         let state_change = StateChange::EventTriggered {
             name: format!("{}: {}", event_type, description),
+        };
+
+        Ok(ToolExecutionResult {
+            success: true,
+            description: description_msg,
+            state_changes: vec![state_change],
+        })
+    }
+
+    /// Execute ModifyNpcMotivation tool - updates an NPC's motivation
+    #[instrument(skip(self, session))]
+    async fn execute_modify_npc_motivation<S: SessionManagementPort>(
+        &self,
+        npc_id: &str,
+        motivation_type: &str,
+        new_value: &str,
+        reason: &str,
+        session: &mut S,
+        session_id: SessionId,
+    ) -> Result<ToolExecutionResult, ToolExecutionError> {
+        let description_msg = format!(
+            "NPC {} motivation '{}' changed to '{}' ({})",
+            npc_id, motivation_type, new_value, reason
+        );
+
+        info!("NPC motivation changed: {}", description_msg);
+
+        session
+            .add_to_conversation_history(
+                session_id,
+                "System",
+                &format!("[NPC MOTIVATION] {}: {} -> {} ({})", npc_id, motivation_type, new_value, reason),
+            )
+            .map_err(|e| ToolExecutionError::ExecutionError(e.to_string()))?;
+
+        let state_change = StateChange::NpcMotivationChanged {
+            npc_id: npc_id.to_string(),
+            motivation_type: motivation_type.to_string(),
+            new_value: new_value.to_string(),
+            reason: reason.to_string(),
+        };
+
+        Ok(ToolExecutionResult {
+            success: true,
+            description: description_msg,
+            state_changes: vec![state_change],
+        })
+    }
+
+    /// Execute ModifyCharacterDescription tool - updates a character's description
+    #[instrument(skip(self, session))]
+    async fn execute_modify_character_description<S: SessionManagementPort>(
+        &self,
+        character_id: &str,
+        change_type: &str,
+        description: &str,
+        session: &mut S,
+        session_id: SessionId,
+    ) -> Result<ToolExecutionResult, ToolExecutionError> {
+        let description_msg = format!(
+            "Character {} {} updated: {}",
+            character_id, change_type, description
+        );
+
+        info!("Character description updated: {}", description_msg);
+
+        session
+            .add_to_conversation_history(
+                session_id,
+                "System",
+                &format!("[CHARACTER UPDATE] {}: {} - {}", character_id, change_type, description),
+            )
+            .map_err(|e| ToolExecutionError::ExecutionError(e.to_string()))?;
+
+        let state_change = StateChange::CharacterDescriptionUpdated {
+            character_id: character_id.to_string(),
+            change_type: change_type.to_string(),
+            description: description.to_string(),
+        };
+
+        Ok(ToolExecutionResult {
+            success: true,
+            description: description_msg,
+            state_changes: vec![state_change],
+        })
+    }
+
+    /// Execute ModifyNpcOpinion tool - changes an NPC's opinion of a PC
+    #[instrument(skip(self, session))]
+    async fn execute_modify_npc_opinion<S: SessionManagementPort>(
+        &self,
+        npc_id: &str,
+        target_pc_id: &str,
+        opinion_change: &str,
+        reason: &str,
+        session: &mut S,
+        session_id: SessionId,
+    ) -> Result<ToolExecutionResult, ToolExecutionError> {
+        let description_msg = format!(
+            "NPC {} now {} toward PC {} ({})",
+            npc_id, opinion_change, target_pc_id, reason
+        );
+
+        info!("NPC opinion changed: {}", description_msg);
+
+        session
+            .add_to_conversation_history(
+                session_id,
+                "System",
+                &format!("[NPC OPINION] {} -> {}: {} ({})", npc_id, target_pc_id, opinion_change, reason),
+            )
+            .map_err(|e| ToolExecutionError::ExecutionError(e.to_string()))?;
+
+        let state_change = StateChange::NpcOpinionChanged {
+            npc_id: npc_id.to_string(),
+            target_pc_id: target_pc_id.to_string(),
+            opinion_change: opinion_change.to_string(),
+            reason: reason.to_string(),
+        };
+
+        Ok(ToolExecutionResult {
+            success: true,
+            description: description_msg,
+            state_changes: vec![state_change],
+        })
+    }
+
+    /// Execute TransferItem tool - transfers an item between characters
+    #[instrument(skip(self, session))]
+    async fn execute_transfer_item<S: SessionManagementPort>(
+        &self,
+        from_id: &str,
+        to_id: &str,
+        item_name: &str,
+        session: &mut S,
+        session_id: SessionId,
+    ) -> Result<ToolExecutionResult, ToolExecutionError> {
+        let description_msg = format!(
+            "'{}' transferred from {} to {}",
+            item_name, from_id, to_id
+        );
+
+        info!("Item transferred: {}", description_msg);
+
+        session
+            .add_to_conversation_history(
+                session_id,
+                "System",
+                &format!("[ITEM TRANSFER] '{}': {} -> {}", item_name, from_id, to_id),
+            )
+            .map_err(|e| ToolExecutionError::ExecutionError(e.to_string()))?;
+
+        let state_change = StateChange::ItemTransferred {
+            from_id: from_id.to_string(),
+            to_id: to_id.to_string(),
+            item_name: item_name.to_string(),
+        };
+
+        Ok(ToolExecutionResult {
+            success: true,
+            description: description_msg,
+            state_changes: vec![state_change],
+        })
+    }
+
+    /// Execute AddCondition tool - adds a condition to a character
+    #[instrument(skip(self, session))]
+    async fn execute_add_condition<S: SessionManagementPort>(
+        &self,
+        character_id: &str,
+        condition_name: &str,
+        description: &str,
+        duration: Option<&str>,
+        session: &mut S,
+        session_id: SessionId,
+    ) -> Result<ToolExecutionResult, ToolExecutionError> {
+        let dur_str = duration.unwrap_or("permanent");
+        let description_msg = format!(
+            "Condition '{}' added to {} ({}): {}",
+            condition_name, character_id, dur_str, description
+        );
+
+        info!("Condition added: {}", description_msg);
+
+        session
+            .add_to_conversation_history(
+                session_id,
+                "System",
+                &format!("[CONDITION +] {} gained '{}' ({}) - {}", character_id, condition_name, dur_str, description),
+            )
+            .map_err(|e| ToolExecutionError::ExecutionError(e.to_string()))?;
+
+        let state_change = StateChange::ConditionAdded {
+            character_id: character_id.to_string(),
+            condition_name: condition_name.to_string(),
+            description: description.to_string(),
+            duration: duration.map(|s| s.to_string()),
+        };
+
+        Ok(ToolExecutionResult {
+            success: true,
+            description: description_msg,
+            state_changes: vec![state_change],
+        })
+    }
+
+    /// Execute RemoveCondition tool - removes a condition from a character
+    #[instrument(skip(self, session))]
+    async fn execute_remove_condition<S: SessionManagementPort>(
+        &self,
+        character_id: &str,
+        condition_name: &str,
+        session: &mut S,
+        session_id: SessionId,
+    ) -> Result<ToolExecutionResult, ToolExecutionError> {
+        let description_msg = format!(
+            "Condition '{}' removed from {}",
+            condition_name, character_id
+        );
+
+        info!("Condition removed: {}", description_msg);
+
+        session
+            .add_to_conversation_history(
+                session_id,
+                "System",
+                &format!("[CONDITION -] {} lost '{}'", character_id, condition_name),
+            )
+            .map_err(|e| ToolExecutionError::ExecutionError(e.to_string()))?;
+
+        let state_change = StateChange::ConditionRemoved {
+            character_id: character_id.to_string(),
+            condition_name: condition_name.to_string(),
+        };
+
+        Ok(ToolExecutionResult {
+            success: true,
+            description: description_msg,
+            state_changes: vec![state_change],
+        })
+    }
+
+    /// Execute UpdateCharacterStat tool - updates a character's stat
+    #[instrument(skip(self, session))]
+    async fn execute_update_character_stat<S: SessionManagementPort>(
+        &self,
+        character_id: &str,
+        stat_name: &str,
+        delta: i32,
+        session: &mut S,
+        session_id: SessionId,
+    ) -> Result<ToolExecutionResult, ToolExecutionError> {
+        let change_str = if delta >= 0 {
+            format!("+{}", delta)
+        } else {
+            format!("{}", delta)
+        };
+
+        let description_msg = format!(
+            "{} {} changed by {}",
+            character_id, stat_name, change_str
+        );
+
+        info!("Character stat updated: {}", description_msg);
+
+        session
+            .add_to_conversation_history(
+                session_id,
+                "System",
+                &format!("[STAT] {} {} {}", character_id, stat_name, change_str),
+            )
+            .map_err(|e| ToolExecutionError::ExecutionError(e.to_string()))?;
+
+        let state_change = StateChange::CharacterStatUpdated {
+            character_id: character_id.to_string(),
+            stat_name: stat_name.to_string(),
+            delta,
         };
 
         Ok(ToolExecutionResult {
