@@ -5,6 +5,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use tokio::sync::RwLock;
 
+use crate::application::ports::outbound::AsyncSessionPort;
 use crate::application::services::{
     AssetGenerationQueueService, AssetServiceImpl,
     challenge_resolution_service::ChallengeResolutionService, ChallengeServiceImpl,
@@ -33,6 +34,7 @@ use crate::infrastructure::repositories::{
     SqliteAppEventRepository, SqliteGenerationReadStateRepository,
 };
 use crate::infrastructure::session::SessionManager;
+use crate::infrastructure::session_adapter::SessionManagerAdapter;
 
 /// Shared application state
 pub struct AppState {
@@ -49,6 +51,8 @@ pub struct AppState {
     pub comfyui_client: ComfyUIClient,
     /// Active WebSocket sessions
     pub sessions: Arc<RwLock<SessionManager>>,
+    /// Async session port used by application services (hexagonal boundary over SessionManager)
+    pub async_session_port: Arc<dyn AsyncSessionPort>,
     // Application services
     pub world_service: WorldServiceImpl,
     pub character_service: CharacterServiceImpl,
@@ -240,6 +244,10 @@ impl AppState {
         // Create narrative event service with event bus
         let narrative_event_service = NarrativeEventServiceImpl::new(narrative_event_repo_for_service, event_bus.clone());
 
+        // Create async session port adapter for application services
+        let async_session_port: Arc<dyn AsyncSessionPort> =
+            Arc::new(SessionManagerAdapter::new(sessions.clone()));
+
         // Initialize queue services
         // Services take Arc<Q>, so we pass Arc<QueueBackendEnum<T>> directly
         let player_action_queue_service = Arc::new(PlayerActionQueueService::new(
@@ -306,7 +314,7 @@ impl AppState {
             story_event_service: story_event_service.clone(),
             challenge_service: challenge_service.clone(),
             challenge_resolution_service: Arc::new(ChallengeResolutionService::new(
-                Arc::clone(&sessions),
+                async_session_port.clone(),
                 Arc::new(challenge_service.clone()),
                 Arc::new(skill_service.clone()),
                 Arc::new(player_character_service.clone()),
@@ -316,7 +324,7 @@ impl AppState {
             )),
             narrative_event_service: narrative_event_service.clone(),
             narrative_event_approval_service: Arc::new(NarrativeEventApprovalService::new(
-                Arc::clone(&sessions),
+                async_session_port.clone(),
                 Arc::new(narrative_event_service),
                 Arc::new(story_event_service),
             )),
@@ -327,8 +335,9 @@ impl AppState {
             player_character_service,
             scene_resolution_service,
             generation_service,
+            async_session_port,
             session_join_service: Arc::new(SessionJoinService::new(
-                Arc::clone(&sessions),
+                async_session_port.clone(),
                 world_service,
             )),
             player_action_queue_service,

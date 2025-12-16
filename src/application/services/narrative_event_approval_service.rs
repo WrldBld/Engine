@@ -28,22 +28,20 @@
 
 use std::sync::Arc;
 
-use tokio::sync::RwLock;
-
+use crate::application::ports::outbound::AsyncSessionPort;
 use crate::application::services::{NarrativeEventService, StoryEventService};
 use crate::domain::value_objects::{NarrativeEventId, SessionId};
-use crate::infrastructure::session::{ClientId, SessionManager};
 use crate::infrastructure::websocket::messages::ServerMessage;
 
 /// Service responsible for narrative suggestion approval flows.
 ///
 /// # TODO: Architecture Violation
 ///
-/// This service depends on `SessionManager` (a concrete infrastructure type) rather than
-/// `AsyncSessionPort` (the port trait). This violates hexagonal architecture rules.
-/// See module documentation for planned refactoring approach.
+/// This service previously depended on `SessionManager` (a concrete infrastructure type)
+/// rather than the async session port trait. It now uses `AsyncSessionPort`, restoring a
+/// proper hexagonal boundary between application and infrastructure.
 pub struct NarrativeEventApprovalService<N: NarrativeEventService> {
-    sessions: Arc<RwLock<SessionManager>>,
+    sessions: Arc<dyn AsyncSessionPort>,
     narrative_event_service: Arc<N>,
     story_event_service: Arc<StoryEventService>,
 }
@@ -53,7 +51,7 @@ where
     N: NarrativeEventService,
 {
     pub fn new(
-        sessions: Arc<RwLock<SessionManager>>,
+        sessions: Arc<dyn AsyncSessionPort>,
         narrative_event_service: Arc<N>,
         story_event_service: Arc<StoryEventService>,
     ) -> Self {
@@ -67,7 +65,7 @@ where
     /// Handle `ClientMessage::NarrativeEventSuggestionDecision`.
     pub async fn handle_decision(
         &self,
-        client_id: ClientId,
+        client_id: String,
         request_id: String,
         event_id: String,
         approved: bool,
@@ -80,31 +78,27 @@ where
             approved,
             selected_outcome
         );
+        // Only the DM for the client's session may approve/reject narrative events
+        if !self.sessions.is_client_dm(&client_id).await {
+            return None;
+        }
 
-        let sessions_read = self.sessions.read().await;
-        if let Some(session_id) = sessions_read.get_client_session(client_id) {
-            if let Some(session) = sessions_read.get_session(session_id) {
-                if let Some(dm) = session.get_dm() {
-                    if dm.client_id == client_id {
-                        if approved {
-                            return self
-                                .approve_and_trigger(
-                                    client_id,
-                                    session_id,
-                                    request_id,
-                                    event_id,
-                                    selected_outcome,
-                                )
-                                .await;
-                        } else {
-                            tracing::info!(
-                                "DM rejected narrative event {} trigger for request {}",
-                                event_id,
-                                request_id
-                            );
-                        }
-                    }
-                }
+        if let Some(session_id) = self.sessions.get_client_session(&client_id).await {
+            if approved {
+                return self
+                    .approve_and_trigger(
+                        session_id,
+                        request_id,
+                        event_id,
+                        selected_outcome,
+                    )
+                    .await;
+            } else {
+                tracing::info!(
+                    "DM rejected narrative event {} trigger for request {}",
+                    event_id,
+                    request_id
+                );
             }
         }
 
@@ -113,7 +107,6 @@ where
 
     async fn approve_and_trigger(
         &self,
-        client_id: ClientId,
         session_id: SessionId,
         request_id: String,
         event_id: String,
@@ -216,19 +209,19 @@ where
             tracing::error!("Failed to record story event: {}", e);
         }
 
-        // 5. Broadcast scene direction to DM
-        let sessions_read = self.sessions.read().await;
+        // 5. Broadcast scene direction to DM via the async session port
         let scene_direction = ServerMessage::NarrativeEventTriggered {
             event_id: event_id.clone(),
             event_name: narrative_event.name.clone(),
             outcome_description: outcome.description.clone(),
             scene_direction: narrative_event.scene_direction.clone(),
         };
-
-        if let Some(sid) = sessions_read.get_client_session(client_id) {
-            if let Some(session) = sessions_read.get_session(sid) {
-                session.send_to_dm(&scene_direction);
+        if let Ok(msg_json) = serde_json::to_value(&scene_direction) {
+            if let Err(e) = self.sessions.send_to_dm(session_id, msg_json).await {
+                tracing::error!("Failed to send NarrativeEventTriggered to DM: {}", e);
             }
+        } else {
+            tracing::error!("Failed to serialize NarrativeEventTriggered message for event {}", event_id);
         }
 
         tracing::info!(

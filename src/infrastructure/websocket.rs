@@ -766,7 +766,13 @@ async fn handle_message(
             selected_outcome,
         } => state
             .narrative_event_approval_service
-            .handle_decision(client_id, request_id, event_id, approved, selected_outcome)
+            .handle_decision(
+                client_id.to_string(),
+                request_id,
+                event_id,
+                approved,
+                selected_outcome,
+            )
             .await,
 
         ClientMessage::RegenerateOutcome {

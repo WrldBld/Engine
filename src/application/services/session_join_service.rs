@@ -38,12 +38,12 @@
 
 use std::sync::Arc;
 
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::mpsc;
 
-use crate::application::ports::outbound::PlayerWorldSnapshot;
+use crate::application::ports::outbound::{AsyncSessionPort, PlayerWorldSnapshot, SessionParticipantInfo, SessionParticipantRole, SessionWorldData};
 use crate::application::services::world_service::{WorldService, WorldServiceImpl};
 use crate::domain::value_objects::{SessionId, WorldId};
-use crate::infrastructure::session::{ClientId, SessionError, SessionManager, WorldSnapshot};
+use crate::infrastructure::session::{ClientId, SessionError};
 use crate::infrastructure::websocket::messages::{ParticipantInfo, ParticipantRole, ServerMessage};
 
 /// Information returned when a client successfully joins a session
@@ -65,12 +65,12 @@ pub struct SessionJoinedInfo {
 /// `AsyncSessionPort` (the port trait). This violates hexagonal architecture rules.
 /// See module documentation for planned refactoring approach.
 pub struct SessionJoinService {
-    sessions: Arc<RwLock<SessionManager>>,
+    sessions: Arc<dyn AsyncSessionPort>,
     world_service: WorldServiceImpl,
 }
 
 impl SessionJoinService {
-    pub fn new(sessions: Arc<RwLock<SessionManager>>, world_service: WorldServiceImpl) -> Self {
+    pub fn new(sessions: Arc<dyn AsyncSessionPort>, world_service: WorldServiceImpl) -> Self {
         Self { sessions, world_service }
     }
 
@@ -95,32 +95,40 @@ impl SessionJoinService {
             None
         };
 
-        let mut sessions_write = self.sessions.write().await;
-
         // Try to find an existing session for this world
         if let Some(wid) = world_id {
-            if let Some(session_id) = sessions_write.find_session_for_world(wid) {
+            if let Some(session_id) = self.sessions.find_session_for_world(wid).await {
                 // Join existing session
-                let snapshot = sessions_write.join_session(
-                    session_id,
-                    client_id,
-                    user_id,
-                    role,
-                    sender,
-                )?;
+                let client_id_str = client_id.to_string();
+                let join_info = self
+                    .sessions
+                    .join_session(
+                        session_id,
+                        &client_id_str,
+                        user_id,
+                        map_role_to_session_role(role),
+                    )
+                    .await
+                    .map_err(|e| SessionError::Internal(format!("Failed to join session: {}", e)))?;
 
                 // Gather participant info
-                let participants = gather_participants(&sessions_write, session_id);
+                let participants = gather_participants(&*self.sessions, session_id).await;
+
+                // Forward the initial snapshot to the client via the provided sender
+                let snapshot_msg = ServerMessage::SessionSnapshot {
+                    session_id: session_id.to_string(),
+                    world_snapshot: join_info.world_snapshot_json.clone(),
+                };
+                if let Err(e) = sender.send(snapshot_msg) {
+                    tracing::warn!("Failed to send initial session snapshot to client {}: {}", client_id, e);
+                }
 
                 return Ok(SessionJoinedInfo {
                     session_id,
                     participants,
-                    world_snapshot: snapshot.to_json(),
+                    world_snapshot: join_info.world_snapshot_json,
                 });
             }
-
-            // Create new session for this world
-            drop(sessions_write); // Release lock for database access
 
             // Load world data from database using the world service
             let player_snapshot = self.world_service
@@ -128,78 +136,126 @@ impl SessionJoinService {
                 .await
                 .map_err(|e| SessionError::Database(e.into()))?;
 
-            // Convert PlayerWorldSnapshot to internal WorldSnapshot for session storage
-            let internal_snapshot = convert_to_internal_snapshot(&player_snapshot);
+            // Convert PlayerWorldSnapshot to session world data (opaque JSON)
+            let world_data: SessionWorldData = serde_json::to_value(&player_snapshot)
+                .map_err(|e| SessionError::Database(e.to_string().into()))?;
 
-            // Re-acquire lock and create session
-            let mut sessions_write = self.sessions.write().await;
-            let session_id = sessions_write.create_session(wid, internal_snapshot);
+            // Create session for this world using the async port
+            let session_id = self
+                .sessions
+                .create_session(wid, world_data)
+                .await;
 
             // Join the newly created session
-            let snapshot = sessions_write.join_session(
-                session_id,
-                client_id,
-                user_id,
-                role,
-                sender,
-            )?;
+            let client_id_str = client_id.to_string();
+            let join_info = self
+                .sessions
+                .join_session(
+                    session_id,
+                    &client_id_str,
+                    user_id,
+                    map_role_to_session_role(role),
+                )
+                .await
+                .map_err(|e| SessionError::Internal(format!("Failed to join new session: {}", e)))?;
 
             // Gather participant info (just the joining user at this point)
-            let participants = gather_participants(&sessions_write, session_id);
+            let participants = gather_participants(&*self.sessions, session_id).await;
+
+            // Forward the initial snapshot to the client via the provided sender
+            let snapshot_msg = ServerMessage::SessionSnapshot {
+                session_id: session_id.to_string(),
+                world_snapshot: join_info.world_snapshot_json.clone(),
+            };
+            if let Err(e) = sender.send(snapshot_msg) {
+                tracing::warn!("Failed to send initial session snapshot to client {}: {}", client_id, e);
+            }
 
             Ok(SessionJoinedInfo {
                 session_id,
                 participants,
-                world_snapshot: snapshot.to_json(),
+                world_snapshot: join_info.world_snapshot_json,
             })
         } else {
-            // No world specified - create a demo session
+            // No world specified - create a demo session via world service
             let demo_world = create_demo_world();
             let world_id = demo_world.world.id;
-            let session_id = sessions_write.create_session(world_id, demo_world);
-            let snapshot = sessions_write.join_session(
-                session_id,
-                client_id,
-                user_id,
-                role,
-                sender,
-            )?;
+
+            let world_data: SessionWorldData = serde_json::to_value(&demo_world.world)
+                .unwrap_or(serde_json::json!({ "name": "Demo World" }));
+
+            let session_id = self.sessions.create_session(world_id, world_data).await;
+
+            let client_id_str = client_id.to_string();
+            let join_info = self
+                .sessions
+                .join_session(
+                    session_id,
+                    &client_id_str,
+                    user_id,
+                    map_role_to_session_role(role),
+                )
+                .await
+                .map_err(|e| SessionError::Internal(format!("Failed to join demo session: {}", e)))?;
 
             // Gather participant info
-            let participants = gather_participants(&sessions_write, session_id);
+            let participants = gather_participants(&*self.sessions, session_id).await;
+
+            let snapshot_msg = ServerMessage::SessionSnapshot {
+                session_id: session_id.to_string(),
+                world_snapshot: join_info.world_snapshot_json.clone(),
+            };
+            if let Err(e) = sender.send(snapshot_msg) {
+                tracing::warn!("Failed to send initial demo session snapshot to client {}: {}", client_id, e);
+            }
 
             Ok(SessionJoinedInfo {
                 session_id,
                 participants,
-                world_snapshot: snapshot.to_json(),
+                world_snapshot: join_info.world_snapshot_json,
             })
         }
     }
 }
 
-/// Gather participant info from a session
-fn gather_participants(
-    sessions: &SessionManager,
-    session_id: SessionId,
-) -> Vec<ParticipantInfo> {
-    sessions
-        .get_session(session_id)
-        .map(|session| {
-            session
-                .participants
-                .values()
-                .map(|p| ParticipantInfo {
-                    user_id: p.user_id.clone(),
-                    role: p.role,
-                    character_name: None, // TODO: Load from character selection
-                })
-                .collect()
-        })
-        .unwrap_or_default()
+/// Map application-level session participant role to websocket role DTO
+fn map_role_to_websocket_role(role: SessionParticipantRole) -> ParticipantRole {
+    match role {
+        SessionParticipantRole::DungeonMaster => ParticipantRole::DungeonMaster,
+        SessionParticipantRole::Player => ParticipantRole::Player,
+        SessionParticipantRole::Spectator => ParticipantRole::Spectator,
+    }
 }
 
-/// Convert PlayerWorldSnapshot to internal WorldSnapshot for session storage
-pub fn convert_to_internal_snapshot(player_snapshot: &PlayerWorldSnapshot) -> WorldSnapshot {
+/// Map websocket participant role to session participant role
+fn map_role_to_session_role(role: ParticipantRole) -> SessionParticipantRole {
+    match role {
+        ParticipantRole::DungeonMaster => SessionParticipantRole::DungeonMaster,
+        ParticipantRole::Player => SessionParticipantRole::Player,
+        ParticipantRole::Spectator => SessionParticipantRole::Spectator,
+    }
+}
+
+/// Gather participant info from a session using the async session port
+async fn gather_participants(
+    sessions: &dyn AsyncSessionPort,
+    session_id: SessionId,
+) -> Vec<ParticipantInfo> {
+    let infos: Vec<SessionParticipantInfo> = sessions.get_session_participants(session_id).await;
+    infos
+        .into_iter()
+        .map(|p| ParticipantInfo {
+            user_id: p.user_id,
+            role: map_role_to_websocket_role(p.role),
+            character_name: None, // TODO: Load from character selection
+        })
+        .collect()
+}
+
+/// Convert PlayerWorldSnapshot to internal representation for legacy callers
+/// (kept for reference and potential future use).
+#[allow(dead_code)]
+pub fn convert_to_internal_snapshot(player_snapshot: &PlayerWorldSnapshot) -> crate::infrastructure::session::WorldSnapshot {
     use crate::domain::entities::{
         Character, Location, LocationType, Scene, StatBlock, TimeContext, World,
     };

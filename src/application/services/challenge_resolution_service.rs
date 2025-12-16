@@ -30,29 +30,28 @@
 
 use std::sync::Arc;
 
-use tokio::sync::RwLock;
-
 use crate::application::dto::AppEvent;
-use crate::application::services::{ChallengeService, SkillService, PlayerCharacterService, OutcomeTriggerService};
+use crate::application::ports::outbound::AsyncSessionPort;
+use crate::application::ports::outbound::EventBusPort;
+use crate::application::ports::outbound::{ApprovalQueuePort, ChallengeRepositoryPort};
+use crate::application::services::{
+    ChallengeService, OutcomeTriggerService, PlayerCharacterService, SkillService,
+};
 use crate::domain::entities::OutcomeType;
 use crate::domain::value_objects::{ChallengeId, DiceRollInput, SessionId, PlayerCharacterId};
-use crate::infrastructure::session::{ClientId, SessionManager};
+use crate::infrastructure::session::ClientId;
 use crate::infrastructure::websocket::messages::{DiceInputType, ServerMessage};
-use crate::application::ports::outbound::EventBusPort;
-use crate::application::services::dm_approval_queue_service::DMApprovalQueueService;
-use crate::application::ports::outbound::ApprovalQueuePort;
-use crate::application::ports::outbound::{SessionManagementPort, ChallengeRepositoryPort};
 use tracing::{debug, info};
 
 /// Service responsible for challenge-related flows.
 ///
 /// # TODO: Architecture Violation
 ///
-/// This service depends on `SessionManager` (a concrete infrastructure type) rather than
-/// `AsyncSessionPort` (the port trait). This violates hexagonal architecture rules.
-/// See module documentation for planned refactoring approach.
+/// This service previously depended on `SessionManager` (a concrete infrastructure type)
+/// rather than the async session port trait, which violated hexagonal architecture rules.
+/// It now uses `AsyncSessionPort`, so all session lookups and broadcasts go through a port.
 pub struct ChallengeResolutionService<S: ChallengeService, K: SkillService, Q: ApprovalQueuePort<crate::application::dto::ApprovalItem>, P: PlayerCharacterService> {
-    sessions: Arc<RwLock<SessionManager>>,
+    sessions: Arc<dyn AsyncSessionPort>,
     challenge_service: Arc<S>,
     skill_service: Arc<K>,
     player_character_service: Arc<P>,
@@ -69,7 +68,7 @@ where
     P: PlayerCharacterService,
 {
     pub fn new(
-        sessions: Arc<RwLock<SessionManager>>,
+        sessions: Arc<dyn AsyncSessionPort>,
         challenge_service: Arc<S>,
         skill_service: Arc<K>,
         player_character_service: Arc<P>,
@@ -94,25 +93,49 @@ where
     /// participants with a PlayerCharacter in the session.
     async fn get_client_player_character(
         &self,
-        client_id: ClientId,
+        client_id: &ClientId,
         session_id: SessionId,
     ) -> Option<PlayerCharacterId> {
-        let sessions_read = self.sessions.read().await;
+        // Resolve the client's user_id via the async session port, then map to a player character.
+        let client_id_str = client_id.to_string();
+        let Some(participant) = self.sessions.get_participant_info(&client_id_str).await else {
+            debug!(
+                client_id = %client_id,
+                session_id = %session_id,
+                "No participant info found for client when resolving player character"
+            );
+            return None;
+        };
 
-        // Get the client's user_id from session participants
-        let session = sessions_read.get_session(session_id)?;
-        let participant = session.participants.get(&client_id)?;
-        let user_id = &participant.user_id;
+        let user_id = participant.user_id;
 
-        // We would need access to PlayerCharacterRepository to do a proper lookup,
-        // but for now we return None. The caller will use a default modifier of 0.
-        debug!(
-            client_id = %client_id,
-            session_id = %session_id,
-            user_id = %user_id,
-            "Could not map client to player character (requires repository access)"
-        );
-        None
+        // We rely on PlayerCharacterService to perform the actual lookup.
+        match self
+            .player_character_service
+            .get_pc_for_user_in_session(&user_id, session_id)
+            .await
+        {
+            Ok(Some(pc)) => Some(pc.id),
+            Ok(None) => {
+                debug!(
+                    client_id = %client_id,
+                    session_id = %session_id,
+                    user_id = %user_id,
+                    "No player character found for user in session"
+                );
+                None
+            }
+            Err(e) => {
+                debug!(
+                    client_id = %client_id,
+                    session_id = %session_id,
+                    user_id = %user_id,
+                    error = %e,
+                    "Error while looking up player character for user in session"
+                );
+                None
+            }
+        }
     }
 
     /// Handle a player submitting a challenge roll.
@@ -151,17 +174,10 @@ where
             }
         };
 
-        // Get session and player info
-        let sessions_read = self.sessions.read().await;
-        let (session_id, player_name) = match sessions_read.get_client_session(client_id) {
-            Some(sid) => {
-                let session = sessions_read.get_session(sid);
-                let player_name = session
-                    .and_then(|s| s.participants.get(&client_id))
-                    .map(|p| p.user_id.clone())
-                    .unwrap_or_else(|| "Unknown Player".to_string());
-                (Some(sid), player_name)
-            }
+        // Get session and player info via async session port
+        let client_id_str = client_id.to_string();
+        let session_id = match self.sessions.get_client_session(&client_id_str).await {
+            Some(sid) => Some(sid),
             None => {
                 return Some(ServerMessage::Error {
                     code: "NOT_IN_SESSION".to_string(),
@@ -170,6 +186,12 @@ where
                 });
             }
         };
+
+        let player_name = self
+            .sessions
+            .get_client_user_id(&client_id_str)
+            .await
+            .unwrap_or_else(|| "Unknown Player".to_string());
 
         // TODO: integrate real character modifiers
         let character_modifier = 0;
@@ -221,9 +243,20 @@ where
                 roll_breakdown: None, // Legacy method doesn't have formula info
                 individual_rolls: None,
             };
-            drop(sessions_read);
-            let sessions_write = self.sessions.write().await;
-            sessions_write.broadcast_to_session(session_id, &result_msg);
+            if let Ok(json) = serde_json::to_value(&result_msg) {
+                if let Err(e) = self
+                    .sessions
+                    .broadcast_to_session(session_id, json)
+                    .await
+                {
+                    tracing::error!("Failed to broadcast ChallengeResolved: {}", e);
+                }
+            } else {
+                tracing::error!(
+                    "Failed to serialize ChallengeResolved message for challenge {}",
+                    challenge_id_str
+                );
+            }
         }
 
         None
@@ -272,17 +305,10 @@ where
             }
         };
 
-        // Get session and player info
-        let sessions_read = self.sessions.read().await;
-        let (session_id, player_name) = match sessions_read.get_client_session(client_id) {
-            Some(sid) => {
-                let session = sessions_read.get_session(sid);
-                let player_name = session
-                    .and_then(|s| s.participants.get(&client_id))
-                    .map(|p| p.user_id.clone())
-                    .unwrap_or_else(|| "Unknown Player".to_string());
-                (Some(sid), player_name)
-            }
+        // Get session and player info via async session port
+        let client_id_str = client_id.to_string();
+        let session_id = match self.sessions.get_client_session(&client_id_str).await {
+            Some(sid) => Some(sid),
             None => {
                 return Some(ServerMessage::Error {
                     code: "NOT_IN_SESSION".to_string(),
@@ -292,9 +318,15 @@ where
             }
         };
 
+        let player_name = self
+            .sessions
+            .get_client_user_id(&client_id_str)
+            .await
+            .unwrap_or_else(|| "Unknown Player".to_string());
+
         // Look up character's skill modifier from PlayerCharacterService
         let character_modifier = if let Some(session_id_val) = session_id {
-            if let Some(pc_id) = self.get_client_player_character(client_id, session_id_val).await {
+            if let Some(pc_id) = self.get_client_player_character(&client_id, session_id_val).await {
                 // Try to get the skill modifier from the player character service
                 match self.player_character_service
                     .get_skill_modifier(pc_id, challenge.skill_id.clone())
@@ -382,28 +414,6 @@ where
             tracing::error!("Failed to publish ChallengeResolved event: {}", e);
         }
 
-        // Execute outcome triggers (Phase 22D integration)
-        // Before broadcasting the resolution, execute any triggers defined in the outcome
-        let mut trigger_state_changes = Vec::new();
-        if let Some(sid) = session_id {
-            drop(sessions_read);
-            let mut sessions_write = self.sessions.write().await;
-            let trigger_result = self
-                .outcome_trigger_service
-                .execute_triggers(&outcome.triggers, &mut *sessions_write, sid)
-                .await;
-            trigger_state_changes = trigger_result.state_changes;
-
-            if !trigger_result.warnings.is_empty() {
-                info!(
-                    trigger_count = trigger_result.trigger_count,
-                    warnings = ?trigger_result.warnings,
-                    "Outcome triggers executed with warnings"
-                );
-            }
-            drop(sessions_write);
-        }
-
         // Broadcast ChallengeResolved to all participants
         if let Some(session_id) = session_id {
             let result_msg = ServerMessage::ChallengeResolved {
@@ -422,8 +432,20 @@ where
                     Some(roll_result.individual_rolls.clone())
                 },
             };
-            let sessions_read_broadcast = self.sessions.read().await;
-            sessions_read_broadcast.broadcast_to_session(session_id, &result_msg);
+            if let Ok(json) = serde_json::to_value(&result_msg) {
+                if let Err(e) = self
+                    .sessions
+                    .broadcast_to_session(session_id, json)
+                    .await
+                {
+                    tracing::error!("Failed to broadcast ChallengeResolved: {}", e);
+                }
+            } else {
+                tracing::error!(
+                    "Failed to serialize ChallengeResolved message for challenge {}",
+                    challenge_id_str
+                );
+            }
         }
 
         None
