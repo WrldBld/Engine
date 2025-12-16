@@ -13,6 +13,7 @@ use crate::domain::value_objects::{
     ActantTarget, ArchetypeChange, CampbellArchetype, CharacterId, ItemId, SceneId, Want, WantId,
     WorldId,
 };
+use crate::application::dto::parse_archetype;
 
 /// Repository for Character operations
 pub struct Neo4jCharacterRepository {
@@ -449,20 +450,6 @@ impl TryFrom<WantStored> for Want {
             intensity: value.intensity,
             known_to_player: value.known_to_player,
         })
-    }
-}
-
-fn parse_archetype(s: &str) -> CampbellArchetype {
-    match s {
-        "Hero" => CampbellArchetype::Hero,
-        "Mentor" => CampbellArchetype::Mentor,
-        "ThresholdGuardian" => CampbellArchetype::ThresholdGuardian,
-        "Herald" => CampbellArchetype::Herald,
-        "Shapeshifter" => CampbellArchetype::Shapeshifter,
-        "Shadow" => CampbellArchetype::Shadow,
-        "Trickster" => CampbellArchetype::Trickster,
-        "Ally" => CampbellArchetype::Ally,
-        _ => CampbellArchetype::Ally,
     }
 }
 

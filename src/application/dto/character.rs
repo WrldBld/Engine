@@ -72,6 +72,10 @@ pub struct CreatedIdResponseDto {
     pub id: String,
 }
 
+/// Parse a CampbellArchetype from a string label.
+///
+/// This helper is used from both application DTOs and persistence code to keep
+/// archetype mapping consistent in a single place.
 pub fn parse_archetype(s: &str) -> CampbellArchetype {
     match s {
         "Hero" => CampbellArchetype::Hero,

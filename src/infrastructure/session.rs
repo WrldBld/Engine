@@ -583,7 +583,11 @@ impl SessionManager {
         }
     }
 
-    /// Get all active session IDs
+    /// Get all active session IDs.
+    ///
+    /// NOTE: Prefer `list_sessions` for application-facing callers. This
+    /// helper is kept only for legacy/debug code paths and may be removed in
+    /// a future cleanup.
     pub fn get_session_ids(&self) -> Vec<SessionId> {
         self.sessions.keys().copied().collect()
     }
@@ -747,7 +751,8 @@ impl SessionManager {
         self.client_sessions.len()
     }
 
-    /// Get all active session IDs
+    /// Get all active session IDs (canonical helper; prefer this over
+    /// `get_session_ids` in new code).
     pub fn list_sessions(&self) -> Vec<SessionId> {
         self.sessions.keys().copied().collect()
     }
