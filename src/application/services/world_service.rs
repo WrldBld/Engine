@@ -85,6 +85,7 @@ pub trait WorldService: Send + Sync {
 }
 
 /// Default implementation of WorldService using port abstractions
+#[derive(Clone)]
 pub struct WorldServiceImpl {
     repository: Arc<dyn WorldRepositoryPort>,
     exporter: Arc<dyn WorldExporterPort>,

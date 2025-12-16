@@ -15,7 +15,6 @@ use futures_util::{SinkExt, StreamExt};
 use tokio::sync::mpsc;
 
 use crate::application::dto::DMAction;
-use crate::application::services::SessionJoinService;
 use crate::application::services::scene_service::SceneService;
 use crate::application::services::interaction_service::InteractionService;
 use crate::domain::value_objects::ActionId;
@@ -134,10 +133,8 @@ async fn handle_message(
                 world_id
             );
 
-            // Delegate to SessionJoinService to join or create a session
-            match SessionJoinService::join_or_create_session_for_world(
-                &state.sessions,
-                &state.world_service,
+            // Delegate to injected SessionJoinService to join or create a session
+            match state.session_join_service.join_or_create_session_for_world(
                 client_id,
                 user_id.clone(),
                 role,
@@ -210,6 +207,219 @@ async fn handle_message(
 
             let session_id = session_id.expect("session_id should exist at this point");
             drop(sessions); // Release lock before async queue operation
+
+            // Handle Travel actions immediately (update location and resolve scene)
+            if action_type == "travel" {
+                if let Some(location_id_str) = target.as_ref() {
+                    // Parse location ID
+                    let location_uuid = match uuid::Uuid::parse_str(location_id_str) {
+                        Ok(uuid) => crate::domain::value_objects::LocationId::from_uuid(uuid),
+                        Err(_) => {
+                            return Some(ServerMessage::Error {
+                                code: "INVALID_LOCATION_ID".to_string(),
+                                message: "Invalid location ID format".to_string(),
+                            });
+                        }
+                    };
+
+                    // Get PC for this user
+                    match state
+                        .player_character_service
+                        .get_pc_by_user_and_session(&player_id, session_id)
+                        .await
+                    {
+                        Ok(Some(pc)) => {
+                            // Update PC location
+                            if let Err(e) = state
+                                .player_character_service
+                                .update_pc_location(pc.id, location_uuid)
+                                .await
+                            {
+                                tracing::error!("Failed to update PC location: {}", e);
+                                return Some(ServerMessage::Error {
+                                    code: "LOCATION_UPDATE_FAILED".to_string(),
+                                    message: format!("Failed to update location: {}", e),
+                                });
+                            }
+
+                            // Resolve scene for the new location
+                            match state
+                                .scene_resolution_service
+                                .resolve_scene_for_pc(pc.id)
+                                .await
+                            {
+                                Ok(Some(scene)) => {
+                                    // Load scene with relations to build SceneUpdate
+                                    match state.scene_service.get_scene_with_relations(scene.id).await {
+                                        Ok(Some(scene_with_relations)) => {
+                                            // Build interactions
+                                            let interactions: Vec<InteractionData> = scene_with_relations
+                                                .interactions
+                                                .iter()
+                                                .map(|i| InteractionData {
+                                                    id: i.id.to_string(),
+                                                    name: i.name.clone(),
+                                                    description: i.description.clone(),
+                                                    interaction_type: format!("{:?}", i.interaction_type),
+                                                })
+                                                .collect();
+
+                                            // Build character data
+                                            let characters: Vec<CharacterData> = scene_with_relations
+                                                .featured_characters
+                                                .iter()
+                                                .map(|c| CharacterData {
+                                                    id: c.id.to_string(),
+                                                    name: c.name.clone(),
+                                                    sprite_asset: c.sprite_asset.clone(),
+                                                    portrait_asset: c.portrait_asset.clone(),
+                                                    position: CharacterPosition::Center,
+                                                    is_speaking: false,
+                                                })
+                                                .collect();
+
+                                            // Build SceneUpdate message
+                                            let scene_update = ServerMessage::SceneUpdate {
+                                                scene: SceneData {
+                                                    id: scene_with_relations.scene.id.to_string(),
+                                                    name: scene_with_relations.scene.name.clone(),
+                                                    location_id: scene_with_relations.scene.location_id.to_string(),
+                                                    location_name: scene_with_relations.location.name.clone(),
+                                                    backdrop_asset: scene_with_relations
+                                                        .scene
+                                                        .backdrop_override
+                                                        .or(scene_with_relations.location.backdrop_asset.clone()),
+                                                    time_context: match &scene_with_relations.scene.time_context {
+                                                        crate::domain::entities::TimeContext::Unspecified => "Unspecified".to_string(),
+                                                        crate::domain::entities::TimeContext::TimeOfDay(tod) => format!("{:?}", tod),
+                                                        crate::domain::entities::TimeContext::During(s) => s.clone(),
+                                                        crate::domain::entities::TimeContext::Custom(s) => s.clone(),
+                                                    },
+                                                    directorial_notes: scene_with_relations.scene.directorial_notes.clone(),
+                                                },
+                                                characters,
+                                                interactions,
+                                            };
+
+                                            // Broadcast SceneUpdate to the player
+                                            // Also check for split party and notify DM
+                                            let mut sessions = state.sessions.write().await;
+                                            if let Some(session) = sessions.get_session_mut(session_id) {
+                                                session.current_scene_id = Some(scene.id.to_string());
+                                                session.send_to_participant(&player_id, &scene_update);
+                                                tracing::info!(
+                                                    "Sent scene update to player {} after travel to location {}",
+                                                    player_id,
+                                                    location_id_str
+                                                );
+
+                                                // Check for split party and notify DM
+                                                if let Ok(resolution_result) = state
+                                                    .scene_resolution_service
+                                                    .resolve_scene_for_session(session_id)
+                                                    .await
+                                                {
+                                                    if resolution_result.is_split_party {
+                                                        // Get location details for notification
+                                                        let mut split_locations = Vec::new();
+                                                        let pcs = match state
+                                                            .player_character_service
+                                                            .get_pcs_by_session(session_id)
+                                                            .await
+                                                        {
+                                                            Ok(pcs) => pcs,
+                                                            Err(_) => vec![],
+                                                        };
+
+                                                        // Group PCs by location
+                                                        let mut location_pcs: std::collections::HashMap<String, Vec<_>> = std::collections::HashMap::new();
+                                                        for pc in &pcs {
+                                                            location_pcs
+                                                                .entry(pc.current_location_id.to_string())
+                                                                .or_insert_with(Vec::new)
+                                                                .push(pc);
+                                                        }
+
+                                                        // Build location info
+                                                        for (loc_id, pcs_at_loc) in location_pcs {
+                                                            if let Ok(location) = state
+                                                                .location_service
+                                                                .get_location(crate::domain::value_objects::LocationId::from_uuid(
+                                                                    uuid::Uuid::parse_str(&loc_id).unwrap_or_default()
+                                                                ))
+                                                                .await
+                                                            {
+                                                                if let Some(loc) = location {
+                                                                    split_locations.push(crate::infrastructure::websocket::messages::SplitPartyLocation {
+                                                                        location_id: loc_id.clone(),
+                                                                        location_name: loc.name,
+                                                                        pc_count: pcs_at_loc.len(),
+                                                                        pc_names: pcs_at_loc.iter().map(|pc| pc.name.clone()).collect(),
+                                                                    });
+                                                                }
+                                                            }
+                                                        }
+
+                                                        // Send notification to DM
+                                                        if session.has_dm() {
+                                                            session.send_to_dm(&ServerMessage::SplitPartyNotification {
+                                                                location_count: split_locations.len(),
+                                                                locations: split_locations,
+                                                            });
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            drop(sessions);
+
+                                            // Return acknowledgment
+                                            return Some(ServerMessage::ActionReceived {
+                                                action_id: action_id_str,
+                                                player_id: player_id.clone(),
+                                                action_type: action_type.clone(),
+                                            });
+                                        }
+                                        Ok(None) => {
+                                            tracing::warn!("Scene {} not found after resolution", scene.id);
+                                        }
+                                        Err(e) => {
+                                            tracing::error!("Failed to load scene with relations: {}", e);
+                                        }
+                                    }
+                                }
+                                Ok(None) => {
+                                    // No scene found, but location updated - still acknowledge
+                                    tracing::warn!(
+                                        "No scene found for location {} after travel",
+                                        location_id_str
+                                    );
+                                }
+                                Err(e) => {
+                                    tracing::error!("Failed to resolve scene: {}", e);
+                                }
+                            }
+                        }
+                        Ok(None) => {
+                            return Some(ServerMessage::Error {
+                                code: "NO_PC".to_string(),
+                                message: "You must create a character before traveling".to_string(),
+                            });
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to get PC: {}", e);
+                            return Some(ServerMessage::Error {
+                                code: "PC_LOOKUP_FAILED".to_string(),
+                                message: format!("Failed to find your character: {}", e),
+                            });
+                        }
+                    }
+                } else {
+                    return Some(ServerMessage::Error {
+                        code: "MISSING_TARGET".to_string(),
+                        message: "Travel action requires a target location".to_string(),
+                    });
+                }
+            }
 
             // Enqueue to PlayerActionQueue - returns immediately
             match state

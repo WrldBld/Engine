@@ -8,6 +8,8 @@ mod export_routes;
 mod interaction_routes;
 mod location_routes;
 mod narrative_event_routes;
+mod player_character_routes;
+mod session_routes;
 mod queue_routes;
 mod rule_system_routes;
 mod scene_routes;
@@ -83,6 +85,10 @@ pub fn create_routes() -> Router<Arc<AppState>> {
             "/api/locations/connections",
             post(location_routes::create_connection),
         )
+        .route(
+            "/api/worlds/{world_id}/locations/available-for-starting",
+            get(location_routes::list_available_starting_locations),
+        )
         // Scene routes
         .route(
             "/api/acts/{act_id}/scenes",
@@ -117,6 +123,45 @@ pub fn create_routes() -> Router<Arc<AppState>> {
         .route(
             "/api/worlds/{id}/export/raw",
             get(export_routes::export_world_raw),
+        )
+        // Session routes
+        .route("/api/sessions", get(session_routes::list_sessions))
+        .route(
+            "/api/worlds/{world_id}/sessions",
+            get(session_routes::list_world_sessions),
+        )
+        .route(
+            "/api/worlds/{world_id}/sessions",
+            post(session_routes::create_or_get_dm_session),
+        )
+        // Player Character routes
+        .route(
+            "/api/sessions/{session_id}/player-characters",
+            post(player_character_routes::create_player_character),
+        )
+        .route(
+            "/api/sessions/{session_id}/player-characters",
+            get(player_character_routes::list_player_characters),
+        )
+        .route(
+            "/api/sessions/{session_id}/player-characters/me",
+            get(player_character_routes::get_my_player_character),
+        )
+        .route(
+            "/api/player-characters/{pc_id}",
+            get(player_character_routes::get_player_character),
+        )
+        .route(
+            "/api/player-characters/{pc_id}",
+            put(player_character_routes::update_player_character),
+        )
+        .route(
+            "/api/player-characters/{pc_id}",
+            delete(player_character_routes::delete_player_character),
+        )
+        .route(
+            "/api/player-characters/{pc_id}/location",
+            put(player_character_routes::update_player_character_location),
         )
         // Interaction routes
         .route(

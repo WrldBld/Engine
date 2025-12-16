@@ -9,6 +9,7 @@ mod grid_map;
 mod interaction;
 mod location;
 mod narrative_event;
+mod player_character;
 mod scene;
 mod sheet_template;
 mod skill;
@@ -36,6 +37,7 @@ pub use narrative_event::{
     ChainedEvent, EventEffect, EventOutcome, NarrativeEvent, NarrativeTrigger,
     NarrativeTriggerType, OutcomeCondition, TriggerLogic,
 };
+pub use player_character::PlayerCharacter;
 pub use scene::{Scene, SceneCondition, TimeContext};
 pub use scene::TimeOfDay;
 pub use sheet_template::{

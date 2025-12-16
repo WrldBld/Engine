@@ -70,3 +70,4 @@ define_id!(StoryEventId);
 define_id!(NarrativeEventId);
 define_id!(EventChainId);
 define_id!(QueueItemId);
+define_id!(PlayerCharacterId);

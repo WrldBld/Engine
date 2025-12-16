@@ -161,6 +161,11 @@ pub enum ServerMessage {
         outcome_description: String,
         scene_direction: String,
     },
+    /// Party is split across multiple locations (sent to DM)
+    SplitPartyNotification {
+        location_count: usize,
+        locations: Vec<SplitPartyLocation>,
+    },
     /// Error message
     Error { code: String, message: String },
     /// Heartbeat response
@@ -271,6 +276,15 @@ pub struct DialogueChoice {
     pub id: String,
     pub text: String,
     pub is_custom_input: bool,
+}
+
+/// Location information for split party notification
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SplitPartyLocation {
+    pub location_id: String,
+    pub location_name: String,
+    pub pc_count: usize,
+    pub pc_names: Vec<String>,
 }
 
 /// Directorial context from DM

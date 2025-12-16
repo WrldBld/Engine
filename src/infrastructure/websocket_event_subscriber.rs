@@ -78,24 +78,36 @@ impl WebSocketEventSubscriber {
         tracing::debug!("Processing {} new events", events.len());
 
         for (event_id, event, _timestamp) in events {
-            // Map AppEvent to ServerMessage and determine target world (if any)
+            // Map AppEvent to ServerMessage and determine target session/world (if any)
             if let Some(message) = self.map_to_server_message(&event) {
+                let target_session = event.session_id().map(|s| s.to_string());
                 let target_world = event.world_id().map(|s| s.to_string());
 
                 let sessions = self.sessions.read().await;
-                let session_ids = sessions.get_session_ids();
 
-                for session_id in session_ids {
-                    if let Some(session) = sessions.get_session(session_id) {
-                        // If the event is associated with a specific world, only
-                        // deliver to sessions for that world. Otherwise, broadcast
-                        // to all sessions.
-                        if let Some(ref world_id_str) = target_world {
-                            if session.world_id.to_string() != *world_id_str {
-                                continue;
-                            }
-                        }
+                if let Some(ref session_id_str) = target_session {
+                    // Prefer session-scoped routing when session_id is present.
+                    if let Ok(session_uuid) = uuid::Uuid::parse_str(session_id_str) {
+                        let session_id = crate::domain::value_objects::SessionId::from_uuid(session_uuid);
                         sessions.broadcast_to_session(session_id, &message);
+                    } else {
+                        tracing::warn!("Invalid session_id on AppEvent: {}", session_id_str);
+                    }
+                } else {
+                    // Fall back to world-scoped (or global) routing.
+                    let session_ids = sessions.get_session_ids();
+                    for session_id in session_ids {
+                        if let Some(session) = sessions.get_session(session_id) {
+                            // If the event is associated with a specific world, only
+                            // deliver to sessions for that world. Otherwise, broadcast
+                            // to all sessions.
+                            if let Some(ref world_id_str) = target_world {
+                                if session.world_id.to_string() != *world_id_str {
+                                    continue;
+                                }
+                            }
+                            sessions.broadcast_to_session(session_id, &message);
+                        }
                     }
                 }
                 drop(sessions);
@@ -120,6 +132,7 @@ impl WebSocketEventSubscriber {
                 entity_id,
                 asset_type,
                 position,
+                ..
             } => Some(ServerMessage::GenerationQueued {
                 batch_id: batch_id.clone(),
                 entity_type: entity_type.clone(),
@@ -127,7 +140,7 @@ impl WebSocketEventSubscriber {
                 asset_type: asset_type.clone(),
                 position: *position,
             }),
-            AppEvent::GenerationBatchProgress { batch_id, progress } => {
+            AppEvent::GenerationBatchProgress { batch_id, progress, .. } => {
                 Some(ServerMessage::GenerationProgress {
                     batch_id: batch_id.clone(),
                     progress: *progress,
@@ -151,12 +164,13 @@ impl WebSocketEventSubscriber {
                 request_id,
                 field_type,
                 entity_id,
+                ..
             } => Some(ServerMessage::SuggestionQueued {
                 request_id: request_id.clone(),
                 field_type: field_type.clone(),
                 entity_id: entity_id.clone(),
             }),
-            AppEvent::SuggestionProgress { request_id, status } => {
+            AppEvent::SuggestionProgress { request_id, status, .. } => {
                 Some(ServerMessage::SuggestionProgress {
                     request_id: request_id.clone(),
                     status: status.clone(),

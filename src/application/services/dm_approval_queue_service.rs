@@ -36,7 +36,14 @@ impl<Q: ApprovalQueuePort<ApprovalItem>> DMApprovalQueueService<Q> {
 
     /// Get all pending approvals for a session (for DM UI)
     pub async fn get_pending(&self, session_id: SessionId) -> Result<Vec<QueueItem<ApprovalItem>>, QueueError> {
-        self.queue.list_by_session(session_id).await
+        // The underlying ApprovalQueuePort implementation may not filter by
+        // session_id (see SQLite/InMemory comments), so we defensively filter
+        // here using the payload's session_id field.
+        let items = self.queue.list_by_session(session_id).await?;
+        Ok(items
+            .into_iter()
+            .filter(|item| item.payload.session_id == session_id)
+            .collect())
     }
 
     /// Get an approval item by its string ID
@@ -294,7 +301,11 @@ impl<Q: ApprovalQueuePort<ApprovalItem>> DMApprovalQueueService<Q> {
         session_id: SessionId,
         limit: usize,
     ) -> Result<Vec<QueueItem<ApprovalItem>>, QueueError> {
-        self.queue.get_history(session_id, limit).await
+        let items = self.queue.get_history(session_id, limit).await?;
+        Ok(items
+            .into_iter()
+            .filter(|item| item.payload.session_id == session_id)
+            .collect())
     }
 
     /// Expire old pending approvals

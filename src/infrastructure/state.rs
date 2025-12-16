@@ -10,9 +10,10 @@ use crate::application::services::{
     challenge_resolution_service::ChallengeResolutionService, ChallengeServiceImpl,
     CharacterServiceImpl, DMActionQueueService, DMApprovalQueueService, EventChainServiceImpl,
     InteractionServiceImpl, LLMQueueService, LocationServiceImpl, NarrativeEventApprovalService,
-    NarrativeEventServiceImpl, PlayerActionQueueService, SceneServiceImpl, SheetTemplateService,
+    NarrativeEventServiceImpl, PlayerActionQueueService, PlayerCharacterServiceImpl,
+    SceneResolutionServiceImpl, SceneServiceImpl, SheetTemplateService,
     SkillServiceImpl, StoryEventService, RelationshipServiceImpl, WorkflowConfigService,
-    WorldServiceImpl,
+    WorldServiceImpl, GenerationQueueProjectionService, SessionJoinService,
 };
 use crate::application::services::generation_service::{GenerationService, GenerationEvent};
 use crate::application::dto::{
@@ -71,8 +72,11 @@ pub struct AppState {
     pub asset_service: AssetServiceImpl,
     pub workflow_config_service: WorkflowConfigService,
     pub sheet_template_service: SheetTemplateService,
+    pub player_character_service: PlayerCharacterServiceImpl,
+    pub scene_resolution_service: SceneResolutionServiceImpl,
     #[allow(dead_code)] // Kept for potential future direct generation access (currently event-driven via queue)
     pub generation_service: Arc<GenerationService>,
+    pub session_join_service: Arc<SessionJoinService>,
     // Queue services - using QueueBackendEnum for runtime backend selection
     // Note: Services take Arc<Q> where Q implements the port, so Q = QueueBackendEnum<T>
     // (not Arc<QueueBackendEnum<T>>) since Arc<QueueBackendEnum<T>> implements the port
@@ -95,6 +99,7 @@ pub struct AppState {
     pub event_notifier: InProcessEventNotifier,
     pub app_event_repository: Arc<dyn AppEventRepositoryPort>,
     pub generation_read_state_repository: Arc<dyn GenerationReadStatePort>,
+    pub generation_queue_projection_service: Arc<GenerationQueueProjectionService>,
 }
 
 impl AppState {
@@ -143,6 +148,8 @@ impl AppState {
             Arc::new(repository.narrative_events());
         let event_chain_repo: Arc<dyn crate::application::ports::outbound::EventChainRepositoryPort> =
             Arc::new(repository.event_chains());
+        let player_character_repo: Arc<dyn crate::application::ports::outbound::PlayerCharacterRepositoryPort> =
+            Arc::new(repository.player_characters());
 
         // Create world exporter
         let world_exporter: Arc<dyn crate::application::ports::outbound::WorldExporterPort> =
@@ -157,7 +164,8 @@ impl AppState {
         );
         let location_service = LocationServiceImpl::new(world_repo.clone(), location_repo.clone());
         let relationship_service = RelationshipServiceImpl::new(relationship_repo);
-        let scene_service = SceneServiceImpl::new(scene_repo, location_repo, character_repo);
+        let scene_repo_for_resolution = scene_repo.clone();
+        let scene_service = SceneServiceImpl::new(scene_repo.clone(), location_repo.clone(), character_repo);
         let skill_service = SkillServiceImpl::new(skill_repo.clone(), world_repo);
         let interaction_service = InteractionServiceImpl::new(interaction_repo);
         // Temporarily create a simple story event service without event_bus, will update after event_bus is created
@@ -170,6 +178,15 @@ impl AppState {
         let asset_service = AssetServiceImpl::new(asset_repo_for_service);
         let workflow_config_service = WorkflowConfigService::new(workflow_repo);
         let sheet_template_service = SheetTemplateService::new(sheet_template_repo);
+        let player_character_service = PlayerCharacterServiceImpl::new(
+            player_character_repo.clone(),
+            location_repo.clone(),
+            world_repo.clone(),
+        );
+        let scene_resolution_service = SceneResolutionServiceImpl::new(
+            player_character_repo,
+            scene_repo_for_resolution,
+        );
 
         // Initialize queue infrastructure using factory
         let queue_factory = QueueFactory::new(config.queue.clone()).await?;
@@ -274,7 +291,7 @@ impl AppState {
             comfyui_client,
             sessions: Arc::clone(&sessions),
             relationship_service,
-            world_service,
+            world_service: world_service.clone(),
             character_service,
             location_service,
             scene_service,
@@ -296,10 +313,16 @@ impl AppState {
                 Arc::new(story_event_service),
             )),
             event_chain_service,
-            asset_service,
+            asset_service: asset_service.clone(),
             workflow_config_service,
             sheet_template_service,
+            player_character_service,
+            scene_resolution_service,
             generation_service,
+            session_join_service: Arc::new(SessionJoinService::new(
+                Arc::clone(&sessions),
+                world_service,
+            )),
             player_action_queue_service,
             dm_action_queue_service,
             llm_queue_service,
@@ -307,8 +330,13 @@ impl AppState {
             dm_approval_queue_service,
             event_bus,
             event_notifier,
-            app_event_repository,
-            generation_read_state_repository,
+            app_event_repository: app_event_repository.clone(),
+            generation_read_state_repository: generation_read_state_repository.clone(),
+            generation_queue_projection_service: Arc::new(GenerationQueueProjectionService::new(
+                asset_service.clone(),
+                app_event_repository,
+                generation_read_state_repository,
+            )),
         }, generation_event_rx))
     }
 }

@@ -11,6 +11,7 @@ mod event_chain_repository;
 mod interaction_repository;
 mod location_repository;
 mod narrative_event_repository;
+mod player_character_repository;
 mod relationship_repository;
 mod scene_repository;
 mod sheet_template_repository;
@@ -27,6 +28,7 @@ pub use event_chain_repository::Neo4jEventChainRepository;
 pub use interaction_repository::Neo4jInteractionRepository;
 pub use location_repository::Neo4jLocationRepository;
 pub use narrative_event_repository::Neo4jNarrativeEventRepository;
+pub use player_character_repository::Neo4jPlayerCharacterRepository;
 pub use relationship_repository::Neo4jRelationshipRepository;
 pub use scene_repository::Neo4jSceneRepository;
 pub use sheet_template_repository::Neo4jSheetTemplateRepository;
@@ -104,5 +106,9 @@ impl Neo4jRepository {
 
     pub fn event_chains(&self) -> Neo4jEventChainRepository {
         Neo4jEventChainRepository::new(self.connection.clone())
+    }
+
+    pub fn player_characters(&self) -> Neo4jPlayerCharacterRepository {
+        Neo4jPlayerCharacterRepository::new(self.connection.clone())
     }
 }

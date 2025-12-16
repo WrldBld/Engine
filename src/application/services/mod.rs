@@ -15,6 +15,7 @@ pub mod dm_action_queue_service;
 pub mod event_chain_service;
 pub mod generation_event_publisher;
 pub mod generation_service;
+pub mod generation_queue_projection_service;
 pub mod interaction_service;
 pub mod llm_queue_service;
 pub mod llm_service;
@@ -22,7 +23,9 @@ pub mod location_service;
 pub mod narrative_event_service;
 pub mod narrative_event_approval_service;
 pub mod player_action_queue_service;
+pub mod player_character_service;
 pub mod relationship_service;
+pub mod scene_resolution_service;
 pub mod scene_service;
 pub mod sheet_template_service;
 pub mod skill_service;
@@ -48,10 +51,21 @@ pub use scene_service::{
     CreateSceneRequest, SceneService, SceneServiceImpl, UpdateSceneRequest,
 };
 
+// Re-export scene resolution service types
+pub use scene_resolution_service::{
+    SceneResolutionResult, SceneResolutionService, SceneResolutionServiceImpl,
+};
+
 // Re-export character service types
 pub use character_service::{
     ChangeArchetypeRequest, CharacterService, CharacterServiceImpl,
     CreateCharacterRequest, UpdateCharacterRequest,
+};
+
+// Re-export player character service types
+pub use player_character_service::{
+    CreatePlayerCharacterRequest, PlayerCharacterService, PlayerCharacterServiceImpl,
+    UpdatePlayerCharacterRequest,
 };
 
 // Re-export location service types
@@ -113,5 +127,13 @@ pub use dm_approval_queue_service::DMApprovalQueueService;
 pub use generation_event_publisher::GenerationEventPublisher;
 pub use llm_queue_service::LLMQueueService;
 pub use player_action_queue_service::PlayerActionQueueService;
+
+// Re-export generation queue projection service (snapshot types are used by HTTP layer)
+pub use generation_queue_projection_service::{
+    GenerationQueueProjectionService,
+    GenerationQueueSnapshot,
+    GenerationBatchResponseDtoWithRead,
+    SuggestionTaskSnapshot,
+};
 
 // Note: PlayerActionService and ApprovalService were removed - functionality moved to queue services

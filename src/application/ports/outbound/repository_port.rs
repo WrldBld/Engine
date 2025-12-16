@@ -10,11 +10,11 @@ use serde::{Deserialize, Serialize};
 use crate::domain::entities::{
     Act, ChainStatus, Challenge, Character, CharacterSheetTemplate, EventChain, GalleryAsset,
     GenerationBatch, GridMap, InteractionTemplate, Location, LocationConnection, NarrativeEvent,
-    Scene, SheetTemplateId, Skill, StoryEvent, World, WorkflowConfiguration,
+    PlayerCharacter, Scene, SheetTemplateId, Skill, StoryEvent, World, WorkflowConfiguration,
 };
 use crate::domain::value_objects::{
     ActId, AssetId, BatchId, ChallengeId, CharacterId, EventChainId, GridMapId, InteractionId,
-    LocationId, NarrativeEventId, Relationship, RelationshipId, SceneId, SessionId, SkillId,
+    LocationId, NarrativeEventId, PlayerCharacterId, Relationship, RelationshipId, SceneId, SessionId, SkillId,
     StoryEventId, WorldId,
 };
 use crate::domain::entities::WorkflowSlot;
@@ -100,6 +100,46 @@ pub trait CharacterRepositoryPort: Send + Sync {
 
     /// Get characters by scene
     async fn get_by_scene(&self, scene_id: SceneId) -> Result<Vec<Character>>;
+}
+
+// =============================================================================
+// Player Character Repository Port
+// =============================================================================
+
+/// Repository port for PlayerCharacter operations
+#[async_trait]
+pub trait PlayerCharacterRepositoryPort: Send + Sync {
+    /// Create a new player character
+    async fn create(&self, pc: &PlayerCharacter) -> Result<()>;
+
+    /// Get a player character by ID
+    async fn get(&self, id: PlayerCharacterId) -> Result<Option<PlayerCharacter>>;
+
+    /// Get all player characters in a session
+    async fn get_by_session(&self, session_id: SessionId) -> Result<Vec<PlayerCharacter>>;
+
+    /// Get a player character by user ID and session ID
+    async fn get_by_user_and_session(
+        &self,
+        user_id: &str,
+        session_id: SessionId,
+    ) -> Result<Option<PlayerCharacter>>;
+
+    /// Get all player characters at a specific location
+    async fn get_by_location(&self, location_id: LocationId) -> Result<Vec<PlayerCharacter>>;
+
+    /// Update a player character
+    async fn update(&self, pc: &PlayerCharacter) -> Result<()>;
+
+    /// Update a player character's location
+    async fn update_location(
+        &self,
+        id: PlayerCharacterId,
+        location_id: LocationId,
+    ) -> Result<()>;
+
+    /// Delete a player character
+    async fn delete(&self, id: PlayerCharacterId) -> Result<()>;
 }
 
 // =============================================================================

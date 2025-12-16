@@ -8,6 +8,11 @@
 use serde::{Deserialize, Serialize};
 
 /// Application-level events published through the EventBus
+///
+/// Many of these events are tied to a live play session. For those, we
+/// include an optional `session_id` so consumers (e.g. WebSocket
+/// subscribers) can route them to the correct session without guessing
+/// from world context alone.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum AppEvent {
@@ -27,6 +32,9 @@ pub enum AppEvent {
         world_id: String,
         event_name: String,
         outcome_name: String,
+        /// Optional live session that triggered this event
+        #[serde(default)]
+        session_id: Option<String>,
     },
 
     // ========================================================================
@@ -41,6 +49,9 @@ pub enum AppEvent {
         success: bool,
         roll: Option<i32>,
         total: Option<i32>,
+        /// Optional live session where this challenge occurred
+        #[serde(default)]
+        session_id: Option<String>,
     },
 
     // ========================================================================
@@ -53,12 +64,17 @@ pub enum AppEvent {
         entity_id: String,
         asset_type: String,
         position: u32,
+        /// Optional live session associated with this generation request
+        #[serde(default)]
+        session_id: Option<String>,
     },
 
     /// A generation batch is progressing
     GenerationBatchProgress {
         batch_id: String,
         progress: u8,
+        #[serde(default)]
+        session_id: Option<String>,
     },
 
     /// A generation batch completed successfully
@@ -68,6 +84,8 @@ pub enum AppEvent {
         entity_id: String,
         asset_type: String,
         asset_count: u32,
+        #[serde(default)]
+        session_id: Option<String>,
     },
 
     /// A generation batch failed
@@ -77,6 +95,8 @@ pub enum AppEvent {
         entity_id: String,
         asset_type: String,
         error: String,
+        #[serde(default)]
+        session_id: Option<String>,
     },
 
     // ========================================================================
@@ -87,12 +107,17 @@ pub enum AppEvent {
         request_id: String,
         field_type: String,
         entity_id: Option<String>,
+        /// Optional live session associated with this suggestion
+        #[serde(default)]
+        session_id: Option<String>,
     },
 
     /// An LLM suggestion request is being processed
     SuggestionProgress {
         request_id: String,
         status: String,
+        #[serde(default)]
+        session_id: Option<String>,
     },
 
     /// An LLM suggestion request completed
@@ -100,6 +125,8 @@ pub enum AppEvent {
         request_id: String,
         field_type: String,
         suggestions: Vec<String>,
+        #[serde(default)]
+        session_id: Option<String>,
     },
 
     /// An LLM suggestion request failed
@@ -107,6 +134,8 @@ pub enum AppEvent {
         request_id: String,
         field_type: String,
         error: String,
+        #[serde(default)]
+        session_id: Option<String>,
     },
 }
 
@@ -134,6 +163,25 @@ impl AppEvent {
             AppEvent::StoryEventCreated { world_id, .. }
             | AppEvent::NarrativeEventTriggered { world_id, .. }
             | AppEvent::ChallengeResolved { world_id, .. } => Some(world_id.as_str()),
+            _ => None,
+        }
+    }
+
+    /// Get the session_id if this event is associated with a live session
+    pub fn session_id(&self) -> Option<&str> {
+        match self {
+            AppEvent::NarrativeEventTriggered { session_id, .. }
+            | AppEvent::ChallengeResolved { session_id, .. }
+            | AppEvent::GenerationBatchQueued { session_id, .. }
+            | AppEvent::GenerationBatchProgress { session_id, .. }
+            | AppEvent::GenerationBatchCompleted { session_id, .. }
+            | AppEvent::GenerationBatchFailed { session_id, .. }
+            | AppEvent::SuggestionQueued { session_id, .. }
+            | AppEvent::SuggestionProgress { session_id, .. }
+            | AppEvent::SuggestionCompleted { session_id, .. }
+            | AppEvent::SuggestionFailed { session_id, .. } => {
+                session_id.as_deref()
+            }
             _ => None,
         }
     }

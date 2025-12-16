@@ -21,16 +21,18 @@ pub trait GenerationReadStatePort: Send + Sync {
     async fn mark_read(
         &self,
         user_id: &str,
+        world_id: &str,
         item_id: &str,
         kind: GenerationReadKind,
     ) -> anyhow::Result<()>;
 
-    /// List all read item ids for a user.
+    /// List all read item ids for a user in a specific world.
     ///
     /// Returns a vec of (item_id, kind) tuples.
-    async fn list_read_for_user(
+    async fn list_read_for_user_world(
         &self,
         user_id: &str,
+        world_id: &str,
     ) -> anyhow::Result<Vec<(String, GenerationReadKind)>>;
 }
 

@@ -179,6 +179,8 @@ pub struct GameSession {
     pub world_id: WorldId,
     pub world_snapshot: Arc<WorldSnapshot>,
     pub participants: HashMap<ClientId, SessionParticipant>,
+    /// User ID of the DM who owns this session (if known)
+    pub dm_user_id: Option<String>,
     #[allow(dead_code)] // Kept for future session management features
     pub created_at: DateTime<Utc>,
     pub current_scene_id: Option<String>,
@@ -188,21 +190,35 @@ pub struct GameSession {
     max_history_length: usize,
     /// Pending approval requests awaiting DM decision
     pending_approvals: HashMap<String, PendingApproval>,
+    /// Map of user_id -> PlayerCharacter for this session
+    pub player_characters: HashMap<String, crate::domain::entities::PlayerCharacter>,
 }
 
 impl GameSession {
-    /// Create a new game session for a world
+    /// Create a new game session for a world with a generated session ID
     pub fn new(world_id: WorldId, world_snapshot: WorldSnapshot, max_history_length: usize) -> Self {
+        Self::new_with_id(SessionId::new(), world_id, world_snapshot, max_history_length)
+    }
+
+    /// Create a new game session for a world with an explicit session ID.
+    pub fn new_with_id(
+        session_id: SessionId,
+        world_id: WorldId,
+        world_snapshot: WorldSnapshot,
+        max_history_length: usize,
+    ) -> Self {
         Self {
-            id: SessionId::new(),
+            id: session_id,
             world_id,
             world_snapshot: Arc::new(world_snapshot),
             participants: HashMap::new(),
+            dm_user_id: None,
             created_at: Utc::now(),
             current_scene_id: None,
             conversation_history: Vec::new(),
             max_history_length,
             pending_approvals: HashMap::new(),
+            player_characters: HashMap::new(),
         }
     }
 
@@ -301,6 +317,46 @@ impl GameSession {
         }
     }
 
+    /// Add a player character to the session
+    pub fn add_player_character(
+        &mut self,
+        pc: crate::domain::entities::PlayerCharacter,
+    ) -> Result<(), String> {
+        // Validate that the PC belongs to this session
+        if pc.session_id != self.id {
+            return Err("Player character session_id does not match session".to_string());
+        }
+        self.player_characters.insert(pc.user_id.clone(), pc);
+        Ok(())
+    }
+
+    /// Get a player character by user ID
+    pub fn get_player_character(
+        &self,
+        user_id: &str,
+    ) -> Option<&crate::domain::entities::PlayerCharacter> {
+        self.player_characters.get(user_id)
+    }
+
+    /// Get all player characters in the session
+    pub fn get_all_pcs(&self) -> Vec<&crate::domain::entities::PlayerCharacter> {
+        self.player_characters.values().collect()
+    }
+
+    /// Update a player character's location
+    pub fn update_pc_location(
+        &mut self,
+        user_id: &str,
+        location_id: crate::domain::value_objects::LocationId,
+    ) -> Result<(), String> {
+        if let Some(pc) = self.player_characters.get_mut(user_id) {
+            pc.update_location(location_id);
+            Ok(())
+        } else {
+            Err(format!("Player character not found for user_id: {}", user_id))
+        }
+    }
+
     /// Get the entire conversation history
     #[allow(dead_code)] // Kept for future conversation history export/review features
     pub fn get_full_history(&self) -> &[ConversationTurn] {
@@ -364,11 +420,31 @@ impl GameSession {
         }
     }
 
-    /// Send a message only to the DM
+    /// Send a message only to the DM(s)
+    /// If multiple DMs exist with the same user_id (multiple tabs), send to all of them
     pub fn send_to_dm(&self, message: &ServerMessage) {
-        if let Some(dm) = self.get_dm() {
-            if let Err(e) = dm.sender.send(message.clone()) {
-                tracing::warn!("Failed to send message to DM: {}", e);
+        // Send to all DMs with the same user_id as the session's dm_user_id
+        // This allows multiple DM tabs/windows to receive messages
+        let target_user_id = self.dm_user_id.as_ref();
+        
+        for participant in self.participants.values() {
+            if participant.role == ParticipantRole::DungeonMaster {
+                // If we have a dm_user_id set, only send to DMs with that user_id
+                // Otherwise, send to any DM (backward compatibility)
+                if let Some(target_id) = target_user_id {
+                    if participant.user_id == *target_id {
+                        if let Err(e) = participant.sender.send(message.clone()) {
+                            tracing::warn!("Failed to send message to DM {}: {}", participant.client_id, e);
+                        }
+                    }
+                } else {
+                    // No dm_user_id set yet, send to any DM (first one found)
+                    if let Err(e) = participant.sender.send(message.clone()) {
+                        tracing::warn!("Failed to send message to DM {}: {}", participant.client_id, e);
+                    }
+                    // Only send to first DM if no dm_user_id is set (backward compatibility)
+                    break;
+                }
             }
         }
     }
@@ -469,7 +545,7 @@ impl SessionManager {
         self.sessions.keys().copied().collect()
     }
 
-    /// Create a new session for a world
+    /// Create a new session for a world with a generated session ID
     pub fn create_session(
         &mut self,
         world_id: WorldId,
@@ -477,6 +553,23 @@ impl SessionManager {
     ) -> SessionId {
         let session = GameSession::new(world_id, world_snapshot, self.max_conversation_history);
         let session_id = session.id;
+
+        self.world_sessions.insert(world_id, session_id);
+        self.sessions.insert(session_id, session);
+
+        tracing::info!("Created new session {} for world {}", session_id, world_id);
+        session_id
+    }
+
+    /// Create a new session for a world with an explicit session ID
+    pub fn create_session_with_id(
+        &mut self,
+        session_id: SessionId,
+        world_id: WorldId,
+        world_snapshot: WorldSnapshot,
+    ) -> SessionId {
+        let session =
+            GameSession::new_with_id(session_id, world_id, world_snapshot, self.max_conversation_history);
 
         self.world_sessions.insert(world_id, session_id);
         self.sessions.insert(session_id, session);
@@ -504,9 +597,21 @@ impl SessionManager {
             .get_mut(&session_id)
             .ok_or(SessionError::NotFound(session_id))?;
 
-        // Check if trying to join as DM when one already exists
+        // Check if trying to join as DM when one already exists with a different user_id
+        // Allow multiple DM connections from the same user_id (for multiple tabs/windows)
         if role == ParticipantRole::DungeonMaster && session.has_dm() {
-            return Err(SessionError::DmAlreadyPresent);
+            if let Some(existing_dm) = session.get_dm() {
+                // Only reject if the existing DM has a different user_id
+                if existing_dm.user_id != user_id {
+                    return Err(SessionError::DmAlreadyPresent);
+                }
+                // Same user_id is allowed - they can have multiple tabs/windows
+            }
+        }
+
+        // Record the DM user ID for session metadata when a DM joins
+        if role == ParticipantRole::DungeonMaster && session.dm_user_id.is_none() {
+            session.dm_user_id = Some(user_id.clone());
         }
 
         session.add_participant(client_id, user_id.clone(), role, sender);
@@ -998,7 +1103,7 @@ mod tests {
         );
         assert!(result1.is_ok());
 
-        // Second DM tries to join
+        // Second DM with different user_id tries to join - should be rejected
         let dm2_id = ClientId::new();
         let (tx2, _rx2) = mpsc::unbounded_channel();
         let result2 = manager.join_session(
@@ -1009,6 +1114,18 @@ mod tests {
             tx2,
         );
         assert!(matches!(result2, Err(SessionError::DmAlreadyPresent)));
+
+        // Same user_id (dm1) tries to join again (multiple tabs) - should be allowed
+        let dm1_tab2_id = ClientId::new();
+        let (tx1_tab2, _rx1_tab2) = mpsc::unbounded_channel();
+        let result3 = manager.join_session(
+            session_id,
+            dm1_tab2_id,
+            "dm1".to_string(), // Same user_id as first DM
+            ParticipantRole::DungeonMaster,
+            tx1_tab2,
+        );
+        assert!(result3.is_ok(), "Same user_id should be allowed to join multiple times");
     }
 
     #[test]

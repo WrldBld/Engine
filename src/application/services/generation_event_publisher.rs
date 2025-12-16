@@ -36,7 +36,12 @@ impl GenerationEventPublisher {
         tracing::info!("Generation event publisher shutting down");
     }
 
-    /// Map a GenerationEvent to an AppEvent
+    /// Map a GenerationEvent to an AppEvent.
+    ///
+    /// For now, generation events are not session-scoped and are broadcast
+    /// based on world context in the subscriber. When generation is invoked
+    /// from a specific live session in the future, this mapping can be
+    /// extended to populate `session_id`.
     fn map_to_app_event(&self, event: GenerationEvent) -> Option<AppEvent> {
         match event {
             GenerationEvent::BatchQueued {
@@ -51,6 +56,7 @@ impl GenerationEventPublisher {
                 entity_id,
                 asset_type: asset_type.to_string(),
                 position,
+                session_id: None,
             }),
             GenerationEvent::BatchProgress {
                 batch_id,
@@ -58,6 +64,7 @@ impl GenerationEventPublisher {
             } => Some(AppEvent::GenerationBatchProgress {
                 batch_id: batch_id.to_string(),
                 progress,
+                session_id: None,
             }),
             GenerationEvent::BatchComplete {
                 batch_id,
@@ -71,6 +78,7 @@ impl GenerationEventPublisher {
                 entity_id,
                 asset_type: asset_type.to_string(),
                 asset_count,
+                session_id: None,
             }),
             GenerationEvent::BatchFailed {
                 batch_id,
@@ -84,6 +92,7 @@ impl GenerationEventPublisher {
                 entity_id,
                 asset_type: asset_type.to_string(),
                 error,
+                session_id: None,
             }),
             GenerationEvent::SuggestionQueued {
                 request_id,
@@ -93,9 +102,14 @@ impl GenerationEventPublisher {
                 request_id,
                 field_type,
                 entity_id,
+                session_id: None,
             }),
             GenerationEvent::SuggestionProgress { request_id, status } => {
-                Some(AppEvent::SuggestionProgress { request_id, status })
+                Some(AppEvent::SuggestionProgress {
+                    request_id,
+                    status,
+                    session_id: None,
+                })
             }
             GenerationEvent::SuggestionComplete {
                 request_id,
@@ -105,6 +119,7 @@ impl GenerationEventPublisher {
                 request_id,
                 field_type,
                 suggestions,
+                session_id: None,
             }),
             GenerationEvent::SuggestionFailed {
                 request_id,
@@ -114,6 +129,7 @@ impl GenerationEventPublisher {
                 request_id,
                 field_type,
                 error,
+                session_id: None,
             }),
         }
     }

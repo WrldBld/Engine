@@ -128,6 +128,7 @@ where
             success,
             roll: Some(roll),
             total: Some(roll + character_modifier),
+            session_id: session_id.map(|sid| sid.to_string()),
         };
         if let Err(e) = self.event_bus.publish(app_event).await {
             tracing::error!("Failed to publish ChallengeResolved event: {}", e);

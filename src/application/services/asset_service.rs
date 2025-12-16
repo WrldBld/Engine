@@ -76,6 +76,7 @@ pub trait AssetService: Send + Sync {
 }
 
 /// Default implementation of AssetService using port abstractions
+#[derive(Clone)]
 pub struct AssetServiceImpl {
     repository: Arc<dyn AssetRepositoryPort>,
 }

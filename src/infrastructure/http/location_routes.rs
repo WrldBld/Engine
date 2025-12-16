@@ -174,6 +174,29 @@ pub async fn delete_location(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// List locations available for starting (filtered for PC creation)
+pub async fn list_available_starting_locations(
+    State(state): State<Arc<AppState>>,
+    Path(world_id): Path<String>,
+) -> Result<Json<Vec<LocationResponseDto>>, (StatusCode, String)> {
+    let uuid = Uuid::parse_str(&world_id)
+        .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid world ID".to_string()))?;
+
+    // Get all locations in the world
+    let locations = state
+        .location_service
+        .list_locations(WorldId::from_uuid(uuid))
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    // For now, return all locations
+    // In the future, we could filter by entry conditions that PCs can't meet
+    // or locations that are marked as "not available for starting"
+    Ok(Json(
+        locations.into_iter().map(LocationResponseDto::from).collect(),
+    ))
+}
+
 // Connection routes
 
 /// Get connections from a location

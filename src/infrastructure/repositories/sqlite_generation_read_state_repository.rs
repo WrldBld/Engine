@@ -27,10 +27,11 @@ impl SqliteGenerationReadStateRepository {
             r#"
             CREATE TABLE IF NOT EXISTS generation_read_state (
                 user_id TEXT NOT NULL,
+                world_id TEXT NOT NULL,
                 entity_type TEXT NOT NULL,
                 item_id TEXT NOT NULL,
                 read_at INTEGER NOT NULL,
-                PRIMARY KEY (user_id, entity_type, item_id)
+                PRIMARY KEY (user_id, world_id, entity_type, item_id)
             );
             "#,
         )
@@ -45,6 +46,7 @@ impl GenerationReadStatePort for SqliteGenerationReadStateRepository {
     async fn mark_read(
         &self,
         user_id: &str,
+        world_id: &str,
         item_id: &str,
         kind: GenerationReadKind,
     ) -> Result<()> {
@@ -57,13 +59,14 @@ impl GenerationReadStatePort for SqliteGenerationReadStateRepository {
 
         sqlx::query(
             r#"
-            INSERT INTO generation_read_state (user_id, entity_type, item_id, read_at)
-            VALUES (?1, ?2, ?3, ?4)
-            ON CONFLICT(user_id, entity_type, item_id)
+            INSERT INTO generation_read_state (user_id, world_id, entity_type, item_id, read_at)
+            VALUES (?1, ?2, ?3, ?4, ?5)
+            ON CONFLICT(user_id, world_id, entity_type, item_id)
             DO UPDATE SET read_at = excluded.read_at;
             "#,
         )
         .bind(user_id)
+        .bind(world_id)
         .bind(entity_type)
         .bind(item_id)
         .bind(now)
@@ -73,18 +76,20 @@ impl GenerationReadStatePort for SqliteGenerationReadStateRepository {
         Ok(())
     }
 
-    async fn list_read_for_user(
+    async fn list_read_for_user_world(
         &self,
         user_id: &str,
+        world_id: &str,
     ) -> Result<Vec<(String, GenerationReadKind)>> {
         let rows = sqlx::query(
             r#"
             SELECT entity_type, item_id
             FROM generation_read_state
-            WHERE user_id = ?
+            WHERE user_id = ? AND world_id = ?
             "#,
         )
         .bind(user_id)
+        .bind(world_id)
         .fetch_all(&self.pool)
         .await?;
 

@@ -21,16 +21,26 @@ pub struct SessionJoinedInfo {
 }
 
 /// Service responsible for handling session join/create flows.
-pub struct SessionJoinService;
+///
+/// This is intentionally a small, stateful service that holds references to
+/// `SessionManager` and `WorldServiceImpl` so that the WebSocket handler and
+/// HTTP layer can depend on a single injected instance from `AppState`.
+pub struct SessionJoinService {
+    sessions: Arc<RwLock<SessionManager>>,
+    world_service: WorldServiceImpl,
+}
 
 impl SessionJoinService {
+    pub fn new(sessions: Arc<RwLock<SessionManager>>, world_service: WorldServiceImpl) -> Self {
+        Self { sessions, world_service }
+    }
+
     /// Join an existing session for the given world (if any) or create a new one.
     ///
     /// This mirrors the previous inline `join_or_create_session` logic that lived in
     /// `infrastructure/websocket.rs`, but is now reusable and testable in isolation.
     pub async fn join_or_create_session_for_world(
-        sessions: &Arc<RwLock<SessionManager>>,
-        world_service: &WorldServiceImpl,
+        &self,
         client_id: ClientId,
         user_id: String,
         role: ParticipantRole,
@@ -46,7 +56,7 @@ impl SessionJoinService {
             None
         };
 
-        let mut sessions_write = sessions.write().await;
+        let mut sessions_write = self.sessions.write().await;
 
         // Try to find an existing session for this world
         if let Some(wid) = world_id {
@@ -74,7 +84,7 @@ impl SessionJoinService {
             drop(sessions_write); // Release lock for database access
 
             // Load world data from database using the world service
-            let player_snapshot = world_service
+            let player_snapshot = self.world_service
                 .export_world_snapshot(wid)
                 .await
                 .map_err(|e| SessionError::Database(e.into()))?;
@@ -83,7 +93,7 @@ impl SessionJoinService {
             let internal_snapshot = convert_to_internal_snapshot(&player_snapshot);
 
             // Re-acquire lock and create session
-            let mut sessions_write = sessions.write().await;
+            let mut sessions_write = self.sessions.write().await;
             let session_id = sessions_write.create_session(wid, internal_snapshot);
 
             // Join the newly created session
@@ -150,7 +160,7 @@ fn gather_participants(
 }
 
 /// Convert PlayerWorldSnapshot to internal WorldSnapshot for session storage
-fn convert_to_internal_snapshot(player_snapshot: &PlayerWorldSnapshot) -> WorldSnapshot {
+pub fn convert_to_internal_snapshot(player_snapshot: &PlayerWorldSnapshot) -> WorldSnapshot {
     use crate::domain::entities::{
         Character, Location, LocationType, Scene, StatBlock, TimeContext, World,
     };

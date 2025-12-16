@@ -16,6 +16,7 @@ mod queue_items;
 mod rule_system;
 mod scene;
 mod sheet_template;
+mod session_info;
 mod skill;
 mod story_event;
 mod suggestion;
@@ -114,6 +115,9 @@ pub use sheet_template::{
     CreateFieldRequestDto, CreateSectionRequestDto, SheetTemplateResponseDto,
     SheetTemplateStorageDto, SheetTemplateSummaryDto,
 };
+
+// Session DTOs
+pub use session_info::SessionInfo;
 
 // Export DTOs
 pub use export::ExportQueryDto;
