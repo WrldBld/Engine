@@ -8,7 +8,7 @@ use std::sync::Arc;
 use tracing::{debug, info, instrument};
 
 use crate::application::ports::outbound::{
-    ChallengeRepositoryPort, SessionManagementPort,
+    AsyncSessionPort, ChallengeRepositoryPort,
 };
 use crate::application::services::tool_execution_service::StateChange;
 use crate::domain::entities::OutcomeTrigger;
@@ -42,18 +42,24 @@ impl OutcomeTriggerService {
     ///
     /// This method processes each trigger and generates appropriate state changes.
     /// Some triggers may require async operations (like enabling/disabling challenges).
-    #[instrument(skip(self, session))]
-    pub async fn execute_triggers<S: SessionManagementPort>(
+    ///
+    /// It uses the async session port to record conversation history and any
+    /// session-scoped side effects, preserving the application/infra boundary.
+    #[instrument(skip(self, session_port))]
+    pub async fn execute_triggers(
         &self,
         triggers: &[OutcomeTrigger],
-        session: &mut S,
+        session_port: &dyn AsyncSessionPort,
         session_id: SessionId,
     ) -> TriggerExecutionResult {
         let mut state_changes = Vec::new();
         let mut warnings = Vec::new();
 
         for trigger in triggers {
-            match self.execute_single_trigger(trigger, session, session_id).await {
+            match self
+                .execute_single_trigger(trigger, session_port, session_id)
+                .await
+            {
                 Ok(changes) => state_changes.extend(changes),
                 Err(e) => {
                     warnings.push(format!("Trigger execution warning: {}", e));
@@ -76,22 +82,23 @@ impl OutcomeTriggerService {
     }
 
     /// Execute a single trigger and return state changes
-    async fn execute_single_trigger<S: SessionManagementPort>(
+    async fn execute_single_trigger(
         &self,
         trigger: &OutcomeTrigger,
-        session: &mut S,
+        session_port: &dyn AsyncSessionPort,
         session_id: SessionId,
     ) -> Result<Vec<StateChange>, String> {
         match trigger {
             OutcomeTrigger::RevealInformation { info, persist } => {
                 debug!(info = %info, persist = %persist, "Revealing information");
 
-                session
+                session_port
                     .add_to_conversation_history(
                         session_id,
                         "System",
                         &format!("[REVELATION] {}", info),
                     )
+                    .await
                     .map_err(|e| e.to_string())?;
 
                 Ok(vec![StateChange::InfoRevealed {
@@ -115,12 +122,13 @@ impl OutcomeTriggerService {
                     return Err(format!("Failed to enable challenge: {}", e));
                 }
 
-                session
+                session_port
                     .add_to_conversation_history(
                         session_id,
                         "System",
                         &format!("[CHALLENGE ENABLED] {}", challenge_id),
                     )
+                    .await
                     .map_err(|e| e.to_string())?;
 
                 Ok(vec![StateChange::EventTriggered {
@@ -140,12 +148,13 @@ impl OutcomeTriggerService {
                     return Err(format!("Failed to disable challenge: {}", e));
                 }
 
-                session
+                session_port
                     .add_to_conversation_history(
                         session_id,
                         "System",
                         &format!("[CHALLENGE DISABLED] {}", challenge_id),
                     )
+                    .await
                     .map_err(|e| e.to_string())?;
 
                 Ok(vec![StateChange::EventTriggered {
@@ -156,7 +165,7 @@ impl OutcomeTriggerService {
             OutcomeTrigger::ModifyCharacterStat { stat, modifier } => {
                 debug!(stat = %stat, modifier = %modifier, "Modifying character stat");
 
-                session
+                session_port
                     .add_to_conversation_history(
                         session_id,
                         "System",
@@ -167,6 +176,7 @@ impl OutcomeTriggerService {
                             modifier
                         ),
                     )
+                    .await
                     .map_err(|e| e.to_string())?;
 
                 Ok(vec![StateChange::CharacterStatUpdated {
@@ -179,12 +189,13 @@ impl OutcomeTriggerService {
             OutcomeTrigger::TriggerScene { scene_id } => {
                 debug!(scene_id = %scene_id, "Triggering scene transition");
 
-                session
+                session_port
                     .add_to_conversation_history(
                         session_id,
                         "System",
                         &format!("[SCENE TRANSITION] Moving to scene {}", scene_id),
                     )
+                    .await
                     .map_err(|e| e.to_string())?;
 
                 Ok(vec![StateChange::EventTriggered {
@@ -203,12 +214,13 @@ impl OutcomeTriggerService {
                     .map(|d| format!(" - {}", d))
                     .unwrap_or_default();
 
-                session
+                session_port
                     .add_to_conversation_history(
                         session_id,
                         "System",
                         &format!("[ITEM RECEIVED] {}{}", item_name, desc),
                     )
+                    .await
                     .map_err(|e| e.to_string())?;
 
                 Ok(vec![StateChange::ItemAdded {
@@ -220,12 +232,13 @@ impl OutcomeTriggerService {
             OutcomeTrigger::Custom { description } => {
                 debug!(description = %description, "Custom trigger");
 
-                session
+                session_port
                     .add_to_conversation_history(
                         session_id,
                         "System",
                         &format!("[CUSTOM] {}", description),
                     )
+                    .await
                     .map_err(|e| e.to_string())?;
 
                 Ok(vec![StateChange::EventTriggered {

@@ -785,11 +785,45 @@ async fn handle_message(
                 request_id,
                 outcome_type
             );
-            // TODO: Implement regeneration via LLM service
-            // For now, send acknowledgment
-            Some(ServerMessage::Error {
-                code: "NOT_IMPLEMENTED".to_string(),
-                message: "Outcome regeneration not yet implemented".to_string(),
+
+            // Best-effort: look up the approval item for context
+            let maybe_approval = state
+                .dm_approval_queue_service
+                .get_by_id(&request_id)
+                .await
+                .ok()
+                .flatten();
+
+            let base_flavor = if let Some(item) = maybe_approval {
+                format!(
+                    "{} (regenerated)",
+                    item.payload.proposed_dialogue.trim()
+                )
+            } else {
+                "Regenerated outcome (no approval context found)".to_string()
+            };
+
+            let flavor_text = if let Some(g) = guidance {
+                if g.trim().is_empty() {
+                    base_flavor
+                } else {
+                    format!("{} — Guidance: {}", base_flavor, g.trim())
+                }
+            } else {
+                base_flavor
+            };
+
+            let outcome_type_str = outcome_type.unwrap_or_else(|| "all".to_string());
+
+            Some(ServerMessage::OutcomeRegenerated {
+                request_id,
+                outcome_type: outcome_type_str,
+                new_outcome: crate::infrastructure::websocket::messages::OutcomeDetailData {
+                    flavor_text,
+                    scene_direction: "DM: narrate this regenerated outcome to the table."
+                        .to_string(),
+                    proposed_tools: Vec::new(),
+                },
             })
         }
 

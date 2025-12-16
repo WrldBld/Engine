@@ -193,8 +193,44 @@ where
             .await
             .unwrap_or_else(|| "Unknown Player".to_string());
 
-        // TODO: integrate real character modifiers
-        let character_modifier = 0;
+        // Look up character's skill modifier from PlayerCharacterService
+        let character_modifier = if let Some(session_id_val) = session_id {
+            if let Some(pc_id) = self.get_client_player_character(&client_id, session_id_val).await {
+                match self
+                    .player_character_service
+                    .get_skill_modifier(pc_id, challenge.skill_id.clone())
+                    .await
+                {
+                    Ok(modifier) => {
+                        debug!(
+                            pc_id = %pc_id,
+                            skill_id = %challenge.skill_id,
+                            modifier = modifier,
+                            "Found skill modifier for player character (legacy roll path)"
+                        );
+                        modifier
+                    }
+                    Err(e) => {
+                        debug!(
+                            pc_id = %pc_id,
+                            skill_id = %challenge.skill_id,
+                            error = %e,
+                            "Failed to get skill modifier, defaulting to 0 (legacy roll path)"
+                        );
+                        0
+                    }
+                }
+            } else {
+                debug!(
+                    session_id = %session_id_val,
+                    client_id = %client_id,
+                    "Could not find player character for client (legacy roll path)"
+                );
+                0
+            }
+        } else {
+            0
+        };
 
         // Evaluate challenge result
         let (outcome_type, outcome) =
@@ -207,7 +243,7 @@ where
 
         // Get character ID from player character lookup
         let character_id = if let Some(session_id_val) = session_id {
-            self.get_client_player_character(client_id, session_id_val)
+            self.get_client_player_character(&client_id, session_id_val)
                 .await
                 .map(|id| id.to_string())
                 .unwrap_or_else(|| player_name.clone())
@@ -227,6 +263,22 @@ where
         };
         if let Err(e) = self.event_bus.publish(app_event).await {
             tracing::error!("Failed to publish ChallengeResolved event: {}", e);
+        }
+
+        // Execute outcome triggers (Phase 22D integration) for legacy path as well
+        if let Some(sid) = session_id {
+            let trigger_result = self
+                .outcome_trigger_service
+                .execute_triggers(&outcome.triggers, self.sessions.as_ref(), sid)
+                .await;
+
+            if !trigger_result.warnings.is_empty() {
+                info!(
+                    trigger_count = trigger_result.trigger_count,
+                    warnings = ?trigger_result.warnings,
+                    "Outcome triggers (legacy roll) executed with warnings"
+                );
+            }
         }
 
         // Broadcast ChallengeResolved to all participants
@@ -392,7 +444,7 @@ where
 
         // Get character ID from player character lookup
         let character_id = if let Some(session_id_val) = session_id {
-            self.get_client_player_character(client_id, session_id_val)
+            self.get_client_player_character(&client_id, session_id_val)
                 .await
                 .map(|id| id.to_string())
                 .unwrap_or_else(|| player_name.clone())
@@ -412,6 +464,22 @@ where
         };
         if let Err(e) = self.event_bus.publish(app_event).await {
             tracing::error!("Failed to publish ChallengeResolved event: {}", e);
+        }
+
+        // Execute outcome triggers (Phase 22D integration)
+        if let Some(sid) = session_id {
+            let trigger_result = self
+                .outcome_trigger_service
+                .execute_triggers(&outcome.triggers, self.sessions.as_ref(), sid)
+                .await;
+
+            if !trigger_result.warnings.is_empty() {
+                info!(
+                    trigger_count = trigger_result.trigger_count,
+                    warnings = ?trigger_result.warnings,
+                    "Outcome triggers executed with warnings"
+                );
+            }
         }
 
         // Broadcast ChallengeResolved to all participants
