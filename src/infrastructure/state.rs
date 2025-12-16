@@ -166,7 +166,7 @@ impl AppState {
         let relationship_service = RelationshipServiceImpl::new(relationship_repo);
         let scene_repo_for_resolution = scene_repo.clone();
         let scene_service = SceneServiceImpl::new(scene_repo.clone(), location_repo.clone(), character_repo);
-        let skill_service = SkillServiceImpl::new(skill_repo.clone(), world_repo);
+        let skill_service = SkillServiceImpl::new(skill_repo.clone(), world_repo.clone());
         let interaction_service = InteractionServiceImpl::new(interaction_repo);
         // Temporarily create a simple story event service without event_bus, will update after event_bus is created
         let story_event_repo_for_service = story_event_repo.clone();

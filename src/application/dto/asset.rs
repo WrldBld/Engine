@@ -27,6 +27,8 @@ pub struct GalleryAssetResponseDto {
     pub is_active: bool,
     pub label: Option<String>,
     pub is_generated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub style_reference_id: Option<String>, // ID of asset used as style reference (if any)
     pub created_at: String,
 }
 
@@ -42,6 +44,7 @@ impl From<GalleryAsset> for GalleryAssetResponseDto {
             is_active: a.is_active,
             label: a.label,
             is_generated,
+            style_reference_id: None,
             created_at: a.created_at.to_rfc3339(),
         }
     }

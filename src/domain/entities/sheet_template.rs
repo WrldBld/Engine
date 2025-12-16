@@ -7,6 +7,7 @@
 //! - Layout hints for UI rendering
 
 use std::collections::HashMap;
+use serde::{Deserialize, Serialize};
 
 use crate::domain::value_objects::{RuleSystemVariant, WorldId};
 
@@ -305,7 +306,7 @@ pub enum ItemListType {
 }
 
 /// Character data that conforms to a template
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CharacterSheetData {
     /// Map of field_id -> value
     pub values: HashMap<String, FieldValue>,
@@ -347,7 +348,7 @@ impl CharacterSheetData {
 }
 
 /// A value stored for a field
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum FieldValue {
     Number(i32),
     Text(String),

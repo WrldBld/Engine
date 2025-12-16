@@ -176,7 +176,7 @@ impl GenerationService {
     }
 
     /// Start processing a batch
-    async fn start_batch_processing(&self, batch: GenerationBatch) -> Result<()> {
+    pub async fn start_batch_processing(&self, batch: GenerationBatch) -> Result<()> {
         let batch_id = batch.id;
 
         // Update status to generating
@@ -206,7 +206,9 @@ impl GenerationService {
                 batch.negative_prompt.as_deref(),
                 i as i64, // Use index as seed variation
                 &batch.asset_type,
-            )?;
+                batch.style_reference_id,
+            )
+            .await?;
 
             // Queue with ComfyUI
             match self.comfyui_client.queue_prompt(workflow).await {
@@ -406,13 +408,14 @@ impl GenerationService {
     }
 
     /// Prepare a workflow with generation parameters
-    fn prepare_workflow(
+    async fn prepare_workflow(
         &self,
         mut workflow: serde_json::Value,
         prompt: &str,
         negative_prompt: Option<&str>,
         seed_offset: i64,
         asset_type: &AssetType,
+        style_reference_id: Option<AssetId>,
     ) -> Result<serde_json::Value> {
         // Get dimensions for this asset type
         let (width, height) = asset_type.default_dimensions();
@@ -483,6 +486,82 @@ impl GenerationService {
                                     "height".to_string(),
                                     serde_json::Value::Number(height.into()),
                                 );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Inject style reference if provided
+        if let Some(ref_id) = style_reference_id {
+            // Try to load the style reference asset
+            if let Ok(Some(ref_asset)) = self.repository.get(ref_id).await {
+                // Try to find IPAdapter node and inject image
+                if let Some(obj) = workflow.as_object_mut() {
+                    let mut ipadapter_found = false;
+                    
+                    // First pass: find IPAdapter nodes
+                    for (_node_id, node) in obj.iter() {
+                        if let Some(node_obj) = node.as_object() {
+                            if let Some(class_type) = node_obj.get("class_type").and_then(|c| c.as_str()) {
+                                if class_type.contains("IPAdapter") {
+                                    ipadapter_found = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    
+                    // If IPAdapter found, inject image path
+                    if ipadapter_found {
+                        for (_node_id, node) in obj.iter_mut() {
+                            if let Some(node_obj) = node.as_object_mut() {
+                                if let Some(class_type) = node_obj.get("class_type").and_then(|c| c.as_str()) {
+                                    if class_type.contains("IPAdapter") {
+                                        if let Some(inputs) = node_obj.get_mut("inputs") {
+                                            if let Some(inputs_obj) = inputs.as_object_mut() {
+                                                // Inject image path - ComfyUI expects format: "filename" or full path
+                                                // For now, use the file_path from the asset
+                                                inputs_obj.insert(
+                                                    "image".to_string(),
+                                                    serde_json::Value::String(ref_asset.file_path.clone()),
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        // No IPAdapter found - inject style keywords into prompt
+                        // This is a simplified approach - in production, you'd extract style keywords
+                        // from the reference asset's generation metadata or analyze the image
+                        let enhanced_prompt = format!("{}, in the style of: {}", prompt, "reference style");
+                        
+                        // Update prompt in workflow
+                        for (_node_id, node) in obj.iter_mut() {
+                            if let Some(node_obj) = node.as_object_mut() {
+                                if let Some(inputs) = node_obj.get_mut("inputs") {
+                                    if let Some(inputs_obj) = inputs.as_object_mut() {
+                                        if inputs_obj.contains_key("text") {
+                                            inputs_obj.insert(
+                                                "text".to_string(),
+                                                serde_json::Value::String(enhanced_prompt.clone()),
+                                            );
+                                        }
+                                        if inputs_obj.contains_key("positive") {
+                                            if let Some(s) = inputs_obj.get("positive") {
+                                                if s.is_string() {
+                                                    inputs_obj.insert(
+                                                        "positive".to_string(),
+                                                        serde_json::Value::String(enhanced_prompt.clone()),
+                                                    );
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                     }

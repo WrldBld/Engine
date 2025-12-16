@@ -7,8 +7,9 @@ use serde_json;
 
 use super::connection::Neo4jConnection;
 use crate::application::ports::outbound::PlayerCharacterRepositoryPort;
+use neo4rs::Node;
 use crate::domain::entities::PlayerCharacter;
-use crate::domain::entities::sheet_template::CharacterSheetData;
+use crate::domain::entities::CharacterSheetData;
 use crate::domain::value_objects::{
     LocationId, PlayerCharacterId, SessionId, WorldId,
 };
@@ -223,7 +224,7 @@ fn parse_player_character_row(row: Row) -> Result<PlayerCharacter> {
     use chrono::DateTime;
     use std::str::FromStr;
 
-    let node = row.get::<neo4rs::types::Node>("pc")
+    let node = row.get::<Node>("pc")
         .context("Expected 'pc' node in row")?;
 
     let id_str: String = node.get("id").context("Missing id")?;
@@ -247,7 +248,7 @@ fn parse_player_character_row(row: Row) -> Result<PlayerCharacter> {
     );
 
     let name: String = node.get("name").context("Missing name")?;
-    let description: Option<String> = node.get("description");
+    let description: Option<String> = node.get("description").ok().flatten();
     let description = if description.as_ref().map(|s| s.is_empty()).unwrap_or(true) {
         None
     } else {
@@ -276,14 +277,14 @@ fn parse_player_character_row(row: Row) -> Result<PlayerCharacter> {
             .context("Invalid UUID for starting_location_id")?,
     );
 
-    let sprite_asset: Option<String> = node.get("sprite_asset");
+    let sprite_asset: Option<String> = node.get("sprite_asset").ok().flatten();
     let sprite_asset = if sprite_asset.as_ref().map(|s| s.is_empty()).unwrap_or(true) {
         None
     } else {
         sprite_asset
     };
 
-    let portrait_asset: Option<String> = node.get("portrait_asset");
+    let portrait_asset: Option<String> = node.get("portrait_asset").ok().flatten();
     let portrait_asset = if portrait_asset.as_ref().map(|s| s.is_empty()).unwrap_or(true) {
         None
     } else {

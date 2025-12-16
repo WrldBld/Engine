@@ -2,6 +2,7 @@
 
 mod approval;
 mod archetype;
+mod comfyui_config;
 mod directorial;
 mod game_tools;
 mod ids;
@@ -12,6 +13,7 @@ mod want;
 
 pub use approval::{ApprovalDecision, ProposedToolInfo};
 pub use archetype::{ArchetypeChange, CampbellArchetype};
+pub use comfyui_config::ComfyUIConfig;
 pub use directorial::{DirectorialNotes};
 pub use game_tools::{ChangeAmount, GameTool, InfoImportance, RelationshipChange};
 pub use ids::*;

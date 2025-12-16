@@ -613,7 +613,7 @@ pub async fn retry_batch(
     }
 
     // Create new batch with same parameters
-    use crate::domain::entities::generation_batch::GenerationRequest;
+    use crate::domain::entities::GenerationRequest;
     let retry_request = GenerationRequest {
         entity_type: original_batch.entity_type,
         entity_id: original_batch.entity_id,

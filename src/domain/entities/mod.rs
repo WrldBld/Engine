@@ -24,7 +24,7 @@ pub use challenge::{
 pub use character::{Character, StatBlock};
 pub use event_chain::{ChainStatus, EventChain};
 pub use gallery_asset::{AssetType, EntityType, GalleryAsset, GenerationMetadata};
-pub use generation_batch::{BatchStatus, GenerationBatch};
+pub use generation_batch::{BatchStatus, GenerationBatch, GenerationRequest};
 pub use grid_map::GridMap;
 pub use interaction::{
     InteractionCondition, InteractionTarget, InteractionTemplate, InteractionType,
@@ -41,8 +41,8 @@ pub use player_character::PlayerCharacter;
 pub use scene::{Scene, SceneCondition, TimeContext};
 pub use scene::TimeOfDay;
 pub use sheet_template::{
-    CharacterSheetTemplate, FieldType, ItemListType, SectionLayout, SelectOption, SheetField,
-    SheetSection, SheetTemplateId,
+    CharacterSheetData, CharacterSheetTemplate, FieldType, FieldValue, ItemListType,
+    SectionLayout, SelectOption, SheetField, SheetSection, SheetTemplateId,
 };
 pub use skill::{default_skills_for_variant, Skill, SkillCategory};
 pub use story_event::{

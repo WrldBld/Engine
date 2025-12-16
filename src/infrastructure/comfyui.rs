@@ -2,27 +2,273 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+use tokio::time::sleep;
 use uuid::Uuid;
 
 use crate::application::ports::outbound::{
     ComfyUIPort, GeneratedImage, HistoryResponse as PortHistoryResponse, NodeOutput as PortNodeOutput,
     PromptHistory as PortPromptHistory, PromptStatus as PortPromptStatus, QueuePromptResponse,
 };
+use crate::domain::value_objects::ComfyUIConfig;
+
+/// Connection state for ComfyUI
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum ComfyUIConnectionState {
+    Connected,
+    Degraded { consecutive_failures: u8 },
+    Disconnected,
+    CircuitOpen { until: DateTime<Utc> },
+}
+
+/// Circuit breaker state
+#[derive(Debug, Clone)]
+enum CircuitBreakerState {
+    Closed,
+    Open { until: DateTime<Utc> },
+    HalfOpen,
+}
+
+/// Circuit breaker for ComfyUI operations
+#[derive(Debug, Clone)]
+struct CircuitBreaker {
+    state: Arc<Mutex<CircuitBreakerState>>,
+    failure_count: Arc<Mutex<u8>>,
+    last_failure: Arc<Mutex<Option<DateTime<Utc>>>>,
+}
+
+impl CircuitBreaker {
+    fn new() -> Self {
+        Self {
+            state: Arc::new(Mutex::new(CircuitBreakerState::Closed)),
+            failure_count: Arc::new(Mutex::new(0)),
+            last_failure: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    /// Check if circuit is open (should reject requests)
+    fn is_open(&self) -> bool {
+        let state = self.state.lock().unwrap();
+        match *state {
+            CircuitBreakerState::Open { until } => {
+                if Utc::now() < until {
+                    true
+                } else {
+                    // Circuit should transition to half-open, but we'll check on next call
+                    false
+                }
+            }
+            _ => false,
+        }
+    }
+
+    /// Check if circuit allows requests (closed or half-open)
+    fn check_circuit(&self) -> Result<(), ComfyUIError> {
+        let mut state = self.state.lock().unwrap();
+        match *state {
+            CircuitBreakerState::Open { until } => {
+                if Utc::now() >= until {
+                    // Transition to half-open
+                    *state = CircuitBreakerState::HalfOpen;
+                    Ok(())
+                } else {
+                    Err(ComfyUIError::CircuitOpen)
+                }
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// Record a successful operation
+    fn record_success(&self) {
+        let mut state = self.state.lock().unwrap();
+        let mut failure_count = self.failure_count.lock().unwrap();
+        *failure_count = 0;
+        *state = CircuitBreakerState::Closed;
+    }
+
+    /// Record a failed operation
+    fn record_failure(&self) {
+        let mut state = self.state.lock().unwrap();
+        let mut failure_count = self.failure_count.lock().unwrap();
+        *failure_count += 1;
+        *self.last_failure.lock().unwrap() = Some(Utc::now());
+
+        if *failure_count >= 5 {
+            // Open circuit for 60 seconds
+            *state = CircuitBreakerState::Open {
+                until: Utc::now() + chrono::Duration::seconds(60),
+            };
+        }
+    }
+}
 
 /// Client for ComfyUI API
 #[derive(Clone)]
 pub struct ComfyUIClient {
     client: Client,
     base_url: String,
+    config: Arc<Mutex<ComfyUIConfig>>,
+    circuit_breaker: Arc<CircuitBreaker>,
+    last_health_check: Arc<Mutex<Option<(DateTime<Utc>, bool)>>>,
 }
 
 impl ComfyUIClient {
     pub fn new(base_url: &str) -> Self {
+        Self::with_config(base_url, ComfyUIConfig::default())
+    }
+
+    pub fn with_config(base_url: &str, config: ComfyUIConfig) -> Self {
         Self {
             client: Client::new(),
             base_url: base_url.trim_end_matches('/').to_string(),
+            config: Arc::new(Mutex::new(config)),
+            circuit_breaker: Arc::new(CircuitBreaker::new()),
+            last_health_check: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    /// Get a copy of the current config
+    pub fn config(&self) -> ComfyUIConfig {
+        self.config.lock().unwrap().clone()
+    }
+
+    /// Update the config
+    pub fn update_config(&self, new_config: ComfyUIConfig) -> Result<(), String> {
+        new_config.validate()?;
+        *self.config.lock().unwrap() = new_config;
+        Ok(())
+    }
+
+    /// Get cached health check result or perform new check
+    async fn cached_health_check(&self) -> Result<bool, ComfyUIError> {
+        // Check cache first (5 second TTL)
+        {
+            let cache = self.last_health_check.lock().unwrap();
+            if let Some((timestamp, result)) = cache.as_ref() {
+                let age = Utc::now().signed_duration_since(*timestamp);
+                if age.num_seconds() < 5 {
+                    return Ok(*result);
+                }
+            }
+        }
+
+        // Perform health check
+        let result = self.health_check_internal().await;
+        let is_healthy = result.is_ok() && result.unwrap_or(false);
+
+        // Update cache
+        {
+            let mut cache = self.last_health_check.lock().unwrap();
+            *cache = Some((Utc::now(), is_healthy));
+        }
+
+        if is_healthy {
+            Ok(true)
+        } else {
+            Err(ComfyUIError::ServiceUnavailable)
+        }
+    }
+
+    /// Internal health check implementation
+    async fn health_check_internal(&self) -> Result<bool, ComfyUIError> {
+        let response = self
+            .client
+            .get(format!("{}/system_stats", self.base_url))
+            .timeout(Duration::from_secs(5))
+            .send()
+            .await?;
+
+        Ok(response.status().is_success())
+    }
+
+    /// Retry wrapper with exponential backoff
+    async fn with_retry<T, F, Fut>(&self, operation: F) -> Result<T, ComfyUIError>
+    where
+        F: Fn() -> Fut,
+        Fut: std::future::Future<Output = Result<T, ComfyUIError>>,
+    {
+        let mut last_error: Option<String> = None;
+
+        let config = self.config.lock().unwrap().clone();
+        for attempt in 0..=config.max_retries {
+            // Check circuit breaker
+            if let Err(e) = self.circuit_breaker.check_circuit() {
+                return Err(e);
+            }
+
+            match operation().await {
+                Ok(result) => {
+                    self.circuit_breaker.record_success();
+                    return Ok(result);
+                }
+                Err(e) => {
+                    // Don't retry on non-transient errors
+                    match &e {
+                        ComfyUIError::ApiError(_) => {
+                            // 4xx errors are not retryable
+                            self.circuit_breaker.record_failure();
+                            return Err(e);
+                        }
+                        ComfyUIError::ServiceUnavailable
+                        | ComfyUIError::HttpError(_)
+                        | ComfyUIError::Timeout(_) => {
+                            // These are retryable
+                            last_error = Some(format!("{:?}", e));
+                        }
+                        ComfyUIError::CircuitOpen => {
+                            return Err(e);
+                        }
+                        ComfyUIError::MaxRetriesExceeded(_) => {
+                            return Err(e);
+                        }
+                    }
+
+                    // If this was the last attempt, return error
+                    if attempt >= config.max_retries {
+                        self.circuit_breaker.record_failure();
+                        return Err(ComfyUIError::MaxRetriesExceeded(config.max_retries));
+                    }
+
+                    // Exponential backoff: base * 3^attempt
+                    let delay_seconds = config.base_delay_seconds as u64 * 3_u64.pow(attempt as u32);
+                    sleep(Duration::from_secs(delay_seconds)).await;
+                }
+            }
+        }
+
+        let config = self.config.lock().unwrap().clone();
+        self.circuit_breaker.record_failure();
+        Err(ComfyUIError::MaxRetriesExceeded(config.max_retries))
+    }
+
+    /// Get current connection state
+    pub fn connection_state(&self) -> ComfyUIConnectionState {
+        if self.circuit_breaker.is_open() {
+            let state = self.circuit_breaker.state.lock().unwrap();
+            if let CircuitBreakerState::Open { until } = *state {
+                return ComfyUIConnectionState::CircuitOpen { until };
+            }
+        }
+
+        let cache = self.last_health_check.lock().unwrap();
+        if let Some((timestamp, is_healthy)) = cache.as_ref() {
+            let age = Utc::now().signed_duration_since(*timestamp);
+            if age.num_seconds() < 30 {
+                if *is_healthy {
+                    ComfyUIConnectionState::Connected
+                } else {
+                    ComfyUIConnectionState::Disconnected
+                }
+            } else {
+                ComfyUIConnectionState::Disconnected
+            }
+        } else {
+            ComfyUIConnectionState::Disconnected
         }
     }
 
@@ -31,44 +277,85 @@ impl ComfyUIClient {
         &self,
         workflow: serde_json::Value,
     ) -> Result<QueueResponse, ComfyUIError> {
-        let client_id = Uuid::new_v4().to_string();
+        // Health check before queuing
+        self.cached_health_check().await?;
 
-        let request = QueuePromptRequest {
-            prompt: workflow,
-            client_id: client_id.clone(),
-        };
+        let config = self.config.lock().unwrap().clone();
+        self.with_retry(|| {
+            let client = self.client.clone();
+            let base_url = self.base_url.clone();
+            let config = config.clone();
+            let workflow = workflow.clone();
+            async move {
+                let client_id = Uuid::new_v4().to_string();
+                let request = QueuePromptRequest {
+                    prompt: workflow,
+                    client_id: client_id.clone(),
+                };
 
-        let response = self
-            .client
-            .post(format!("{}/prompt", self.base_url))
-            .json(&request)
-            .send()
-            .await?;
+                let response = client
+                    .post(format!("{}/prompt", base_url))
+                    .json(&request)
+                    .timeout(Duration::from_secs(config.queue_timeout_seconds as u64))
+                    .send()
+                    .await
+                    .map_err(|e| {
+                        if e.is_timeout() {
+                            ComfyUIError::Timeout(config.queue_timeout_seconds)
+                        } else {
+                            ComfyUIError::HttpError(e)
+                        }
+                    })?;
 
-        if !response.status().is_success() {
-            let error_text = response.text().await?;
-            return Err(ComfyUIError::ApiError(error_text));
-        }
+                if !response.status().is_success() {
+                    let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+                    return Err(ComfyUIError::ApiError(error_text));
+                }
 
-        let queue_response: QueueResponse = response.json().await?;
-        Ok(queue_response)
+                let queue_response: QueueResponse = response.json().await.map_err(|e| {
+                    ComfyUIError::HttpError(reqwest::Error::from(e))
+                })?;
+                Ok(queue_response)
+            }
+        })
+        .await
     }
 
     /// Get the history of a completed prompt
     pub async fn get_history(&self, prompt_id: &str) -> Result<HistoryResponse, ComfyUIError> {
-        let response = self
-            .client
-            .get(format!("{}/history/{}", self.base_url, prompt_id))
-            .send()
-            .await?;
+        let prompt_id = prompt_id.to_string();
+        let config = self.config.lock().unwrap().clone();
+        self.with_retry(|| {
+            let client = self.client.clone();
+            let base_url = self.base_url.clone();
+            let config = config.clone();
+            let prompt_id = prompt_id.clone();
+            async move {
+                let response = client
+                    .get(format!("{}/history/{}", base_url, prompt_id))
+                    .timeout(Duration::from_secs(config.history_timeout_seconds as u64))
+                    .send()
+                    .await
+                    .map_err(|e| {
+                        if e.is_timeout() {
+                            ComfyUIError::Timeout(config.history_timeout_seconds)
+                        } else {
+                            ComfyUIError::HttpError(e)
+                        }
+                    })?;
 
-        if !response.status().is_success() {
-            let error_text = response.text().await?;
-            return Err(ComfyUIError::ApiError(error_text));
-        }
+                if !response.status().is_success() {
+                    let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+                    return Err(ComfyUIError::ApiError(error_text));
+                }
 
-        let history: HistoryResponse = response.json().await?;
-        Ok(history)
+                let history: HistoryResponse = response.json().await.map_err(|e| {
+                    ComfyUIError::HttpError(reqwest::Error::from(e))
+                })?;
+                Ok(history)
+            }
+        })
+        .await
     }
 
     /// Download a generated image
@@ -78,35 +365,53 @@ impl ComfyUIClient {
         subfolder: &str,
         folder_type: &str,
     ) -> Result<Vec<u8>, ComfyUIError> {
-        let response = self
-            .client
-            .get(format!("{}/view", self.base_url))
-            .query(&[
-                ("filename", filename),
-                ("subfolder", subfolder),
-                ("type", folder_type),
-            ])
-            .send()
-            .await?;
+        let filename = filename.to_string();
+        let subfolder = subfolder.to_string();
+        let folder_type = folder_type.to_string();
+        let config = self.config.lock().unwrap().clone();
+        self.with_retry(|| {
+            let client = self.client.clone();
+            let base_url = self.base_url.clone();
+            let config = config.clone();
+            let filename = filename.clone();
+            let subfolder = subfolder.clone();
+            let folder_type = folder_type.clone();
+            async move {
+                let response = client
+                    .get(format!("{}/view", base_url))
+                    .query(&[
+                        ("filename", filename.as_str()),
+                        ("subfolder", subfolder.as_str()),
+                        ("type", folder_type.as_str()),
+                    ])
+                    .timeout(Duration::from_secs(config.image_timeout_seconds as u64))
+                    .send()
+                    .await
+                    .map_err(|e| {
+                        if e.is_timeout() {
+                            ComfyUIError::Timeout(config.image_timeout_seconds)
+                        } else {
+                            ComfyUIError::HttpError(e)
+                        }
+                    })?;
 
-        if !response.status().is_success() {
-            let error_text = response.text().await?;
-            return Err(ComfyUIError::ApiError(error_text));
-        }
+                if !response.status().is_success() {
+                    let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+                    return Err(ComfyUIError::ApiError(error_text));
+                }
 
-        let bytes = response.bytes().await?;
-        Ok(bytes.to_vec())
+                let bytes = response.bytes().await.map_err(|e| {
+                    ComfyUIError::HttpError(reqwest::Error::from(e))
+                })?;
+                Ok(bytes.to_vec())
+            }
+        })
+        .await
     }
 
-    /// Check if the server is available
+    /// Check if the server is available (public method, uses caching)
     pub async fn health_check(&self) -> Result<bool, ComfyUIError> {
-        let response = self
-            .client
-            .get(format!("{}/system_stats", self.base_url))
-            .send()
-            .await?;
-
-        Ok(response.status().is_success())
+        self.cached_health_check().await
     }
 }
 
@@ -116,6 +421,14 @@ pub enum ComfyUIError {
     HttpError(#[from] reqwest::Error),
     #[error("API error: {0}")]
     ApiError(String),
+    #[error("ComfyUI service unavailable")]
+    ServiceUnavailable,
+    #[error("Circuit breaker open - ComfyUI failing")]
+    CircuitOpen,
+    #[error("Request timeout after {0} seconds")]
+    Timeout(u16),
+    #[error("Max retries ({0}) exceeded")]
+    MaxRetriesExceeded(u8),
 }
 
 #[derive(Debug, Serialize)]

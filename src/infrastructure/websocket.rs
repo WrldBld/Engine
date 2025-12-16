@@ -16,6 +16,9 @@ use tokio::sync::mpsc;
 
 use crate::application::dto::DMAction;
 use crate::application::services::scene_service::SceneService;
+use crate::application::services::scene_resolution_service::SceneResolutionService;
+use crate::application::services::player_character_service::PlayerCharacterService;
+use crate::application::services::location_service::LocationService;
 use crate::application::services::interaction_service::InteractionService;
 use crate::domain::value_objects::ActionId;
 use crate::infrastructure::session::ClientId;
@@ -252,15 +255,35 @@ async fn handle_message(
                                     // Load scene with relations to build SceneUpdate
                                     match state.scene_service.get_scene_with_relations(scene.id).await {
                                         Ok(Some(scene_with_relations)) => {
+                                            // Load interactions for the scene
+                                            let interaction_templates = match state.interaction_service.list_interactions(scene.id).await {
+                                                Ok(templates) => templates,
+                                                Err(_) => vec![],
+                                            };
+
                                             // Build interactions
-                                            let interactions: Vec<InteractionData> = scene_with_relations
-                                                .interactions
+                                            let interactions: Vec<InteractionData> = interaction_templates
                                                 .iter()
-                                                .map(|i| InteractionData {
-                                                    id: i.id.to_string(),
-                                                    name: i.name.clone(),
-                                                    description: i.description.clone(),
-                                                    interaction_type: format!("{:?}", i.interaction_type),
+                                                .map(|i| {
+                                                    let target_name = match &i.target {
+                                                        crate::domain::entities::InteractionTarget::Character(char_id) => {
+                                                            Some(format!("Character {}", char_id))
+                                                        },
+                                                        crate::domain::entities::InteractionTarget::Item(item_id) => {
+                                                            Some(format!("Item {}", item_id))
+                                                        },
+                                                        crate::domain::entities::InteractionTarget::Environment(desc) => {
+                                                            Some(desc.clone())
+                                                        },
+                                                        crate::domain::entities::InteractionTarget::None => None,
+                                                    };
+                                                    InteractionData {
+                                                        id: i.id.to_string(),
+                                                        name: i.name.clone(),
+                                                        target_name,
+                                                        interaction_type: format!("{:?}", i.interaction_type),
+                                                        is_available: i.is_available,
+                                                    }
                                                 })
                                                 .collect();
 
@@ -332,7 +355,7 @@ async fn handle_message(
                                                         };
 
                                                         // Group PCs by location
-                                                        let mut location_pcs: std::collections::HashMap<String, Vec<_>> = std::collections::HashMap::new();
+                                                        let mut location_pcs: std::collections::HashMap<String, Vec<&_>> = std::collections::HashMap::new();
                                                         for pc in &pcs {
                                                             location_pcs
                                                                 .entry(pc.current_location_id.to_string())
@@ -341,17 +364,17 @@ async fn handle_message(
                                                         }
 
                                                         // Build location info
-                                                        for (loc_id, pcs_at_loc) in location_pcs {
+                                                        for (loc_id_str, pcs_at_loc) in location_pcs.iter() {
                                                             if let Ok(location) = state
                                                                 .location_service
                                                                 .get_location(crate::domain::value_objects::LocationId::from_uuid(
-                                                                    uuid::Uuid::parse_str(&loc_id).unwrap_or_default()
+                                                                    uuid::Uuid::parse_str(loc_id_str).unwrap_or_default()
                                                                 ))
                                                                 .await
                                                             {
                                                                 if let Some(loc) = location {
                                                                     split_locations.push(crate::infrastructure::websocket::messages::SplitPartyLocation {
-                                                                        location_id: loc_id.clone(),
+                                                                        location_id: loc_id_str.clone(),
                                                                         location_name: loc.name,
                                                                         pc_count: pcs_at_loc.len(),
                                                                         pc_names: pcs_at_loc.iter().map(|pc| pc.name.clone()).collect(),

@@ -12,7 +12,7 @@ use crate::application::ports::outbound::{
     LocationRepositoryPort, PlayerCharacterRepositoryPort, WorldRepositoryPort,
 };
 use crate::domain::entities::PlayerCharacter;
-use crate::domain::entities::sheet_template::CharacterSheetData;
+use crate::domain::entities::CharacterSheetData;
 use crate::domain::value_objects::{
     LocationId, PlayerCharacterId, SessionId, WorldId,
 };
@@ -164,7 +164,7 @@ impl PlayerCharacterService for PlayerCharacterServiceImpl {
         }
 
         // Validate the PC
-        pc.validate()?;
+        pc.validate().map_err(|e| anyhow::anyhow!(e))?;
 
         self.pc_repository
             .create(&pc)
@@ -256,7 +256,7 @@ impl PlayerCharacterService for PlayerCharacterServiceImpl {
         }
 
         pc.touch(); // Update last_active_at
-        pc.validate()?;
+        pc.validate().map_err(|e| anyhow::anyhow!(e))?;
 
         self.pc_repository
             .update(&pc)

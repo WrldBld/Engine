@@ -495,6 +495,21 @@ impl GameSession {
     pub fn remove_pending_approval(&mut self, request_id: &str) -> Option<PendingApproval> {
         self.pending_approvals.remove(request_id)
     }
+
+    /// Send a message to a specific participant by user ID
+    pub fn send_to_participant(&self, user_id: &str, message: &ServerMessage) {
+        for participant in self.participants.values() {
+            if participant.user_id == user_id {
+                if let Err(e) = participant.sender.send(message.clone()) {
+                    tracing::warn!(
+                        "Failed to send message to participant {}: {}",
+                        participant.client_id,
+                        e
+                    );
+                }
+            }
+        }
+    }
 }
 
 /// Error types for session operations
@@ -702,6 +717,11 @@ impl SessionManager {
     #[allow(dead_code)] // Kept for future monitoring/metrics features
     pub fn client_count(&self) -> usize {
         self.client_sessions.len()
+    }
+
+    /// Get all active session IDs
+    pub fn list_sessions(&self) -> Vec<SessionId> {
+        self.sessions.keys().copied().collect()
     }
 }
 

@@ -203,6 +203,67 @@ async fn main() -> anyhow::Result<()> {
         })
     };
 
+    // ComfyUI state monitor (broadcasts connection state changes)
+    let comfyui_state_monitor = {
+        use crate::infrastructure::comfyui::ComfyUIConnectionState;
+        use crate::infrastructure::websocket::messages::ServerMessage;
+        let comfyui_client = state.comfyui_client.clone();
+        let sessions = state.sessions.clone();
+        tokio::spawn(async move {
+            tracing::info!("Starting ComfyUI state monitor");
+            let mut last_state: Option<ComfyUIConnectionState> = None;
+            loop {
+                let current_state = comfyui_client.connection_state();
+                
+                // Only broadcast if state changed
+                if Some(current_state) != last_state {
+                    let (state_str, message, retry_in_seconds) = match current_state {
+                        ComfyUIConnectionState::Connected => (
+                            "connected".to_string(),
+                            Some("ComfyUI is connected".to_string()),
+                            None,
+                        ),
+                        ComfyUIConnectionState::Degraded { consecutive_failures } => (
+                            "degraded".to_string(),
+                            Some(format!("ComfyUI experiencing issues ({} failures)", consecutive_failures)),
+                            Some(30),
+                        ),
+                        ComfyUIConnectionState::Disconnected => (
+                            "disconnected".to_string(),
+                            Some("ComfyUI is disconnected".to_string()),
+                            Some(30),
+                        ),
+                        ComfyUIConnectionState::CircuitOpen { until } => {
+                            let seconds_until = (until - chrono::Utc::now()).num_seconds().max(0) as u32;
+                            (
+                                "circuit_open".to_string(),
+                                Some("ComfyUI circuit breaker is open - too many failures".to_string()),
+                                Some(seconds_until),
+                            )
+                        }
+                    };
+                    
+                    let msg = ServerMessage::ComfyUIStateChanged {
+                        state: state_str,
+                        message,
+                        retry_in_seconds,
+                    };
+                    
+                    // Broadcast to all sessions
+                    let sessions_read = sessions.read().await;
+                    for session_id in sessions_read.list_sessions() {
+                        sessions_read.broadcast_to_session(session_id, &msg);
+                    }
+                    
+                    last_state = Some(current_state);
+                }
+                
+                // Check every 5 seconds
+                tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+            }
+        })
+    };
+
     // WebSocket event subscriber (converts AppEvents to ServerMessages and broadcasts to clients)
     let websocket_event_subscriber = {
         use crate::infrastructure::websocket_event_subscriber::WebSocketEventSubscriber;

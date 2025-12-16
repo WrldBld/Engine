@@ -3,6 +3,7 @@
 mod asset_routes;
 mod challenge_routes;
 mod character_routes;
+mod config_routes;
 mod event_chain_routes;
 mod export_routes;
 mod interaction_routes;

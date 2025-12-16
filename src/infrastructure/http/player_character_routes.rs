@@ -11,10 +11,11 @@ use uuid::Uuid;
 
 use crate::application::services::{
     PlayerCharacterService, PlayerCharacterServiceImpl,
+    SceneResolutionService,
     CreatePlayerCharacterRequest, UpdatePlayerCharacterRequest,
 };
 use crate::domain::entities::PlayerCharacter;
-use crate::domain::entities::sheet_template::CharacterSheetData;
+use crate::domain::entities::{CharacterSheetData, FieldValue};
 use crate::domain::value_objects::{
     LocationId, PlayerCharacterId, SessionId, WorldId,
 };
@@ -72,7 +73,7 @@ pub enum FieldValueDto {
     },
 }
 
-impl From<FieldValueDto> for crate::domain::entities::sheet_template::FieldValue {
+impl From<FieldValueDto> for FieldValue {
     fn from(dto: FieldValueDto) -> Self {
         match dto {
             FieldValueDto::Number(n) => Self::Number(n),
@@ -87,17 +88,17 @@ impl From<FieldValueDto> for crate::domain::entities::sheet_template::FieldValue
     }
 }
 
-impl From<crate::domain::entities::sheet_template::FieldValue> for FieldValueDto {
-    fn from(value: crate::domain::entities::sheet_template::FieldValue) -> Self {
+impl From<FieldValue> for FieldValueDto {
+    fn from(value: FieldValue) -> Self {
         match value {
-            crate::domain::entities::sheet_template::FieldValue::Number(n) => Self::Number(n),
-            crate::domain::entities::sheet_template::FieldValue::Text(s) => Self::Text(s),
-            crate::domain::entities::sheet_template::FieldValue::Boolean(b) => Self::Boolean(b),
-            crate::domain::entities::sheet_template::FieldValue::Resource { current, max } => {
+            FieldValue::Number(n) => Self::Number(n),
+            FieldValue::Text(s) => Self::Text(s),
+            FieldValue::Boolean(b) => Self::Boolean(b),
+            FieldValue::Resource { current, max } => {
                 Self::Resource { current, max }
             }
-            crate::domain::entities::sheet_template::FieldValue::List(l) => Self::List(l),
-            crate::domain::entities::sheet_template::FieldValue::SkillEntry { skill_id, proficient, bonus } => {
+            FieldValue::List(l) => Self::List(l),
+            FieldValue::SkillEntry { skill_id, proficient, bonus } => {
                 Self::SkillEntry { skill_id, proficient, bonus }
             }
         }
