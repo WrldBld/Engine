@@ -935,30 +935,35 @@ pub enum LLMServiceError {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_extract_tag_content() {
-        struct MockLlm;
+    /// Shared mock LLM for tests that don't need actual LLM calls
+    struct MockLlm;
 
-        #[async_trait::async_trait]
-        impl LlmPort for MockLlm {
-            type Error = std::io::Error;
+    #[async_trait::async_trait]
+    impl LlmPort for MockLlm {
+        type Error = std::io::Error;
 
-            async fn generate(
-                &self,
-                _request: LlmRequest,
-            ) -> Result<crate::application::ports::outbound::LlmResponse, Self::Error> {
-                unimplemented!()
-            }
-
-            async fn generate_with_tools(
-                &self,
-                _request: LlmRequest,
-                _tools: Vec<ToolDefinition>,
-            ) -> Result<crate::application::ports::outbound::LlmResponse, Self::Error> {
-                unimplemented!()
-            }
+        async fn generate(
+            &self,
+            _request: LlmRequest,
+        ) -> Result<crate::application::ports::outbound::LlmResponse, Self::Error> {
+            Ok(crate::application::ports::outbound::LlmResponse {
+                content: String::new(),
+                model: "mock".to_string(),
+                tokens_used: 0,
+            })
         }
 
+        async fn generate_with_tools(
+            &self,
+            _request: LlmRequest,
+            _tools: Vec<ToolDefinition>,
+        ) -> Result<crate::application::ports::outbound::LlmResponse, Self::Error> {
+            self.generate(_request).await
+        }
+    }
+
+    #[test]
+    fn test_extract_tag_content() {
         let service = LLMService::new(MockLlm);
 
         let text = r#"
@@ -986,28 +991,6 @@ Hello, traveler! What brings you here?
 
     #[test]
     fn test_build_system_prompt() {
-        struct MockLlm;
-
-        #[async_trait::async_trait]
-        impl LlmPort for MockLlm {
-            type Error = std::io::Error;
-
-            async fn generate(
-                &self,
-                _request: LlmRequest,
-            ) -> Result<crate::application::ports::outbound::LlmResponse, Self::Error> {
-                unimplemented!()
-            }
-
-            async fn generate_with_tools(
-                &self,
-                _request: LlmRequest,
-                _tools: Vec<ToolDefinition>,
-            ) -> Result<crate::application::ports::outbound::LlmResponse, Self::Error> {
-                unimplemented!()
-            }
-        }
-
         let service = LLMService::new(MockLlm);
 
         let context = SceneContext {
@@ -1038,28 +1021,6 @@ Hello, traveler! What brings you here?
 
     #[test]
     fn test_parse_tool_calls() {
-        struct MockLlm;
-
-        #[async_trait::async_trait]
-        impl LlmPort for MockLlm {
-            type Error = std::io::Error;
-
-            async fn generate(
-                &self,
-                _request: LlmRequest,
-            ) -> Result<crate::application::ports::outbound::LlmResponse, Self::Error> {
-                unimplemented!()
-            }
-
-            async fn generate_with_tools(
-                &self,
-                _request: LlmRequest,
-                _tools: Vec<ToolDefinition>,
-            ) -> Result<crate::application::ports::outbound::LlmResponse, Self::Error> {
-                unimplemented!()
-            }
-        }
-
         let service = LLMService::new(MockLlm);
 
         let response = r#"Some text {"tool": "give_item", "arguments": {"item_name": "key"}, "description": "Give key"} more text"#;
@@ -1071,28 +1032,6 @@ Hello, traveler! What brings you here?
 
     #[test]
     fn test_parse_single_tool_give_item() {
-        struct MockLlm;
-
-        #[async_trait::async_trait]
-        impl LlmPort for MockLlm {
-            type Error = std::io::Error;
-
-            async fn generate(
-                &self,
-                _request: LlmRequest,
-            ) -> Result<crate::application::ports::outbound::LlmResponse, Self::Error> {
-                unimplemented!()
-            }
-
-            async fn generate_with_tools(
-                &self,
-                _request: LlmRequest,
-                _tools: Vec<ToolDefinition>,
-            ) -> Result<crate::application::ports::outbound::LlmResponse, Self::Error> {
-                unimplemented!()
-            }
-        }
-
         let service = LLMService::new(MockLlm);
 
         let arguments = serde_json::json!({
@@ -1117,28 +1056,6 @@ Hello, traveler! What brings you here?
 
     #[test]
     fn test_validate_tool_calls() {
-        struct MockLlm;
-
-        #[async_trait::async_trait]
-        impl LlmPort for MockLlm {
-            type Error = std::io::Error;
-
-            async fn generate(
-                &self,
-                _request: LlmRequest,
-            ) -> Result<crate::application::ports::outbound::LlmResponse, Self::Error> {
-                unimplemented!()
-            }
-
-            async fn generate_with_tools(
-                &self,
-                _request: LlmRequest,
-                _tools: Vec<ToolDefinition>,
-            ) -> Result<crate::application::ports::outbound::LlmResponse, Self::Error> {
-                unimplemented!()
-            }
-        }
-
         let service = LLMService::new(MockLlm);
 
         let tools = vec![
@@ -1162,28 +1079,6 @@ Hello, traveler! What brings you here?
 
     #[test]
     fn test_parse_single_tool_missing_field() {
-        struct MockLlm;
-
-        #[async_trait::async_trait]
-        impl LlmPort for MockLlm {
-            type Error = std::io::Error;
-
-            async fn generate(
-                &self,
-                _request: LlmRequest,
-            ) -> Result<crate::application::ports::outbound::LlmResponse, Self::Error> {
-                unimplemented!()
-            }
-
-            async fn generate_with_tools(
-                &self,
-                _request: LlmRequest,
-                _tools: Vec<ToolDefinition>,
-            ) -> Result<crate::application::ports::outbound::LlmResponse, Self::Error> {
-                unimplemented!()
-            }
-        }
-
         let service = LLMService::new(MockLlm);
 
         let arguments = serde_json::json!({

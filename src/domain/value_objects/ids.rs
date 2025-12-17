@@ -1,4 +1,15 @@
 //! Strongly-typed identifiers for domain entities
+//!
+//! # Architectural Note
+//!
+//! These ID types intentionally include `serde::Serialize` and `serde::Deserialize`.
+//! This is an accepted trade-off against pure hexagonal architecture because:
+//!
+//! 1. IDs are simple UUID wrappers - creating 24 DTO wrappers adds boilerplate
+//! 2. Serialization IS their purpose - they exist to be stored and transmitted
+//! 3. The practical cost of "impure" domain exceeds the benefit of strict separation
+//!
+//! See: plans/snazzy-zooming-hamming.md, Batch 7 Architectural Decision Record
 
 use uuid::Uuid;
 

@@ -132,10 +132,10 @@ async fn main() -> anyhow::Result<()> {
     // Approval notification worker (sends ApprovalRequired messages to DM)
     let approval_notification_worker_task = {
         let service = state.dm_approval_queue_service.clone();
-        let sessions = state.sessions.clone();
+        let async_session_port = state.async_session_port.clone();
         let recovery_interval_clone = recovery_interval;
         tokio::spawn(async move {
-            approval_notification_worker(service, sessions, recovery_interval_clone).await;
+            approval_notification_worker(service, async_session_port, recovery_interval_clone).await;
         })
     };
 
@@ -146,6 +146,7 @@ async fn main() -> anyhow::Result<()> {
         let narrative_event_service = Arc::new(state.narrative_event_service.clone());
         let scene_service = Arc::new(state.scene_service.clone());
         let interaction_service = Arc::new(state.interaction_service.clone());
+        let async_session_port = state.async_session_port.clone();
         let sessions = state.sessions.clone();
         let recovery_interval_clone = recovery_interval;
         tokio::spawn(async move {
@@ -155,6 +156,7 @@ async fn main() -> anyhow::Result<()> {
                 narrative_event_service,
                 scene_service,
                 interaction_service,
+                async_session_port,
                 sessions,
                 recovery_interval_clone,
             )
@@ -271,8 +273,9 @@ async fn main() -> anyhow::Result<()> {
         // Reuse the event repository from AppState (no duplicate DB connection)
         let app_event_repository = state.app_event_repository.clone();
         let notifier = state.event_notifier.clone();
+        let async_session_port = state.async_session_port.clone();
         let sessions = state.sessions.clone();
-        let subscriber = WebSocketEventSubscriber::new(app_event_repository, notifier, sessions, 30);
+        let subscriber = WebSocketEventSubscriber::new(app_event_repository, notifier, async_session_port, sessions, 30);
         tokio::spawn(async move {
             subscriber.run().await;
         })

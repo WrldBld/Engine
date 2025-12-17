@@ -7,6 +7,8 @@
 use crate::domain::value_objects::{ProposedToolInfo, SessionId, WorldId};
 use std::collections::HashMap;
 
+use super::SessionParticipantRole;
+
 /// Information about a pending approval request
 #[derive(Debug, Clone)]
 pub struct PendingApprovalInfo {
@@ -41,17 +43,9 @@ pub struct ParticipantSummary {
     /// User ID of the participant
     pub user_id: String,
     /// Role in the session
-    pub role: ParticipantRoleDto,
+    pub role: SessionParticipantRole,
     /// Selected character name if any
     pub character_name: Option<String>,
-}
-
-/// Participant role in session
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ParticipantRoleDto {
-    DungeonMaster,
-    Player,
-    Spectator,
 }
 
 /// A message to be broadcast to session participants
@@ -220,7 +214,7 @@ pub trait SessionLifecyclePort: Send + Sync {
         &mut self,
         client_id: u64,
         user_id: String,
-        role: ParticipantRoleDto,
+        role: SessionParticipantRole,
         world_id: Option<WorldId>,
         world_snapshot_json: Option<serde_json::Value>,
     ) -> Result<SessionJoinResult, SessionManagementError>;

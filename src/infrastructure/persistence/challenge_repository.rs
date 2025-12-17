@@ -325,19 +325,6 @@ impl Neo4jChallengeRepository {
             Ok(false)
         }
     }
-
-    /// Delete all challenges for a world
-    pub async fn delete_all_for_world(&self, world_id: WorldId) -> Result<()> {
-        let q = query(
-            "MATCH (w:World {id: $world_id})-[:HAS_CHALLENGE]->(c:Challenge)
-            DETACH DELETE c",
-        )
-        .param("world_id", world_id.to_string());
-
-        self.connection.graph().run(q).await?;
-        tracing::debug!("Deleted all challenges for world: {}", world_id);
-        Ok(())
-    }
 }
 
 /// Convert a Neo4j row to a Challenge

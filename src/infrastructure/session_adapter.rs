@@ -13,7 +13,8 @@ use crate::application::ports::outbound::{
     SessionParticipantRole, SessionWorldData,
 };
 use crate::domain::value_objects::{SessionId, WorldId};
-use crate::infrastructure::session::{SessionManager, WorldSnapshot, ClientId, SessionError};
+use crate::domain::value_objects::ProposedToolInfo;
+use crate::infrastructure::session::{SessionManager, WorldSnapshot, ClientId, SessionError, PendingApproval};
 use crate::infrastructure::websocket::messages::{ParticipantRole, ServerMessage};
 
 /// Adapter that wraps SessionManager and implements AsyncSessionPort
@@ -25,11 +26,6 @@ impl SessionManagerAdapter {
     /// Create a new adapter wrapping a SessionManager
     pub fn new(manager: Arc<RwLock<SessionManager>>) -> Self {
         Self { inner: manager }
-    }
-
-    /// Get the inner SessionManager (for infrastructure-level operations)
-    pub fn inner(&self) -> &Arc<RwLock<SessionManager>> {
-        &self.inner
     }
 }
 
@@ -289,5 +285,97 @@ impl AsyncSessionPort for SessionManagerAdapter {
         sessions
             .get_session(session_id)
             .map(|s| s.world_snapshot.to_json())
+    }
+
+    async fn list_session_ids(&self) -> Vec<SessionId> {
+        let sessions = self.inner.read().await;
+        sessions.get_session_ids()
+    }
+
+    // === New methods for WebSocket handler refactoring ===
+
+    async fn client_leave_session(&self, client_id: &str) -> Option<(SessionId, SessionParticipantInfo)> {
+        let client_id_parsed = parse_client_id(client_id)?;
+        let mut sessions = self.inner.write().await;
+        let (session_id, participant) = sessions.leave_session(client_id_parsed)?;
+        Some((
+            session_id,
+            SessionParticipantInfo {
+                client_id: client_id.to_string(),
+                user_id: participant.user_id,
+                role: from_infra_role(participant.role),
+            },
+        ))
+    }
+
+    async fn update_session_scene(&self, session_id: SessionId, scene_id: String) -> Result<(), AsyncSessionError> {
+        let mut sessions = self.inner.write().await;
+        if let Some(session) = sessions.get_session_mut(session_id) {
+            session.current_scene_id = Some(scene_id);
+            Ok(())
+        } else {
+            Err(AsyncSessionError::SessionNotFound(session_id.to_string()))
+        }
+    }
+
+    async fn send_to_participant(
+        &self,
+        session_id: SessionId,
+        user_id: &str,
+        message: serde_json::Value,
+    ) -> Result<(), AsyncSessionError> {
+        let server_msg: ServerMessage = serde_json::from_value(message)
+            .map_err(|e| AsyncSessionError::Internal(format!("Invalid message format: {}", e)))?;
+
+        let sessions = self.inner.read().await;
+        if let Some(session) = sessions.get_session(session_id) {
+            session.send_to_participant(user_id, &server_msg);
+            Ok(())
+        } else {
+            Err(AsyncSessionError::SessionNotFound(session_id.to_string()))
+        }
+    }
+
+    async fn get_session_dm(&self, session_id: SessionId) -> Option<SessionParticipantInfo> {
+        let sessions = self.inner.read().await;
+        let session = sessions.get_session(session_id)?;
+        let dm = session.get_dm()?;
+        Some(SessionParticipantInfo {
+            client_id: dm.client_id.to_string(),
+            user_id: dm.user_id.clone(),
+            role: SessionParticipantRole::DungeonMaster,
+        })
+    }
+
+    // === New methods for queue worker refactoring ===
+
+    async fn register_pending_approval(
+        &self,
+        session_id: SessionId,
+        approval_id: String,
+        npc_name: String,
+        proposed_dialogue: String,
+        internal_reasoning: Option<String>,
+        proposed_tools: Vec<ProposedToolInfo>,
+    ) -> Result<bool, AsyncSessionError> {
+        let mut sessions = self.inner.write().await;
+        if let Some(session) = sessions.get_session_mut(session_id) {
+            // Check if already registered
+            if session.get_pending_approval(&approval_id).is_some() {
+                return Ok(false);
+            }
+            // Create and add the pending approval
+            let pending = PendingApproval::new(
+                approval_id,
+                npc_name,
+                proposed_dialogue,
+                internal_reasoning.unwrap_or_default(),
+                proposed_tools,
+            );
+            session.add_pending_approval(pending);
+            Ok(true)
+        } else {
+            Err(AsyncSessionError::SessionNotFound(session_id.to_string()))
+        }
     }
 }

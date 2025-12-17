@@ -8,7 +8,7 @@ use std::time::Duration;
 use tokio::sync::RwLock;
 
 use crate::application::dto::AppEvent;
-use crate::application::ports::outbound::AppEventRepositoryPort;
+use crate::application::ports::outbound::{AppEventRepositoryPort, AsyncSessionPort};
 use crate::infrastructure::event_bus::InProcessEventNotifier;
 use crate::infrastructure::session::SessionManager;
 use crate::infrastructure::websocket::ServerMessage;
@@ -17,6 +17,7 @@ use crate::infrastructure::websocket::ServerMessage;
 pub struct WebSocketEventSubscriber {
     repository: Arc<dyn AppEventRepositoryPort>,
     notifier: InProcessEventNotifier,
+    async_session_port: Arc<dyn AsyncSessionPort>,
     sessions: Arc<RwLock<SessionManager>>,
     poll_interval: Duration,
 }
@@ -26,12 +27,14 @@ impl WebSocketEventSubscriber {
     pub fn new(
         repository: Arc<dyn AppEventRepositoryPort>,
         notifier: InProcessEventNotifier,
+        async_session_port: Arc<dyn AsyncSessionPort>,
         sessions: Arc<RwLock<SessionManager>>,
         poll_interval_seconds: u64,
     ) -> Self {
         Self {
             repository,
             notifier,
+            async_session_port,
             sessions,
             poll_interval: Duration::from_secs(poll_interval_seconds),
         }
@@ -93,9 +96,12 @@ impl WebSocketEventSubscriber {
                     } else {
                         tracing::warn!("Invalid session_id on AppEvent: {}", session_id_str);
                     }
+                    drop(sessions);
                 } else {
                     // Fall back to world-scoped (or global) routing.
-                    let session_ids = sessions.get_session_ids();
+                    drop(sessions);
+                    let session_ids = self.async_session_port.list_session_ids().await;
+                    let sessions = self.sessions.read().await;
                     for session_id in session_ids {
                         if let Some(session) = sessions.get_session(session_id) {
                             // If the event is associated with a specific world, only
@@ -109,8 +115,8 @@ impl WebSocketEventSubscriber {
                             sessions.broadcast_to_session(session_id, &message);
                         }
                     }
+                    drop(sessions);
                 }
-                drop(sessions);
             }
 
             // Update last processed event ID

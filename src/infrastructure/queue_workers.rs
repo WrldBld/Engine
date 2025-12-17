@@ -9,7 +9,7 @@ use std::time::Duration;
 use tokio::sync::RwLock;
 
 use crate::application::dto::{ChallengeSuggestionInfo, DMAction, DMActionItem, NarrativeEventSuggestionInfo};
-use crate::application::ports::outbound::QueueNotificationPort;
+use crate::application::ports::outbound::{AsyncSessionPort, QueueNotificationPort};
 use crate::application::services::{
     DMActionQueueService, DMApprovalQueueService, InteractionService, InteractionServiceImpl,
     NarrativeEventService, NarrativeEventServiceImpl, SceneService, SceneServiceImpl,
@@ -23,7 +23,7 @@ use crate::infrastructure::websocket::messages::{
 /// Worker that processes approval items and sends ApprovalRequired messages to DM
 pub async fn approval_notification_worker(
     approval_queue_service: Arc<DMApprovalQueueService<crate::infrastructure::queues::QueueBackendEnum<crate::application::dto::ApprovalItem>>>,
-    sessions: Arc<RwLock<SessionManager>>,
+    async_session_port: Arc<dyn AsyncSessionPort>,
     recovery_interval: Duration,
 ) {
     tracing::info!("Starting approval notification worker");
@@ -31,9 +31,7 @@ pub async fn approval_notification_worker(
     loop {
         // Get all pending approvals from the queue
         // We need to check each active session for pending approvals
-        let sessions_read = sessions.read().await;
-        let session_ids = sessions_read.get_session_ids();
-        drop(sessions_read);
+        let session_ids = async_session_port.list_session_ids().await;
 
         let mut has_work = false;
         for session_id in session_ids {
@@ -49,34 +47,30 @@ pub async fn approval_notification_worker(
                 has_work = true;
             }
 
-            // Send ApprovalRequired messages for new approvals
-            let mut sessions_write = sessions.write().await;
+            // Send ApprovalRequired messages for new approvals via async port
             for item in pending {
                 let approval_id = item.id.to_string();
-                
-                // Check if we've already notified about this approval
-                if let Some(session) = sessions_write.get_session_mut(item.payload.session_id) {
-                    if session.get_pending_approval(&approval_id).is_none() {
-                    // Convert to PendingApproval and store in session
-                    let proposed_tools: Vec<ProposedToolInfo> = item.payload.proposed_tools.clone();
+                let proposed_tools: Vec<ProposedToolInfo> = item.payload.proposed_tools.clone();
 
-                    let pending_approval = crate::infrastructure::session::PendingApproval::new(
+                // Check if we've already notified and register via async port
+                let was_registered = async_session_port
+                    .register_pending_approval(
+                        item.payload.session_id,
                         approval_id.clone(),
                         item.payload.npc_name.clone(),
                         item.payload.proposed_dialogue.clone(),
-                        item.payload.internal_reasoning.clone(),
+                        Some(item.payload.internal_reasoning.clone()),
                         proposed_tools.clone(),
-                    );
+                    )
+                    .await
+                    .unwrap_or(false);
 
-                    session.add_pending_approval(pending_approval);
-
+                if was_registered {
                     // Use DTO types directly (they match the WebSocket message types)
                     let challenge_suggestion: Option<ChallengeSuggestionInfo> = item.payload.challenge_suggestion.clone();
                     let narrative_event_suggestion: Option<NarrativeEventSuggestionInfo> = item.payload.narrative_event_suggestion.clone();
 
-                    // Send ApprovalRequired message to DM
-                    // Note: ChallengeSuggestionInfo and NarrativeEventSuggestionInfo are imported from application::dto
-                    // and match the types expected by ServerMessage::ApprovalRequired
+                    // Send ApprovalRequired message to DM via async port
                     let approval_msg = ServerMessage::ApprovalRequired {
                         request_id: approval_id.clone(),
                         npc_name: item.payload.npc_name.clone(),
@@ -86,16 +80,16 @@ pub async fn approval_notification_worker(
                         challenge_suggestion,
                         narrative_event_suggestion,
                     };
-                    session.send_to_dm(&approval_msg);
-
-                        tracing::info!(
-                            "Sent ApprovalRequired for approval {} to DM",
-                            approval_id
-                        );
+                    if let Ok(msg_json) = serde_json::to_value(&approval_msg) {
+                        let _ = async_session_port.send_to_dm(session_id, msg_json).await;
                     }
+
+                    tracing::info!(
+                        "Sent ApprovalRequired for approval {} to DM",
+                        approval_id
+                    );
                 }
             }
-            drop(sessions_write);
         }
 
         // Wait for notification if no work, otherwise check again immediately
@@ -112,12 +106,14 @@ pub async fn dm_action_worker(
     narrative_event_service: Arc<NarrativeEventServiceImpl>,
     scene_service: Arc<SceneServiceImpl>,
     interaction_service: Arc<InteractionServiceImpl>,
-    sessions: Arc<RwLock<SessionManager>>,
+    async_session_port: Arc<dyn AsyncSessionPort>,
+    sessions: Arc<RwLock<SessionManager>>, // Still needed for process_decision deep dependency
     recovery_interval: Duration,
 ) {
     tracing::info!("Starting DM action queue worker");
     let notifier = dm_action_queue_service.queue.notifier();
     loop {
+        let async_session_port_clone = async_session_port.clone();
         let sessions_clone = sessions.clone();
         let approval_queue_service_clone = approval_queue_service.clone();
         let narrative_event_service_clone = narrative_event_service.clone();
@@ -125,6 +121,7 @@ pub async fn dm_action_worker(
         let interaction_service_clone = interaction_service.clone();
         match dm_action_queue_service
             .process_next(|action| {
+                let async_session_port = async_session_port_clone.clone();
                 let sessions = sessions_clone.clone();
                 let approval_queue_service = approval_queue_service_clone.clone();
                 let narrative_event_service = narrative_event_service_clone.clone();
@@ -132,6 +129,7 @@ pub async fn dm_action_worker(
                 let interaction_service = interaction_service_clone.clone();
                 async move {
                 process_dm_action(
+                    &async_session_port,
                     &sessions,
                     &approval_queue_service,
                         &narrative_event_service,
@@ -160,7 +158,8 @@ pub async fn dm_action_worker(
 }
 
 async fn process_dm_action(
-    sessions: &Arc<RwLock<SessionManager>>,
+    async_session_port: &Arc<dyn AsyncSessionPort>,
+    sessions: &Arc<RwLock<SessionManager>>, // Still needed for process_decision deep dependency
     approval_queue_service: &Arc<DMApprovalQueueService<crate::infrastructure::queues::QueueBackendEnum<crate::application::dto::ApprovalItem>>>,
     narrative_event_service: &NarrativeEventServiceImpl,
     scene_service: &SceneServiceImpl,
@@ -214,16 +213,15 @@ async fn process_dm_action(
             drop(sessions_write);
         }
         DMAction::DirectNPCControl { npc_id: _, dialogue } => {
-            // Broadcast direct NPC control
-            let mut sessions_write = sessions.write().await;
-            if let Some(session) = sessions_write.get_session_mut(action.session_id) {
-                let response = ServerMessage::DialogueResponse {
-                    speaker_id: "NPC".to_string(),
-                    speaker_name: "NPC".to_string(),
-                    text: dialogue.clone(),
-                    choices: vec![],
-                };
-                session.broadcast_to_players(&response);
+            // Broadcast direct NPC control via async port
+            let response = ServerMessage::DialogueResponse {
+                speaker_id: "NPC".to_string(),
+                speaker_name: "NPC".to_string(),
+                text: dialogue.clone(),
+                choices: vec![],
+            };
+            if let Ok(msg_json) = serde_json::to_value(&response) {
+                let _ = async_session_port.broadcast_to_players(action.session_id, msg_json).await;
             }
         }
         DMAction::TriggerEvent { event_id } => {
@@ -266,25 +264,21 @@ async fn process_dm_action(
                 ));
             }
 
-            // Broadcast notification to session
-            let mut sessions_write = sessions.write().await;
-            if let Some(session) = sessions_write.get_session_mut(action.session_id) {
-                // Create a simple notification message
-                // Note: A proper NarrativeEventTriggered message type could be added to ServerMessage
-                let notification = ServerMessage::Error {
-                    code: "NARRATIVE_EVENT_TRIGGERED".to_string(),
-                    message: format!("Narrative event '{}' has been triggered", narrative_event.name),
-                };
-                session.broadcast_to_players(&notification);
-
-                tracing::info!(
-                    "Triggered narrative event {} ({}) in session {}",
-                    event_id,
-                    narrative_event.name,
-                    action.session_id
-                );
+            // Broadcast notification to session via async port
+            let notification = ServerMessage::Error {
+                code: "NARRATIVE_EVENT_TRIGGERED".to_string(),
+                message: format!("Narrative event '{}' has been triggered", narrative_event.name),
+            };
+            if let Ok(msg_json) = serde_json::to_value(&notification) {
+                let _ = async_session_port.broadcast_to_players(action.session_id, msg_json).await;
             }
-            drop(sessions_write);
+
+            tracing::info!(
+                "Triggered narrative event {} ({}) in session {}",
+                event_id,
+                narrative_event.name,
+                action.session_id
+            );
         }
         DMAction::TransitionScene { scene_id } => {
             // Load scene with relations
@@ -376,22 +370,17 @@ async fn process_dm_action(
                 interactions,
             };
 
-            // Update session's current scene and broadcast
-            let mut sessions_write = sessions.write().await;
-            if let Some(session) = sessions_write.get_session_mut(action.session_id) {
-                // Update current scene in session
-                session.current_scene_id = Some(scene_id.to_string());
-                
-                // Broadcast SceneUpdate to all participants
-                sessions_write.broadcast_to_session(action.session_id, &scene_update);
-
-                tracing::info!(
-                    "DM transitioned scene to {} in session {}",
-                    scene_id,
-                    action.session_id
-                );
+            // Update session's current scene and broadcast via async port
+            let _ = async_session_port.update_session_scene(action.session_id, scene_id.to_string()).await;
+            if let Ok(scene_json) = serde_json::to_value(&scene_update) {
+                let _ = async_session_port.broadcast_to_session(action.session_id, scene_json).await;
             }
-            drop(sessions_write);
+
+            tracing::info!(
+                "DM transitioned scene to {} in session {}",
+                scene_id,
+                action.session_id
+            );
         }
     }
 

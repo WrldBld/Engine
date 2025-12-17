@@ -2,36 +2,31 @@
 //! event suggestions, marking events as triggered, recording story events, and
 //! constructing `ServerMessage::NarrativeEventTriggered`.
 //!
-//! # Architecture Note: Hexagonal Violation
-//!
-//! This service currently imports `SessionManager` directly from the infrastructure layer:
-//! ```ignore
-//! use crate::infrastructure::session::{ClientId, SessionManager};
-//! ```
-//!
-//! This violates hexagonal architecture rules where application services should depend only
-//! on domain types and port traits, not infrastructure implementations.
-//!
-//! ## Planned Refactoring
-//!
-//! To fix this violation, the service should be refactored to:
-//! 1. Accept `AsyncSessionPort` trait bound instead of concrete `SessionManager`
-//! 2. Replace all `SessionManager` method calls with equivalent `AsyncSessionPort` methods
-//! 3. Move `ClientId` to domain or port definitions if it's not already there
-//!
-//! The port trait already exists at: `application/ports/outbound/async_session_port.rs`
-//! The adapter already exists at: `infrastructure/session_adapter.rs`
-//!
-//! This service primarily uses SessionManager for DM authorization checks and sending
-//! messages to DMs. A refactoring should preserve these authorization and messaging semantics
-//! via the port trait.
+//! Uses `AsyncSessionPort` for session operations, maintaining hexagonal architecture.
 
 use std::sync::Arc;
 
 use crate::application::ports::outbound::AsyncSessionPort;
 use crate::application::services::{NarrativeEventService, StoryEventService};
 use crate::domain::value_objects::{NarrativeEventId, SessionId};
-use crate::infrastructure::websocket::messages::ServerMessage;
+
+/// Narrative event triggered message DTO
+#[derive(Debug, Clone, serde::Serialize)]
+struct NarrativeEventTriggeredMessage {
+    r#type: &'static str,
+    event_id: String,
+    event_name: String,
+    outcome_description: String,
+    scene_direction: Option<String>,
+}
+
+/// Error message DTO
+#[derive(Debug, Clone, serde::Serialize)]
+struct ErrorMessage {
+    r#type: &'static str,
+    code: String,
+    message: String,
+}
 
 /// Service responsible for narrative suggestion approval flows.
 ///
@@ -70,7 +65,7 @@ where
         event_id: String,
         approved: bool,
         selected_outcome: Option<String>,
-    ) -> Option<ServerMessage> {
+    ) -> Option<serde_json::Value> {
         tracing::debug!(
             "Received narrative event suggestion decision for {}: event={}, approved={}, outcome={:?}",
             request_id,
@@ -111,15 +106,17 @@ where
         request_id: String,
         event_id: String,
         selected_outcome: Option<String>,
-    ) -> Option<ServerMessage> {
+    ) -> Option<serde_json::Value> {
         let event_uuid = match uuid::Uuid::parse_str(&event_id) {
             Ok(uuid) => NarrativeEventId::from_uuid(uuid),
             Err(_) => {
                 tracing::error!("Invalid event_id: {}", event_id);
-                return Some(ServerMessage::Error {
+                let error_msg = ErrorMessage {
+                    r#type: "Error",
                     code: "INVALID_EVENT_ID".to_string(),
                     message: "Invalid narrative event ID format".to_string(),
-                });
+                };
+                return serde_json::to_value(&error_msg).ok();
             }
         };
 
@@ -127,17 +124,21 @@ where
             Ok(Some(event)) => event,
             Ok(None) => {
                 tracing::error!("Narrative event {} not found", event_id);
-                return Some(ServerMessage::Error {
+                let error_msg = ErrorMessage {
+                    r#type: "Error",
                     code: "EVENT_NOT_FOUND".to_string(),
                     message: format!("Narrative event {} not found", event_id),
-                });
+                };
+                return serde_json::to_value(&error_msg).ok();
             }
             Err(e) => {
                 tracing::error!("Failed to load narrative event: {}", e);
-                return Some(ServerMessage::Error {
+                let error_msg = ErrorMessage {
+                    r#type: "Error",
                     code: "EVENT_LOAD_ERROR".to_string(),
                     message: format!("Failed to load narrative event: {}", e),
-                });
+                };
+                return serde_json::to_value(&error_msg).ok();
             }
         };
 
@@ -157,10 +158,12 @@ where
             Some(o) => o,
             None => {
                 tracing::error!("Narrative event {} has no outcomes", event_id);
-                return Some(ServerMessage::Error {
+                let error_msg = ErrorMessage {
+                    r#type: "Error",
                     code: "NO_OUTCOMES".to_string(),
                     message: format!("Narrative event {} has no outcomes", event_id),
-                });
+                };
+                return serde_json::to_value(&error_msg).ok();
             }
         };
 
@@ -210,11 +213,12 @@ where
         }
 
         // 5. Broadcast scene direction to DM via the async session port
-        let scene_direction = ServerMessage::NarrativeEventTriggered {
+        let scene_direction = NarrativeEventTriggeredMessage {
+            r#type: "NarrativeEventTriggered",
             event_id: event_id.clone(),
             event_name: narrative_event.name.clone(),
             outcome_description: outcome.description.clone(),
-            scene_direction: narrative_event.scene_direction.clone(),
+            scene_direction: Some(narrative_event.scene_direction.clone()),
         };
         if let Ok(msg_json) = serde_json::to_value(&scene_direction) {
             if let Err(e) = self.sessions.send_to_dm(session_id, msg_json).await {

@@ -12,7 +12,7 @@ use tokio::sync::mpsc;
 use crate::domain::value_objects::{SessionId, WorldId};
 
 /// Participant role in a session
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SessionParticipantRole {
     DungeonMaster,
     Player,
@@ -164,4 +164,41 @@ pub trait AsyncSessionPort: Send + Sync {
 
     /// Get the world snapshot JSON for a session
     async fn get_session_snapshot(&self, session_id: SessionId) -> Option<serde_json::Value>;
+
+    /// Get all active session IDs
+    async fn list_session_ids(&self) -> Vec<SessionId>;
+
+    // === New methods for WebSocket handler refactoring ===
+
+    /// Remove a client from their session (cleanup on disconnect)
+    /// Returns the session ID and participant info if the client was in a session
+    async fn client_leave_session(&self, client_id: &str) -> Option<(SessionId, SessionParticipantInfo)>;
+
+    /// Update the current scene ID for a session
+    async fn update_session_scene(&self, session_id: SessionId, scene_id: String) -> Result<(), AsyncSessionError>;
+
+    /// Send a message to a specific participant by user_id
+    async fn send_to_participant(
+        &self,
+        session_id: SessionId,
+        user_id: &str,
+        message: serde_json::Value,
+    ) -> Result<(), AsyncSessionError>;
+
+    /// Get DM info for a session
+    async fn get_session_dm(&self, session_id: SessionId) -> Option<SessionParticipantInfo>;
+
+    // === New methods for queue worker refactoring ===
+
+    /// Register a pending approval if not already registered
+    /// Returns true if the approval was newly registered, false if it already existed
+    async fn register_pending_approval(
+        &self,
+        session_id: SessionId,
+        approval_id: String,
+        npc_name: String,
+        proposed_dialogue: String,
+        internal_reasoning: Option<String>,
+        proposed_tools: Vec<crate::domain::value_objects::ProposedToolInfo>,
+    ) -> Result<bool, AsyncSessionError>;
 }

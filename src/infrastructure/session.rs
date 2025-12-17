@@ -209,7 +209,6 @@ pub struct GameSession {
     pub participants: HashMap<ClientId, SessionParticipant>,
     /// User ID of the DM who owns this session (if known)
     pub dm_user_id: Option<String>,
-    #[allow(dead_code)] // Kept for future session management features
     pub created_at: DateTime<Utc>,
     pub current_scene_id: Option<String>,
     /// Conversation history for LLM context
@@ -292,7 +291,6 @@ impl GameSession {
     /// # Arguments
     /// * `character_name` - Name of the character performing the action
     /// * `action` - Description of the action or dialogue
-    #[allow(dead_code)] // Kept for future conversation history features
     pub fn add_player_action(&mut self, character_name: &str, action: &str) {
         let turn = ConversationTurn::new(
             character_name.to_string(),
@@ -386,13 +384,11 @@ impl GameSession {
     }
 
     /// Get the entire conversation history
-    #[allow(dead_code)] // Kept for future conversation history export/review features
     pub fn get_full_history(&self) -> &[ConversationTurn] {
         &self.conversation_history
     }
 
     /// Clear all conversation history
-    #[allow(dead_code)] // Kept for future session management features
     pub fn clear_history(&mut self) {
         self.conversation_history.clear();
     }
@@ -403,7 +399,6 @@ impl GameSession {
     ///
     /// # Arguments
     /// * `max_length` - New maximum length (must be > 0)
-    #[allow(dead_code)] // Kept for future dynamic history configuration
     pub fn set_max_history_length(&mut self, max_length: usize) {
         assert!(max_length > 0, "max_history_length must be greater than 0");
         self.max_history_length = max_length;
@@ -415,7 +410,6 @@ impl GameSession {
     }
 
     /// Get the current number of turns in history
-    #[allow(dead_code)] // Kept for future UI display of history stats
     pub fn history_length(&self) -> usize {
         self.conversation_history.len()
     }

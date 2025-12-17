@@ -173,16 +173,12 @@ impl<Q: ProcessingQueuePort<LLMRequestItem> + 'static, L: LlmPort + Clone + 'sta
                         match llm_service_clone.generate_npc_response(prompt.clone()).await {
                             Ok(response) => {
                                 // Create approval item for DM
-                                let session_id = request
-                                    .session_id
-                                    .ok_or_else(|| QueueError::Backend("Missing session_id".to_string()));
-                                
-                                if let Err(e) = session_id {
-                                    tracing::error!("Missing session_id in LLM request: {}", e);
-                                    let _ = queue_clone.fail(item_id, &e.to_string()).await;
+                                let Some(session_id) = request.session_id else {
+                                    tracing::error!("Missing session_id in LLM request");
+                                    let _ = queue_clone.fail(item_id, "Missing session_id").await;
                                     return;
-                                }
-                                
+                                };
+
                                 // Extract NPC name from the prompt's responding character
                                 let npc_name = prompt.responding_character.name.clone();
 
@@ -324,7 +320,7 @@ impl<Q: ProcessingQueuePort<LLMRequestItem> + 'static, L: LlmPort + Clone + 'sta
                                 };
 
                                 let approval = ApprovalItem {
-                                    session_id: session_id.unwrap(),
+                                    session_id,
                                     source_action_id: *action_item_id,
                                     decision_type: DecisionType::NPCResponse,
                                     urgency: DecisionUrgency::AwaitingPlayer,

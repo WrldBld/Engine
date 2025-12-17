@@ -13,8 +13,6 @@ use std::sync::Arc;
 use crate::application::ports::outbound::{ProcessingQueuePort, QueuePort, QueueItemStatus};
 use crate::application::services::{GenerationQueueProjectionService, GenerationQueueSnapshot};
 use crate::infrastructure::state::AppState;
-use crate::infrastructure::session::SessionManager;
-use tokio::sync::RwLockReadGuard;
 
 /// Create queue-related routes
 pub fn create_queue_routes() -> Router<Arc<AppState>> {
@@ -122,9 +120,7 @@ async fn queue_health_check(State(state): State<Arc<AppState>>) -> Json<serde_js
     // Approvals are already session-aware at the service layer; reuse
     // that to build a per-session view.
     let mut approvals_by_session: HashMap<String, usize> = HashMap::new();
-    let sessions_read: RwLockReadGuard<SessionManager> = state.sessions.read().await;
-    let session_ids = sessions_read.get_session_ids();
-    drop(sessions_read);
+    let session_ids = state.async_session_port.list_session_ids().await;
 
     for session_id in session_ids {
         if let Ok(pending) = state.dm_approval_queue_service.get_pending(session_id).await {

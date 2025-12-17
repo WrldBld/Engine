@@ -7,6 +7,7 @@ mod app_events;
 mod asset;
 mod challenge;
 mod character;
+mod comfyui_config;
 mod event_chain;
 mod export;
 mod interaction;
@@ -98,6 +99,9 @@ pub use character::{
     parse_archetype, parse_relationship_type, ChangeArchetypeRequestDto, CharacterResponseDto,
     CreateCharacterRequestDto, CreateRelationshipRequestDto, CreatedIdResponseDto,
 };
+
+// ComfyUI config DTO
+pub use comfyui_config::ComfyUIConfigDto;
 
 // Skill DTOs
 pub use skill::{

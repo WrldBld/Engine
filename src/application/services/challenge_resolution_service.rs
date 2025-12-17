@@ -4,29 +4,7 @@
 //! This moves challenge-related business logic out of the websocket handler into a
 //! dedicated application service, keeping the transport layer thin.
 //!
-//! # Architecture Note: Hexagonal Violation
-//!
-//! This service currently imports `SessionManager` directly from the infrastructure layer:
-//! ```ignore
-//! use crate::infrastructure::session::{ClientId, SessionManager};
-//! ```
-//!
-//! This violates hexagonal architecture rules where application services should depend only
-//! on domain types and port traits, not infrastructure implementations.
-//!
-//! ## Planned Refactoring
-//!
-//! To fix this violation, the service should be refactored to:
-//! 1. Accept `AsyncSessionPort` trait bound instead of concrete `SessionManager`
-//! 2. Replace all `SessionManager` method calls with equivalent `AsyncSessionPort` methods
-//! 3. Move `ClientId` to domain or port definitions if it's not already there
-//!
-//! The port trait already exists at: `application/ports/outbound/async_session_port.rs`
-//! The adapter already exists at: `infrastructure/session_adapter.rs`
-//!
-//! This service is tightly coupled to SessionManager's session and participant management API
-//! and broadcasts directly to sessions. A full refactoring should carefully preserve this
-//! functionality while routing through the port trait.
+//! Uses `AsyncSessionPort` for session operations, maintaining hexagonal architecture.
 
 use std::sync::Arc;
 
@@ -35,13 +13,78 @@ use crate::application::ports::outbound::AsyncSessionPort;
 use crate::application::ports::outbound::EventBusPort;
 use crate::application::ports::outbound::{ApprovalQueuePort, ChallengeRepositoryPort};
 use crate::application::services::{
-    ChallengeService, OutcomeTriggerService, PlayerCharacterService, SkillService,
+    ChallengeService, DMApprovalQueueService, OutcomeTriggerService, PlayerCharacterService, SkillService,
 };
 use crate::domain::entities::OutcomeType;
 use crate::domain::value_objects::{ChallengeId, DiceRollInput, SessionId, PlayerCharacterId};
-use crate::infrastructure::session::ClientId;
-use crate::infrastructure::websocket::messages::{DiceInputType, ServerMessage};
 use tracing::{debug, info};
+
+/// Dice input type for challenge rolls
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(tag = "type")]
+pub enum DiceInputType {
+    #[serde(rename = "formula")]
+    Formula(String),
+    #[serde(rename = "manual")]
+    Manual(i32),
+}
+
+/// Challenge resolved message DTO
+#[derive(Debug, Clone, serde::Serialize)]
+struct ChallengeResolvedMessage {
+    r#type: &'static str,
+    challenge_id: String,
+    challenge_name: String,
+    character_name: String,
+    roll: i32,
+    modifier: i32,
+    total: i32,
+    outcome: String,
+    outcome_description: String,
+    roll_breakdown: Option<String>,
+    individual_rolls: Option<Vec<i32>>,
+}
+
+/// Challenge prompt message DTO
+#[derive(Debug, Clone, serde::Serialize)]
+struct ChallengePromptMessage {
+    r#type: &'static str,
+    challenge_id: String,
+    challenge_name: String,
+    skill_name: String,
+    difficulty_display: String,
+    description: String,
+    character_modifier: i32,
+    suggested_dice: Option<String>,
+    rule_system_hint: Option<String>,
+}
+
+/// Error message DTO
+#[derive(Debug, Clone, serde::Serialize)]
+struct ErrorMessage {
+    r#type: &'static str,
+    code: String,
+    message: String,
+}
+
+/// Ad-hoc challenge created message DTO
+#[derive(Debug, Clone, serde::Serialize)]
+struct AdHocChallengeCreatedMessage {
+    r#type: &'static str,
+    challenge_id: String,
+    challenge_name: String,
+    target_pc_id: String,
+}
+
+/// Helper function to create error messages
+fn error_message(code: &str, message: &str) -> Option<serde_json::Value> {
+    let error_msg = ErrorMessage {
+        r#type: "Error",
+        code: code.to_string(),
+        message: message.to_string(),
+    };
+    serde_json::to_value(&error_msg).ok()
+}
 
 /// Service responsible for challenge-related flows.
 ///
@@ -93,12 +136,11 @@ where
     /// participants with a PlayerCharacter in the session.
     async fn get_client_player_character(
         &self,
-        client_id: &ClientId,
+        client_id: &str,
         session_id: SessionId,
     ) -> Option<PlayerCharacterId> {
         // Resolve the client's user_id via the async session port, then map to a player character.
-        let client_id_str = client_id.to_string();
-        let Some(participant) = self.sessions.get_participant_info(&client_id_str).await else {
+        let Some(participant) = self.sessions.get_participant_info(client_id).await else {
             debug!(
                 client_id = %client_id,
                 session_id = %session_id,
@@ -112,7 +154,7 @@ where
         // We rely on PlayerCharacterService to perform the actual lookup.
         match self
             .player_character_service
-            .get_pc_for_user_in_session(&user_id, session_id)
+            .get_pc_by_user_and_session(&user_id, session_id)
             .await
         {
             Ok(Some(pc)) => Some(pc.id),
@@ -141,18 +183,15 @@ where
     /// Handle a player submitting a challenge roll.
     pub async fn handle_roll(
         &self,
-        client_id: ClientId,
+        client_id: String,
         challenge_id_str: String,
         roll: i32,
-    ) -> Option<ServerMessage> {
+    ) -> Option<serde_json::Value> {
         // Parse challenge_id
         let challenge_uuid = match uuid::Uuid::parse_str(&challenge_id_str) {
             Ok(uuid) => ChallengeId::from_uuid(uuid),
             Err(_) => {
-                return Some(ServerMessage::Error {
-                    code: "INVALID_CHALLENGE_ID".to_string(),
-                    message: "Invalid challenge ID format".to_string(),
-                });
+                return error_message("INVALID_CHALLENGE_ID", "Invalid challenge ID format");
             }
         };
 
@@ -160,36 +199,25 @@ where
         let challenge = match self.challenge_service.get_challenge(challenge_uuid).await {
             Ok(Some(challenge)) => challenge,
             Ok(None) => {
-                return Some(ServerMessage::Error {
-                    code: "CHALLENGE_NOT_FOUND".to_string(),
-                    message: format!("Challenge {} not found", challenge_id_str),
-                });
+                return error_message("CHALLENGE_NOT_FOUND", &format!("Challenge {} not found", challenge_id_str));
             }
             Err(e) => {
                 tracing::error!("Failed to load challenge: {}", e);
-                return Some(ServerMessage::Error {
-                    code: "CHALLENGE_LOAD_ERROR".to_string(),
-                    message: "Failed to load challenge".to_string(),
-                });
+                return error_message("CHALLENGE_LOAD_ERROR", "Failed to load challenge");
             }
         };
 
         // Get session and player info via async session port
-        let client_id_str = client_id.to_string();
-        let session_id = match self.sessions.get_client_session(&client_id_str).await {
+        let session_id = match self.sessions.get_client_session(&client_id).await {
             Some(sid) => Some(sid),
             None => {
-                return Some(ServerMessage::Error {
-                    code: "NOT_IN_SESSION".to_string(),
-                    message:
-                        "You must join a session before submitting challenge rolls".to_string(),
-                });
+                return error_message("NOT_IN_SESSION", "You must join a session before submitting challenge rolls");
             }
         };
 
         let player_name = self
             .sessions
-            .get_client_user_id(&client_id_str)
+            .get_client_user_id(&client_id)
             .await
             .unwrap_or_else(|| "Unknown Player".to_string());
 
@@ -283,7 +311,8 @@ where
 
         // Broadcast ChallengeResolved to all participants
         if let Some(session_id) = session_id {
-            let result_msg = ServerMessage::ChallengeResolved {
+            let result_msg = ChallengeResolvedMessage {
+                r#type: "ChallengeResolved",
                 challenge_id: challenge_id_str.clone(),
                 challenge_name: challenge.name.clone(),
                 character_name: player_name,
@@ -318,10 +347,10 @@ where
     /// This is the enhanced version that supports dice formulas like "1d20+5".
     pub async fn handle_roll_input(
         &self,
-        client_id: ClientId,
+        client_id: String,
         challenge_id_str: String,
         dice_input: DiceInputType,
-    ) -> Option<ServerMessage> {
+    ) -> Option<serde_json::Value> {
         // Convert DiceInputType to DiceRollInput
         let roll_input = match dice_input {
             DiceInputType::Formula(formula) => DiceRollInput::Formula(formula),
@@ -332,10 +361,7 @@ where
         let challenge_uuid = match uuid::Uuid::parse_str(&challenge_id_str) {
             Ok(uuid) => ChallengeId::from_uuid(uuid),
             Err(_) => {
-                return Some(ServerMessage::Error {
-                    code: "INVALID_CHALLENGE_ID".to_string(),
-                    message: "Invalid challenge ID format".to_string(),
-                });
+                return error_message("INVALID_CHALLENGE_ID", "Invalid challenge ID format");
             }
         };
 
@@ -343,36 +369,25 @@ where
         let challenge = match self.challenge_service.get_challenge(challenge_uuid).await {
             Ok(Some(challenge)) => challenge,
             Ok(None) => {
-                return Some(ServerMessage::Error {
-                    code: "CHALLENGE_NOT_FOUND".to_string(),
-                    message: format!("Challenge {} not found", challenge_id_str),
-                });
+                return error_message("CHALLENGE_NOT_FOUND", &format!("Challenge {} not found", challenge_id_str));
             }
             Err(e) => {
                 tracing::error!("Failed to load challenge: {}", e);
-                return Some(ServerMessage::Error {
-                    code: "CHALLENGE_LOAD_ERROR".to_string(),
-                    message: "Failed to load challenge".to_string(),
-                });
+                return error_message("CHALLENGE_LOAD_ERROR", "Failed to load challenge");
             }
         };
 
         // Get session and player info via async session port
-        let client_id_str = client_id.to_string();
-        let session_id = match self.sessions.get_client_session(&client_id_str).await {
+        let session_id = match self.sessions.get_client_session(&client_id).await {
             Some(sid) => Some(sid),
             None => {
-                return Some(ServerMessage::Error {
-                    code: "NOT_IN_SESSION".to_string(),
-                    message:
-                        "You must join a session before submitting challenge rolls".to_string(),
-                });
+                return error_message("NOT_IN_SESSION", "You must join a session before submitting challenge rolls");
             }
         };
 
         let player_name = self
             .sessions
-            .get_client_user_id(&client_id_str)
+            .get_client_user_id(&client_id)
             .await
             .unwrap_or_else(|| "Unknown Player".to_string());
 
@@ -419,10 +434,7 @@ where
         let roll_result = match roll_input.resolve_with_modifier(character_modifier) {
             Ok(result) => result,
             Err(e) => {
-                return Some(ServerMessage::Error {
-                    code: "INVALID_DICE_FORMULA".to_string(),
-                    message: format!("Invalid dice formula: {}", e),
-                });
+                return error_message("INVALID_DICE_FORMULA", &format!("Invalid dice formula: {}", e));
             }
         };
 
@@ -484,7 +496,8 @@ where
 
         // Broadcast ChallengeResolved to all participants
         if let Some(session_id) = session_id {
-            let result_msg = ServerMessage::ChallengeResolved {
+            let result_msg = ChallengeResolvedMessage {
+                r#type: "ChallengeResolved",
                 challenge_id: challenge_id_str.clone(),
                 challenge_name: challenge.name.clone(),
                 character_name: player_name,
@@ -522,33 +535,22 @@ where
     /// Handle DM-triggered challenges.
     pub async fn handle_trigger(
         &self,
-        client_id: ClientId,
+        client_id: String,
         challenge_id_str: String,
         target_character_id: String,
-    ) -> Option<ServerMessage> {
-        let sessions_read = self.sessions.read().await;
-        let session_id = sessions_read.get_client_session(client_id);
-        let is_dm = session_id
-            .and_then(|sid| sessions_read.get_session(sid))
-            .and_then(|s| s.get_dm())
-            .filter(|dm| dm.client_id == client_id)
-            .is_some();
-
-        if !is_dm {
-            return Some(ServerMessage::Error {
-                code: "NOT_AUTHORIZED".to_string(),
-                message: "Only the DM can trigger challenges".to_string(),
-            });
+    ) -> Option<serde_json::Value> {
+        // Check if client is DM
+        if !self.sessions.is_client_dm(&client_id).await {
+            return error_message("NOT_AUTHORIZED", "Only the DM can trigger challenges");
         }
+
+        let session_id = self.sessions.get_client_session(&client_id).await;
 
         // Parse challenge_id
         let challenge_uuid = match uuid::Uuid::parse_str(&challenge_id_str) {
             Ok(uuid) => ChallengeId::from_uuid(uuid),
             Err(_) => {
-                return Some(ServerMessage::Error {
-                    code: "INVALID_CHALLENGE_ID".to_string(),
-                    message: "Invalid challenge ID format".to_string(),
-                });
+                return error_message("INVALID_CHALLENGE_ID", "Invalid challenge ID format");
             }
         };
 
@@ -556,17 +558,11 @@ where
         let challenge = match self.challenge_service.get_challenge(challenge_uuid).await {
             Ok(Some(challenge)) => challenge,
             Ok(None) => {
-                return Some(ServerMessage::Error {
-                    code: "CHALLENGE_NOT_FOUND".to_string(),
-                    message: format!("Challenge {} not found", challenge_id_str),
-                });
+                return error_message("CHALLENGE_NOT_FOUND", &format!("Challenge {} not found", challenge_id_str));
             }
             Err(e) => {
                 tracing::error!("Failed to load challenge: {}", e);
-                return Some(ServerMessage::Error {
-                    code: "CHALLENGE_LOAD_ERROR".to_string(),
-                    message: "Failed to load challenge".to_string(),
-                });
+                return error_message("CHALLENGE_LOAD_ERROR", "Failed to load challenge");
             }
         };
 
@@ -588,7 +584,8 @@ where
         // Get suggested dice based on difficulty type
         let (suggested_dice, rule_system_hint) = get_dice_suggestion_for_challenge(&challenge);
 
-        let prompt = ServerMessage::ChallengePrompt {
+        let prompt = ChallengePromptMessage {
+            r#type: "ChallengePrompt",
             challenge_id: challenge_id_str.clone(),
             challenge_name: challenge.name.clone(),
             skill_name: skill_name.clone(),
@@ -600,10 +597,12 @@ where
         };
 
         if let Some(session_id) = session_id {
-            drop(sessions_read);
-            let mut sessions_write = self.sessions.write().await;
-            if let Some(session) = sessions_write.get_session_mut(session_id) {
-                session.broadcast_to_players(&prompt);
+            if let Ok(msg_json) = serde_json::to_value(&prompt) {
+                if let Err(e) = self.sessions.broadcast_to_players(session_id, msg_json).await {
+                    tracing::error!("Failed to broadcast challenge prompt: {}", e);
+                }
+            } else {
+                tracing::error!("Failed to serialize challenge prompt");
             }
         }
 
@@ -620,25 +619,17 @@ where
     /// Handle DM approval/rejection of a challenge suggestion.
     pub async fn handle_suggestion_decision(
         &self,
-        client_id: ClientId,
+        client_id: String,
         request_id: String,
         approved: bool,
         modified_difficulty: Option<String>,
-    ) -> Option<ServerMessage> {
-        let sessions_read = self.sessions.read().await;
-        let session_id = sessions_read.get_client_session(client_id);
-        let is_dm = session_id
-            .and_then(|sid| sessions_read.get_session(sid))
-            .and_then(|s| s.get_dm())
-            .filter(|dm| dm.client_id == client_id)
-            .is_some();
-
-        if !is_dm {
-            return Some(ServerMessage::Error {
-                code: "NOT_AUTHORIZED".to_string(),
-                message: "Only the DM can approve challenge suggestions".to_string(),
-            });
+    ) -> Option<serde_json::Value> {
+        // Check if client is DM
+        if !self.sessions.is_client_dm(&client_id).await {
+            return error_message("NOT_AUTHORIZED", "Only the DM can approve challenge suggestions");
         }
+
+        let session_id = self.sessions.get_client_session(&client_id).await;
 
         if approved {
             let approval_item = self.dm_approval_queue_service.get_by_id(&request_id).await;
@@ -654,10 +645,7 @@ where
                                         "Invalid challenge_id in suggestion: {}",
                                         challenge_suggestion.challenge_id
                                     );
-                                    return Some(ServerMessage::Error {
-                                        code: "INVALID_CHALLENGE_ID".to_string(),
-                                        message: "Invalid challenge ID format".to_string(),
-                                    });
+                                    return error_message("INVALID_CHALLENGE_ID", "Invalid challenge ID format");
                                 }
                             };
 
@@ -669,20 +657,11 @@ where
                                         "Challenge {} not found",
                                         challenge_suggestion.challenge_id
                                     );
-                                    return Some(ServerMessage::Error {
-                                        code: "CHALLENGE_NOT_FOUND".to_string(),
-                                        message: format!(
-                                            "Challenge {} not found",
-                                            challenge_suggestion.challenge_id
-                                        ),
-                                    });
+                                    return error_message("CHALLENGE_NOT_FOUND", &format!("Challenge {} not found", challenge_suggestion.challenge_id));
                                 }
                                 Err(e) => {
                                     tracing::error!("Failed to load challenge: {}", e);
-                                    return Some(ServerMessage::Error {
-                                        code: "CHALLENGE_LOAD_ERROR".to_string(),
-                                        message: format!("Failed to load challenge: {}", e),
-                                    });
+                                    return error_message("CHALLENGE_LOAD_ERROR", &format!("Failed to load challenge: {}", e));
                                 }
                             };
 
@@ -695,7 +674,8 @@ where
                         let (suggested_dice, rule_system_hint) =
                             get_dice_suggestion_for_challenge(&challenge);
 
-                        let prompt = ServerMessage::ChallengePrompt {
+                        let prompt = ChallengePromptMessage {
+            r#type: "ChallengePrompt",
                             challenge_id: challenge_suggestion.challenge_id.clone(),
                             challenge_name: challenge.name.clone(),
                             skill_name: challenge_suggestion.skill_name.clone(),
@@ -706,10 +686,14 @@ where
                             rule_system_hint: Some(rule_system_hint),
                         };
 
-                        let sessions_read_inner = self.sessions.read().await;
-                        if let Some(session_id) = sessions_read_inner.get_client_session(client_id)
-                        {
-                            sessions_read_inner.broadcast_to_session(session_id, &prompt);
+                        if let Some(sid) = session_id {
+                            if let Ok(msg_json) = serde_json::to_value(&prompt) {
+                                if let Err(e) = self.sessions.broadcast_to_session(sid, msg_json).await {
+                                    tracing::error!("Failed to broadcast challenge prompt: {}", e);
+                                }
+                            } else {
+                                tracing::error!("Failed to serialize challenge prompt");
+                            }
                         }
 
                         tracing::info!(
@@ -721,25 +705,16 @@ where
                             "No challenge suggestion found in approval item {}",
                             request_id
                         );
-                        return Some(ServerMessage::Error {
-                            code: "NO_CHALLENGE_SUGGESTION".to_string(),
-                            message: "No challenge suggestion found in approval request".to_string(),
-                        });
+                        return error_message("NO_CHALLENGE_SUGGESTION", "No challenge suggestion found in approval request");
                     }
                 }
                 Ok(None) => {
                     tracing::error!("Approval item {} not found", request_id);
-                    return Some(ServerMessage::Error {
-                        code: "APPROVAL_NOT_FOUND".to_string(),
-                        message: format!("Approval request {} not found", request_id),
-                    });
+                    return error_message("APPROVAL_NOT_FOUND", &format!("Approval request {} not found", request_id));
                 }
                 Err(e) => {
                     tracing::error!("Failed to get approval item: {}", e);
-                    return Some(ServerMessage::Error {
-                        code: "APPROVAL_LOOKUP_ERROR".to_string(),
-                        message: format!("Failed to look up approval: {}", e),
-                    });
+                    return error_message("APPROVAL_LOOKUP_ERROR", &format!("Failed to look up approval: {}", e));
                 }
             }
         } else {
@@ -752,29 +727,19 @@ where
     /// Handle DM creating an ad-hoc challenge (no LLM involved)
     pub async fn handle_adhoc_challenge(
         &self,
-        client_id: ClientId,
+        client_id: String,
         challenge_name: String,
         skill_name: String,
         difficulty: String,
         target_pc_id: String,
-        outcomes: crate::infrastructure::websocket::messages::AdHocOutcomes,
-    ) -> Option<ServerMessage> {
-        let sessions_read = self.sessions.read().await;
-        let session_id = sessions_read.get_client_session(client_id);
-
-        // Verify DM
-        let is_dm = session_id
-            .and_then(|sid| sessions_read.get_session(sid))
-            .and_then(|s| s.get_dm())
-            .filter(|dm| dm.client_id == client_id)
-            .is_some();
-
-        if !is_dm {
-            return Some(ServerMessage::Error {
-                code: "NOT_AUTHORIZED".to_string(),
-                message: "Only the DM can create ad-hoc challenges".to_string(),
-            });
+        outcomes: serde_json::Value,  // Accept generic JSON for adhoc outcomes
+    ) -> Option<serde_json::Value> {
+        // Check if client is DM
+        if !self.sessions.is_client_dm(&client_id).await {
+            return error_message("NOT_AUTHORIZED", "Only the DM can create ad-hoc challenges");
         }
+
+        let session_id = self.sessions.get_client_session(&client_id).await;
 
         // Generate a temporary challenge ID for this ad-hoc challenge
         let adhoc_challenge_id = uuid::Uuid::new_v4().to_string();
@@ -797,7 +762,8 @@ where
             ("2d6".to_string(), "Roll 2d6 and add your modifier".to_string())
         };
 
-        let prompt = ServerMessage::ChallengePrompt {
+        let prompt = ChallengePromptMessage {
+            r#type: "ChallengePrompt",
             challenge_id: adhoc_challenge_id.clone(),
             challenge_name: challenge_name.clone(),
             skill_name,
@@ -810,15 +776,23 @@ where
 
         // Broadcast to session (the target player will see it)
         if let Some(sid) = session_id {
-            sessions_read.broadcast_to_session(sid, &prompt);
+            if let Ok(msg_json) = serde_json::to_value(&prompt) {
+                if let Err(e) = self.sessions.broadcast_to_session(sid, msg_json).await {
+                    tracing::error!("Failed to broadcast ad-hoc challenge prompt: {}", e);
+                }
+            } else {
+                tracing::error!("Failed to serialize ad-hoc challenge prompt");
+            }
         }
 
         // Notify DM that challenge was created
-        Some(ServerMessage::AdHocChallengeCreated {
+        let msg = AdHocChallengeCreatedMessage {
+            r#type: "AdHocChallengeCreated",
             challenge_id: adhoc_challenge_id,
             challenge_name,
             target_pc_id,
-        })
+        };
+        serde_json::to_value(&msg).ok()
     }
 }
 

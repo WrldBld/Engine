@@ -244,6 +244,11 @@ impl AppState {
         // Create narrative event service with event bus
         let narrative_event_service = NarrativeEventServiceImpl::new(narrative_event_repo_for_service, event_bus.clone());
 
+        // Initialize session manager (must be before async_session_port which uses it)
+        let sessions = Arc::new(RwLock::new(SessionManager::new(
+            config.session.max_conversation_history,
+        )));
+
         // Create async session port adapter for application services
         let async_session_port: Arc<dyn AsyncSessionPort> =
             Arc::new(SessionManagerAdapter::new(sessions.clone()));
@@ -294,10 +299,6 @@ impl AppState {
             generation_event_tx,
         ));
 
-        let sessions = Arc::new(RwLock::new(SessionManager::new(
-            config.session.max_conversation_history,
-        )));
-
         Ok((Self {
             config: config.clone(),
             repository,
@@ -335,9 +336,9 @@ impl AppState {
             player_character_service,
             scene_resolution_service,
             generation_service,
-            async_session_port,
+            async_session_port: async_session_port.clone(),
             session_join_service: Arc::new(SessionJoinService::new(
-                async_session_port.clone(),
+                async_session_port,
                 world_service,
             )),
             player_action_queue_service,

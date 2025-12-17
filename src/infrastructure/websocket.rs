@@ -20,9 +20,54 @@ use crate::application::services::scene_resolution_service::SceneResolutionServi
 use crate::application::services::player_character_service::PlayerCharacterService;
 use crate::application::services::location_service::LocationService;
 use crate::application::services::interaction_service::InteractionService;
+use crate::application::services::session_join_service as sjs;
+use crate::application::services::challenge_resolution_service as crs;
+use crate::application::ports::outbound::SessionParticipantRole;
 use crate::domain::value_objects::ActionId;
 use crate::infrastructure::session::ClientId;
 use crate::infrastructure::state::AppState;
+
+// Conversion helpers for adapting between infrastructure message types and service DTOs
+
+/// Convert wire format ParticipantRole to canonical SessionParticipantRole
+fn wire_to_canonical_role(role: ParticipantRole) -> SessionParticipantRole {
+    match role {
+        ParticipantRole::DungeonMaster => SessionParticipantRole::DungeonMaster,
+        ParticipantRole::Player => SessionParticipantRole::Player,
+        ParticipantRole::Spectator => SessionParticipantRole::Spectator,
+    }
+}
+
+/// Convert canonical SessionParticipantRole to wire format ParticipantRole
+fn canonical_to_wire_role(role: SessionParticipantRole) -> ParticipantRole {
+    match role {
+        SessionParticipantRole::DungeonMaster => ParticipantRole::DungeonMaster,
+        SessionParticipantRole::Player => ParticipantRole::Player,
+        SessionParticipantRole::Spectator => ParticipantRole::Spectator,
+    }
+}
+
+/// Convert session_join_service::ParticipantInfo to wire format messages::ParticipantInfo
+fn from_service_participant(p: sjs::ParticipantInfo) -> ParticipantInfo {
+    ParticipantInfo {
+        user_id: p.user_id,
+        role: canonical_to_wire_role(p.role),
+        character_name: p.character_name,
+    }
+}
+
+/// Convert messages::DiceInputType to challenge_resolution_service::DiceInputType
+fn to_service_dice_input(input: messages::DiceInputType) -> crs::DiceInputType {
+    match input {
+        messages::DiceInputType::Formula(f) => crs::DiceInputType::Formula(f),
+        messages::DiceInputType::Manual(v) => crs::DiceInputType::Manual(v),
+    }
+}
+
+/// Try to deserialize a serde_json::Value into a ServerMessage
+fn value_to_server_message(value: serde_json::Value) -> Option<ServerMessage> {
+    serde_json::from_value(value).ok()
+}
 
 /// WebSocket upgrade handler
 pub async fn ws_handler(
@@ -95,17 +140,14 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
         }
     }
 
-    // Clean up: remove client from session
-    {
-        let mut sessions = state.sessions.write().await;
-        if let Some((session_id, participant)) = sessions.leave_session(client_id) {
-            tracing::info!(
-                "Client {} (user: {}) disconnected from session {}",
-                client_id,
-                participant.user_id,
-                session_id
-            );
-        }
+    // Clean up: remove client from session via async port
+    if let Some((session_id, participant)) = state.async_session_port.client_leave_session(&client_id.to_string()).await {
+        tracing::info!(
+            "Client {} (user: {}) disconnected from session {}",
+            client_id,
+            participant.user_id,
+            session_id
+        );
     }
 
     // Cancel the send task
@@ -136,34 +178,53 @@ async fn handle_message(
                 world_id
             );
 
+            // Create a JSON-value sender that forwards to the ServerMessage sender
+            let (json_tx, mut json_rx) = mpsc::unbounded_channel::<serde_json::Value>();
+            let server_tx = sender.clone();
+            tokio::spawn(async move {
+                while let Some(value) = json_rx.recv().await {
+                    if let Ok(msg) = serde_json::from_value::<ServerMessage>(value) {
+                        let _ = server_tx.send(msg);
+                    }
+                }
+            });
+
             // Delegate to injected SessionJoinService to join or create a session
             match state.session_join_service.join_or_create_session_for_world(
-                client_id,
+                client_id.to_string(),
                 user_id.clone(),
-                role,
+                wire_to_canonical_role(role),
                 world_id,
-                sender,
+                json_tx,
             )
             .await
             {
                 Ok(session_joined_info) => {
-                    // Broadcast PlayerJoined to other participants in the session
+                    // Broadcast PlayerJoined to other participants via async port
                     let player_joined_msg = ServerMessage::PlayerJoined {
                         user_id: user_id.clone(),
                         role,
                         character_name: None, // TODO: Load from character selection
                     };
-                    let sessions = state.sessions.read().await;
-                    sessions.broadcast_to_session_except(
-                        session_joined_info.session_id,
-                        &player_joined_msg,
-                        client_id,
-                    );
+                    if let Ok(msg_json) = serde_json::to_value(&player_joined_msg) {
+                        let _ = state.async_session_port.broadcast_except(
+                            session_joined_info.session_id,
+                            msg_json,
+                            &client_id.to_string(),
+                        ).await;
+                    }
+
+                    // Convert service's ParticipantInfo to messages::ParticipantInfo
+                    let participants: Vec<ParticipantInfo> = session_joined_info
+                        .participants
+                        .into_iter()
+                        .map(from_service_participant)
+                        .collect();
 
                     Some(ServerMessage::SessionJoined {
                         session_id: session_joined_info.session_id.to_string(),
                         role,
-                        participants: session_joined_info.participants,
+                        participants,
                         world_snapshot: session_joined_info.world_snapshot,
                     })
                 }
@@ -188,17 +249,10 @@ async fn handle_message(
             let action_id = ActionId::new();
             let action_id_str = action_id.to_string();
 
-            // Get the client's session and user info
-            let sessions = state.sessions.read().await;
-            let (session_id, player_id) = match sessions.get_client_session(client_id) {
-                Some(sid) => {
-                    let pid = sessions
-                        .get_session(sid)
-                        .and_then(|s| s.participants.get(&client_id))
-                        .map(|p| p.user_id.clone())
-                        .unwrap_or_else(|| "unknown".to_string());
-                    (Some(sid), pid)
-                }
+            // Get the client's session and user info via async port
+            let client_id_str = client_id.to_string();
+            let session_id = match state.async_session_port.get_client_session(&client_id_str).await {
+                Some(sid) => sid,
                 None => {
                     tracing::warn!("Client {} sent action but is not in any session", client_id);
                     return Some(ServerMessage::Error {
@@ -207,9 +261,8 @@ async fn handle_message(
                     });
                 }
             };
-
-            let session_id = session_id.expect("session_id should exist at this point");
-            drop(sessions); // Release lock before async queue operation
+            let player_id = state.async_session_port.get_client_user_id(&client_id_str).await
+                .unwrap_or_else(|| "unknown".to_string());
 
             // Handle Travel actions immediately (update location and resolve scene)
             if action_type == "travel" {
@@ -324,76 +377,76 @@ async fn handle_message(
                                                 interactions,
                                             };
 
-                                            // Broadcast SceneUpdate to the player
-                                            // Also check for split party and notify DM
-                                            let mut sessions = state.sessions.write().await;
-                                            if let Some(session) = sessions.get_session_mut(session_id) {
-                                                session.current_scene_id = Some(scene.id.to_string());
-                                                session.send_to_participant(&player_id, &scene_update);
-                                                tracing::info!(
-                                                    "Sent scene update to player {} after travel to location {}",
-                                                    player_id,
-                                                    location_id_str
-                                                );
+                                            // Update scene and send to player via async port
+                                            let _ = state.async_session_port.update_session_scene(session_id, scene.id.to_string()).await;
+                                            if let Ok(scene_msg) = serde_json::to_value(&scene_update) {
+                                                let _ = state.async_session_port.send_to_participant(session_id, &player_id, scene_msg).await;
+                                            }
+                                            tracing::info!(
+                                                "Sent scene update to player {} after travel to location {}",
+                                                player_id,
+                                                location_id_str
+                                            );
 
-                                                // Check for split party and notify DM
-                                                if let Ok(resolution_result) = state
-                                                    .scene_resolution_service
-                                                    .resolve_scene_for_session(session_id)
-                                                    .await
-                                                {
-                                                    if resolution_result.is_split_party {
-                                                        // Get location details for notification
-                                                        let mut split_locations = Vec::new();
-                                                        let pcs = match state
-                                                            .player_character_service
-                                                            .get_pcs_by_session(session_id)
+                                            // Check for split party and notify DM
+                                            if let Ok(resolution_result) = state
+                                                .scene_resolution_service
+                                                .resolve_scene_for_session(session_id)
+                                                .await
+                                            {
+                                                if resolution_result.is_split_party {
+                                                    // Get location details for notification
+                                                    let mut split_locations = Vec::new();
+                                                    let pcs = match state
+                                                        .player_character_service
+                                                        .get_pcs_by_session(session_id)
+                                                        .await
+                                                    {
+                                                        Ok(pcs) => pcs,
+                                                        Err(_) => vec![],
+                                                    };
+
+                                                    // Group PCs by location
+                                                    let mut location_pcs: std::collections::HashMap<String, Vec<&_>> = std::collections::HashMap::new();
+                                                    for pc in &pcs {
+                                                        location_pcs
+                                                            .entry(pc.current_location_id.to_string())
+                                                            .or_insert_with(Vec::new)
+                                                            .push(pc);
+                                                    }
+
+                                                    // Build location info
+                                                    for (loc_id_str, pcs_at_loc) in location_pcs.iter() {
+                                                        if let Ok(location) = state
+                                                            .location_service
+                                                            .get_location(crate::domain::value_objects::LocationId::from_uuid(
+                                                                uuid::Uuid::parse_str(loc_id_str).unwrap_or_default()
+                                                            ))
                                                             .await
                                                         {
-                                                            Ok(pcs) => pcs,
-                                                            Err(_) => vec![],
-                                                        };
-
-                                                        // Group PCs by location
-                                                        let mut location_pcs: std::collections::HashMap<String, Vec<&_>> = std::collections::HashMap::new();
-                                                        for pc in &pcs {
-                                                            location_pcs
-                                                                .entry(pc.current_location_id.to_string())
-                                                                .or_insert_with(Vec::new)
-                                                                .push(pc);
-                                                        }
-
-                                                        // Build location info
-                                                        for (loc_id_str, pcs_at_loc) in location_pcs.iter() {
-                                                            if let Ok(location) = state
-                                                                .location_service
-                                                                .get_location(crate::domain::value_objects::LocationId::from_uuid(
-                                                                    uuid::Uuid::parse_str(loc_id_str).unwrap_or_default()
-                                                                ))
-                                                                .await
-                                                            {
-                                                                if let Some(loc) = location {
-                                                                    split_locations.push(crate::infrastructure::websocket::messages::SplitPartyLocation {
-                                                                        location_id: loc_id_str.clone(),
-                                                                        location_name: loc.name,
-                                                                        pc_count: pcs_at_loc.len(),
-                                                                        pc_names: pcs_at_loc.iter().map(|pc| pc.name.clone()).collect(),
-                                                                    });
-                                                                }
+                                                            if let Some(loc) = location {
+                                                                split_locations.push(crate::infrastructure::websocket::messages::SplitPartyLocation {
+                                                                    location_id: loc_id_str.clone(),
+                                                                    location_name: loc.name,
+                                                                    pc_count: pcs_at_loc.len(),
+                                                                    pc_names: pcs_at_loc.iter().map(|pc| pc.name.clone()).collect(),
+                                                                });
                                                             }
                                                         }
+                                                    }
 
-                                                        // Send notification to DM
-                                                        if session.has_dm() {
-                                                            session.send_to_dm(&ServerMessage::SplitPartyNotification {
-                                                                location_count: split_locations.len(),
-                                                                locations: split_locations,
-                                                            });
+                                                    // Send notification to DM via async port
+                                                    if state.async_session_port.session_has_dm(session_id).await {
+                                                        let dm_msg = ServerMessage::SplitPartyNotification {
+                                                            location_count: split_locations.len(),
+                                                            locations: split_locations,
+                                                        };
+                                                        if let Ok(dm_json) = serde_json::to_value(&dm_msg) {
+                                                            let _ = state.async_session_port.send_to_dm(session_id, dm_json).await;
                                                         }
                                                     }
                                                 }
                                             }
-                                            drop(sessions);
 
                                             // Return acknowledgment
                                             return Some(ServerMessage::ActionReceived {
@@ -464,19 +517,18 @@ async fn handle_message(
                         .await
                         .unwrap_or(0);
 
-                    // Send ActionQueued event to DM
-                    let sessions = state.sessions.read().await;
-                    if let Some(session) = sessions.get_session(session_id) {
-                        if session.has_dm() {
-                            session.send_to_dm(&ServerMessage::ActionQueued {
-                                action_id: action_id_str.clone(),
-                                player_name: player_id.clone(),
-                                action_type: action_type.clone(),
-                                queue_depth: depth,
-                            });
+                    // Send ActionQueued event to DM via async port
+                    if state.async_session_port.session_has_dm(session_id).await {
+                        let dm_msg = ServerMessage::ActionQueued {
+                            action_id: action_id_str.clone(),
+                            player_name: player_id.clone(),
+                            action_type: action_type.clone(),
+                            queue_depth: depth,
+                        };
+                        if let Ok(dm_json) = serde_json::to_value(&dm_msg) {
+                            let _ = state.async_session_port.send_to_dm(session_id, dm_json).await;
                         }
                     }
-                    drop(sessions);
 
                 tracing::info!(
                         "Enqueued action {} from player {} in session {}: {} -> {:?}",
@@ -520,9 +572,8 @@ async fn handle_message(
                 }
             };
 
-            // Get the client's session
-            let sessions_read = state.sessions.read().await;
-            let session_id = match sessions_read.get_client_session(client_id) {
+            // Get the client's session via async port
+            let session_id = match state.async_session_port.get_client_session(&client_id.to_string()).await {
                 Some(sid) => sid,
                 None => {
                     return Some(ServerMessage::Error {
@@ -531,7 +582,6 @@ async fn handle_message(
                     });
                 }
             };
-            drop(sessions_read);
 
             // Load scene from database with relations
             let scene_with_relations = match state.scene_service.get_scene_with_relations(scene_uuid).await {
@@ -620,16 +670,11 @@ async fn handle_message(
                 interactions,
             };
 
-            // Update session's current scene and broadcast to all participants
-            let mut sessions_write = state.sessions.write().await;
-            if let Some(session) = sessions_write.get_session_mut(session_id) {
-                // Update current scene in session
-                session.current_scene_id = Some(scene_id.clone());
-                
-                // Broadcast SceneUpdate to all participants
-                sessions_write.broadcast_to_session(session_id, &scene_update);
+            // Update session's current scene and broadcast via async port
+            let _ = state.async_session_port.update_session_scene(session_id, scene_id.clone()).await;
+            if let Ok(scene_json) = serde_json::to_value(&scene_update) {
+                let _ = state.async_session_port.broadcast_to_session(session_id, scene_json).await;
             }
-            drop(sessions_write);
 
             tracing::info!("Scene change to {} broadcast to session {}", scene_id, session_id);
 
@@ -639,20 +684,15 @@ async fn handle_message(
         ClientMessage::DirectorialUpdate { context: _ } => {
             tracing::debug!("Received directorial update");
 
-            // Only DMs should send directorial updates
-            let sessions = state.sessions.read().await;
-            if let Some(session_id) = sessions.get_client_session(client_id) {
-                if let Some(session) = sessions.get_session(session_id) {
-                    // Verify this client is the DM
-                    if let Some(dm) = session.get_dm() {
-                        if dm.client_id == client_id {
-                            // TODO: Update directorial context and store in session
-                            tracing::info!(
-                                "DM updated directorial context for session {}",
-                                session_id
-                            );
-                        }
-                    }
+            // Only DMs should send directorial updates - check via async port
+            let client_id_str = client_id.to_string();
+            if state.async_session_port.is_client_dm(&client_id_str).await {
+                if let Some(session_id) = state.async_session_port.get_client_session(&client_id_str).await {
+                    // TODO: Update directorial context and store in session
+                    tracing::info!(
+                        "DM updated directorial context for session {}",
+                        session_id
+                    );
                 }
             }
 
@@ -669,15 +709,15 @@ async fn handle_message(
                 decision
             );
 
-            // Only DMs should approve
-            let sessions = state.sessions.read().await;
-            let session_id = sessions.get_client_session(client_id);
-            let dm_id = session_id
-                .and_then(|sid| sessions.get_session(sid))
-                .and_then(|s| s.get_dm())
-                .filter(|dm| dm.client_id == client_id)
-                .map(|dm| dm.user_id.clone());
-            drop(sessions);
+            // Only DMs should approve - check via async port
+            let client_id_str = client_id.to_string();
+            let session_id = state.async_session_port.get_client_session(&client_id_str).await;
+            let is_dm = state.async_session_port.is_client_dm(&client_id_str).await;
+            let dm_id = if is_dm {
+                state.async_session_port.get_client_user_id(&client_id_str).await
+            } else {
+                None
+            };
 
             if let (Some(session_id), Some(dm_id)) = (session_id, dm_id) {
                 // Enqueue to DMActionQueue - returns immediately
@@ -721,8 +761,9 @@ async fn handle_message(
             );
             state
                 .challenge_resolution_service
-                .handle_roll(client_id, challenge_id, roll)
+                .handle_roll(client_id.to_string(), challenge_id, roll)
                 .await
+                .and_then(value_to_server_message)
         }
 
         ClientMessage::ChallengeRollInput {
@@ -736,8 +777,9 @@ async fn handle_message(
             );
             state
                 .challenge_resolution_service
-                .handle_roll_input(client_id, challenge_id, input_type)
+                .handle_roll_input(client_id.to_string(), challenge_id, to_service_dice_input(input_type))
                 .await
+                .and_then(value_to_server_message)
         }
 
         ClientMessage::TriggerChallenge {
@@ -746,8 +788,9 @@ async fn handle_message(
         } => {
             state
                 .challenge_resolution_service
-                .handle_trigger(client_id, challenge_id, target_character_id)
+                .handle_trigger(client_id.to_string(), challenge_id, target_character_id)
                 .await
+                .and_then(value_to_server_message)
         }
 
         ClientMessage::ChallengeSuggestionDecision {
@@ -756,8 +799,9 @@ async fn handle_message(
             modified_difficulty,
         } => state
             .challenge_resolution_service
-            .handle_suggestion_decision(client_id, request_id, approved, modified_difficulty)
-            .await,
+            .handle_suggestion_decision(client_id.to_string(), request_id, approved, modified_difficulty)
+            .await
+            .and_then(value_to_server_message),
 
         ClientMessage::NarrativeEventSuggestionDecision {
             request_id,
@@ -773,7 +817,8 @@ async fn handle_message(
                 approved,
                 selected_outcome,
             )
-            .await,
+            .await
+            .and_then(value_to_server_message),
 
         ClientMessage::RegenerateOutcome {
             request_id,
@@ -857,17 +902,20 @@ async fn handle_message(
                 challenge_name,
                 target_pc_id
             );
+            // Convert AdHocOutcomes to serde_json::Value
+            let outcomes_json = serde_json::to_value(&outcomes).unwrap_or_default();
             state
                 .challenge_resolution_service
                 .handle_adhoc_challenge(
-                    client_id,
+                    client_id.to_string(),
                     challenge_name,
                     skill_name,
                     difficulty,
                     target_pc_id,
-                    outcomes,
+                    outcomes_json,
                 )
                 .await
+                .and_then(value_to_server_message)
         }
     }
 }

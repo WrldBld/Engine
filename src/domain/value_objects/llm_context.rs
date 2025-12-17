@@ -1,4 +1,12 @@
 //! LLM context types - Types for building LLM prompts from game state
+//!
+//! # Architectural Note
+//!
+//! These types intentionally include `serde::Serialize` and `serde::Deserialize`.
+//! They are designed specifically for JSON serialization to LLM services.
+//! Serialization is intrinsic to their purpose, not an infrastructure concern.
+//!
+//! See: plans/snazzy-zooming-hamming.md, Batch 7 Architectural Decision Record
 
 use serde::{Deserialize, Serialize};
 

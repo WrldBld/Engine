@@ -131,19 +131,6 @@ impl Neo4jSkillRepository {
         tracing::debug!("Deleted skill: {}", id);
         Ok(())
     }
-
-    /// Delete all skills for a world
-    pub async fn delete_all_for_world(&self, world_id: WorldId) -> Result<()> {
-        let q = query(
-            "MATCH (w:World {id: $world_id})-[:HAS_SKILL]->(s:Skill)
-            DETACH DELETE s",
-        )
-        .param("world_id", world_id.to_string());
-
-        self.connection.graph().run(q).await?;
-        tracing::debug!("Deleted all skills for world: {}", world_id);
-        Ok(())
-    }
 }
 
 /// Convert a Neo4j row to a Skill
