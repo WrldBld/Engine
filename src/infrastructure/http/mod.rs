@@ -14,6 +14,7 @@ mod session_routes;
 mod queue_routes;
 mod rule_system_routes;
 mod scene_routes;
+mod settings_routes;
 mod sheet_template_routes;
 mod skill_routes;
 mod story_event_routes;
@@ -599,4 +600,6 @@ pub fn create_routes() -> Router<Arc<AppState>> {
         )
         // Queue health check
         .merge(queue_routes::create_queue_routes())
+        // Settings routes
+        .merge(settings_routes::settings_routes())
 }

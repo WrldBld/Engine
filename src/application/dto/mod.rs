@@ -29,9 +29,9 @@ pub use app_events::AppEvent;
 
 // Queue items (used by queue services)
 pub use queue_items::{
-    ApprovalItem, AssetGenerationItem, ChallengeSuggestionInfo, DMAction, DMActionItem,
-    DecisionType, DecisionUrgency, EnhancedChallengeSuggestion, EnhancedOutcomes, LLMRequestItem,
-    LLMRequestType, NarrativeEventSuggestionInfo, OutcomeDetail, PlayerActionItem,
+    ApprovalItem, AssetGenerationItem, ChallengeOutcomeApprovalItem, ChallengeSuggestionInfo,
+    DMAction, DMActionItem, DecisionType, DecisionUrgency, LLMRequestItem,
+    LLMRequestType, NarrativeEventSuggestionInfo, PlayerActionItem,
 };
 
 // Asset DTOs
@@ -43,8 +43,12 @@ pub use asset::{
 
 // Challenge DTOs
 pub use challenge::{
-    ChallengeResponseDto, CreateChallengeRequestDto, DifficultyRequestDto,
-    OutcomesRequestDto, TriggerConditionRequestDto,
+    AdHocOutcomesDto, ChallengeOutcomeApprovalRequest, ChallengeOutcomeDecision,
+    ChallengeOutcomePendingNotification, ChallengeResolvedNotification,
+    ChallengeResponseDto, ChallengeRollSubmittedNotification, CreateChallengeRequestDto,
+    DifficultyRequestDto, OutcomeRequestDto, OutcomeSuggestionReadyNotification,
+    OutcomeSuggestionRequest, OutcomeSuggestionResponse, OutcomesRequestDto,
+    OutcomeTriggerRequestDto, PendingChallengeResolutionDto, TriggerConditionRequestDto,
     UpdateChallengeRequestDto,
 };
 

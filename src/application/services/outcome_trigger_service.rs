@@ -253,7 +253,8 @@ impl OutcomeTriggerService {
 mod tests {
     use super::*;
     use crate::application::ports::outbound::{
-        BroadcastMessage, PendingApprovalInfo, SessionManagementError, SessionWorldContext,
+        BroadcastMessage, PendingApprovalInfo, SessionManagementError, SessionManagementPort,
+        SessionWorldContext,
     };
     use crate::domain::entities::Challenge;
     use crate::domain::value_objects::{ChallengeId, WorldId};
@@ -339,6 +340,14 @@ mod tests {
             _session_id: SessionId,
             _message: &BroadcastMessage,
             _exclude_client: &str,
+        ) -> Result<(), SessionManagementError> {
+            Ok(())
+        }
+
+        fn broadcast_to_session(
+            &self,
+            _session_id: SessionId,
+            _message: &BroadcastMessage,
         ) -> Result<(), SessionManagementError> {
             Ok(())
         }

@@ -26,7 +26,7 @@ pub async fn list_interactions(
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid scene ID".to_string()))?;
 
     let interactions = state
-        .interaction_service
+        .core.interaction_service
         .list_interactions(SceneId::from_uuid(uuid))
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -74,7 +74,7 @@ pub async fn create_interaction(
     interaction = interaction.with_order(req.order);
 
     state
-        .interaction_service
+        .core.interaction_service
         .create_interaction(&interaction)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -98,7 +98,7 @@ pub async fn get_interaction(
     })?;
 
     let interaction = state
-        .interaction_service
+        .core.interaction_service
         .get_interaction(InteractionId::from_uuid(uuid))
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -121,7 +121,7 @@ pub async fn update_interaction(
     })?;
 
     let mut interaction = state
-        .interaction_service
+        .core.interaction_service
         .get_interaction(InteractionId::from_uuid(uuid))
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -140,7 +140,7 @@ pub async fn update_interaction(
     interaction.order = req.order;
 
     state
-        .interaction_service
+        .core.interaction_service
         .update_interaction(&interaction)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -161,7 +161,7 @@ pub async fn delete_interaction(
     })?;
 
     state
-        .interaction_service
+        .core.interaction_service
         .delete_interaction(InteractionId::from_uuid(uuid))
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -183,7 +183,7 @@ pub async fn set_interaction_availability(
     })?;
 
     state
-        .interaction_service
+        .core.interaction_service
         .set_interaction_availability(InteractionId::from_uuid(uuid), req.available)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;

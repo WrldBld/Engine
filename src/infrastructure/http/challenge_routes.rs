@@ -33,7 +33,7 @@ pub async fn list_challenges(
     let world_id = WorldId::from_uuid(uuid);
 
     let challenges = state
-        .challenge_service
+                .game.challenge_service
         .list_challenges(world_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -56,7 +56,7 @@ pub async fn list_scene_challenges(
     let scene_id = SceneId::from_uuid(uuid);
 
     let challenges = state
-        .challenge_service
+                .game.challenge_service
         .list_by_scene(scene_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -79,7 +79,7 @@ pub async fn list_active_challenges(
     let world_id = WorldId::from_uuid(uuid);
 
     let challenges = state
-        .challenge_service
+                .game.challenge_service
         .list_active(world_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -102,7 +102,7 @@ pub async fn list_favorite_challenges(
     let world_id = WorldId::from_uuid(uuid);
 
     let challenges = state
-        .challenge_service
+                .game.challenge_service
         .list_favorites(world_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -125,7 +125,7 @@ pub async fn get_challenge(
     let challenge_id = ChallengeId::from_uuid(uuid);
 
     let challenge = state
-        .challenge_service
+                .game.challenge_service
         .get_challenge(challenge_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -146,7 +146,7 @@ pub async fn create_challenge(
 
     // Verify world exists
     let _ = state
-        .world_service
+        .core.world_service
         .get_world(world_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -199,7 +199,7 @@ pub async fn create_challenge(
 
     // Save via service
     let challenge = state
-        .challenge_service
+                .game.challenge_service
         .create_challenge(challenge)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -219,7 +219,7 @@ pub async fn update_challenge(
 
     // Get existing challenge
     let mut challenge = state
-        .challenge_service
+                .game.challenge_service
         .get_challenge(challenge_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -279,7 +279,7 @@ pub async fn update_challenge(
 
     // Save updates
     let challenge = state
-        .challenge_service
+                .game.challenge_service
         .update_challenge(challenge)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -298,7 +298,7 @@ pub async fn delete_challenge(
 
     // Verify challenge exists
     let _ = state
-        .challenge_service
+                .game.challenge_service
         .get_challenge(challenge_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -306,7 +306,7 @@ pub async fn delete_challenge(
 
     // Delete it
     state
-        .challenge_service
+                .game.challenge_service
         .delete_challenge(challenge_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -324,7 +324,7 @@ pub async fn toggle_favorite(
     let challenge_id = ChallengeId::from_uuid(uuid);
 
     let is_favorite = state
-        .challenge_service
+                .game.challenge_service
         .toggle_favorite(challenge_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -343,7 +343,7 @@ pub async fn set_active(
     let challenge_id = ChallengeId::from_uuid(uuid);
 
     state
-        .challenge_service
+                .game.challenge_service
         .set_active(challenge_id, active)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;

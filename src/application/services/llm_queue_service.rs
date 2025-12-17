@@ -13,7 +13,7 @@ use crate::application::ports::outbound::{
     ApprovalQueuePort, ChallengeRepositoryPort, LlmPort, NarrativeEventRepositoryPort,
     ProcessingQueuePort, QueueError, QueueItemId, QueueItemStatus, QueueNotificationPort, SkillRepositoryPort,
 };
-use crate::application::services::llm_service::LLMService;
+use crate::application::services::llm::LLMService;
 use crate::application::services::generation_service::GenerationEvent;
 use crate::application::dto::{
     ApprovalItem, ChallengeSuggestionInfo, DecisionType, DecisionUrgency, LLMRequestItem,

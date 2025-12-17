@@ -30,7 +30,7 @@ pub async fn list_skills(
     let world_id = WorldId::from_uuid(uuid);
 
     let skills = state
-        .skill_service
+        .core.skill_service
         .list_skills(world_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -57,7 +57,7 @@ pub async fn create_skill(
     };
 
     let skill = state
-        .skill_service
+        .core.skill_service
         .create_skill(world_id, service_req)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -81,7 +81,7 @@ pub async fn update_skill(
 
     // Get existing skill to verify ownership
     let existing_skill = state
-        .skill_service
+        .core.skill_service
         .get_skill(skill_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -106,7 +106,7 @@ pub async fn update_skill(
     };
 
     let skill = state
-        .skill_service
+        .core.skill_service
         .update_skill(skill_id, service_req)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -129,7 +129,7 @@ pub async fn delete_skill(
 
     // Get the skill to verify it exists and belongs to this world
     let skill = state
-        .skill_service
+        .core.skill_service
         .get_skill(skill_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -145,7 +145,7 @@ pub async fn delete_skill(
 
     // Delete the skill (service will validate it's custom)
     state
-        .skill_service
+        .core.skill_service
         .delete_skill(skill_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -166,7 +166,7 @@ pub async fn initialize_skills(
     let world_id = WorldId::from_uuid(uuid);
 
     let skills = state
-        .skill_service
+        .core.skill_service
         .initialize_defaults(world_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;

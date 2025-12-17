@@ -465,3 +465,290 @@ impl From<Challenge> for ChallengeResponseDto {
     }
 }
 
+// ============================================================================
+// Ad-hoc Challenge DTOs
+// ============================================================================
+
+/// Ad-hoc challenge outcomes provided by the DM (simple string descriptions)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdHocOutcomesDto {
+    /// What happens on success
+    pub success: String,
+    /// What happens on failure
+    pub failure: String,
+    /// Optional critical success outcome
+    #[serde(default)]
+    pub critical_success: Option<String>,
+    /// Optional critical failure outcome
+    #[serde(default)]
+    pub critical_failure: Option<String>,
+}
+
+// ============================================================================
+// Challenge Outcome Approval DTOs (P3.3)
+// ============================================================================
+
+/// Pending challenge resolution awaiting DM approval
+///
+/// After a player rolls, this structure holds the resolution details
+/// until the DM approves, edits, or requests an alternative.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingChallengeResolutionDto {
+    /// Unique ID for this resolution (for tracking in approval queue)
+    pub resolution_id: String,
+    /// ID of the challenge being resolved
+    pub challenge_id: String,
+    /// Name of the challenge
+    pub challenge_name: String,
+    /// ID of the character who rolled
+    pub character_id: String,
+    /// Name of the character who rolled
+    pub character_name: String,
+    /// Raw die roll (before modifier)
+    pub roll: i32,
+    /// Character's skill modifier
+    pub modifier: i32,
+    /// Total result (roll + modifier)
+    pub total: i32,
+    /// Determined outcome type (e.g., "Success", "Critical Failure")
+    pub outcome_type: String,
+    /// The pre-defined outcome description from the challenge
+    pub outcome_description: String,
+    /// Triggers that will execute when this outcome is applied
+    pub outcome_triggers: Vec<OutcomeTriggerRequestDto>,
+    /// Roll breakdown string (e.g., "1d20(15) + 3 = 18")
+    #[serde(default)]
+    pub roll_breakdown: Option<String>,
+    /// Individual die rolls
+    #[serde(default)]
+    pub individual_rolls: Option<Vec<i32>>,
+    /// When the roll was submitted
+    pub timestamp: String,
+}
+
+/// DM's decision on a challenge outcome
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(tag = "action", rename_all = "snake_case")]
+pub enum ChallengeOutcomeDecision {
+    /// Accept the outcome as-is
+    Accept,
+    /// Edit the outcome description
+    Edit {
+        /// The modified outcome text
+        modified_description: String,
+    },
+    /// Request LLM to suggest alternative outcomes
+    Suggest {
+        /// Optional guidance for the LLM
+        #[serde(default)]
+        guidance: Option<String>,
+    },
+}
+
+/// Request to approve/modify a challenge outcome
+#[derive(Debug, Clone, Deserialize)]
+pub struct ChallengeOutcomeApprovalRequest {
+    /// ID of the pending resolution
+    pub resolution_id: String,
+    /// The DM's decision
+    #[serde(flatten)]
+    pub decision: ChallengeOutcomeDecision,
+}
+
+/// Request for LLM outcome suggestions
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OutcomeSuggestionRequest {
+    /// Challenge ID (for context lookup)
+    pub challenge_id: String,
+    /// Name of the challenge
+    pub challenge_name: String,
+    /// Description of the challenge situation
+    pub challenge_description: String,
+    /// Skill being tested
+    pub skill_name: String,
+    /// Outcome tier to generate suggestions for
+    pub outcome_type: String,
+    /// Roll context (e.g., "rolled 15 + 3 = 18 vs DC 15")
+    pub roll_context: String,
+    /// Optional DM guidance for generation
+    #[serde(default)]
+    pub guidance: Option<String>,
+    /// Narrative context for continuity
+    #[serde(default)]
+    pub narrative_context: Option<String>,
+}
+
+/// Response containing LLM-generated outcome suggestions
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OutcomeSuggestionResponse {
+    /// Resolution ID this applies to
+    pub resolution_id: String,
+    /// Alternative outcome descriptions
+    pub suggestions: Vec<String>,
+}
+
+// ============================================================================
+// Challenge Notification DTOs (for application layer → infrastructure)
+// ============================================================================
+
+/// Notification that a challenge has been resolved
+///
+/// This DTO is serialized and sent via the session port. The infrastructure
+/// layer can map this to its own message format (e.g., WebSocket ServerMessage).
+#[derive(Debug, Clone, Serialize)]
+pub struct ChallengeResolvedNotification {
+    /// Message type discriminator for WebSocket routing
+    #[serde(rename = "type")]
+    pub message_type: &'static str,
+    pub challenge_id: String,
+    pub challenge_name: String,
+    pub character_name: String,
+    pub roll: i32,
+    pub modifier: i32,
+    pub total: i32,
+    pub outcome: String,
+    pub outcome_description: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub roll_breakdown: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub individual_rolls: Option<Vec<i32>>,
+}
+
+impl ChallengeResolvedNotification {
+    pub fn new(
+        challenge_id: String,
+        challenge_name: String,
+        character_name: String,
+        roll: i32,
+        modifier: i32,
+        total: i32,
+        outcome: String,
+        outcome_description: String,
+        roll_breakdown: Option<String>,
+        individual_rolls: Option<Vec<i32>>,
+    ) -> Self {
+        Self {
+            message_type: "ChallengeResolved",
+            challenge_id,
+            challenge_name,
+            character_name,
+            roll,
+            modifier,
+            total,
+            outcome,
+            outcome_description,
+            roll_breakdown,
+            individual_rolls,
+        }
+    }
+}
+
+/// Notification that a challenge roll was submitted and is awaiting DM approval
+#[derive(Debug, Clone, Serialize)]
+pub struct ChallengeRollSubmittedNotification {
+    #[serde(rename = "type")]
+    pub message_type: &'static str,
+    pub challenge_id: String,
+    pub challenge_name: String,
+    pub roll: i32,
+    pub modifier: i32,
+    pub total: i32,
+    pub outcome_type: String,
+    pub status: String,
+}
+
+impl ChallengeRollSubmittedNotification {
+    pub fn new(
+        challenge_id: String,
+        challenge_name: String,
+        roll: i32,
+        modifier: i32,
+        total: i32,
+        outcome_type: String,
+    ) -> Self {
+        Self {
+            message_type: "ChallengeRollSubmitted",
+            challenge_id,
+            challenge_name,
+            roll,
+            modifier,
+            total,
+            outcome_type,
+            status: "awaiting_dm_approval".to_string(),
+        }
+    }
+}
+
+/// Notification for DM that a challenge outcome is pending approval
+#[derive(Debug, Clone, Serialize)]
+pub struct ChallengeOutcomePendingNotification {
+    #[serde(rename = "type")]
+    pub message_type: &'static str,
+    pub resolution_id: String,
+    pub challenge_id: String,
+    pub challenge_name: String,
+    pub character_id: String,
+    pub character_name: String,
+    pub roll: i32,
+    pub modifier: i32,
+    pub total: i32,
+    pub outcome_type: String,
+    pub outcome_description: String,
+    pub outcome_triggers: Vec<crate::domain::value_objects::ProposedToolInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub roll_breakdown: Option<String>,
+}
+
+impl ChallengeOutcomePendingNotification {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        resolution_id: String,
+        challenge_id: String,
+        challenge_name: String,
+        character_id: String,
+        character_name: String,
+        roll: i32,
+        modifier: i32,
+        total: i32,
+        outcome_type: String,
+        outcome_description: String,
+        outcome_triggers: Vec<crate::domain::value_objects::ProposedToolInfo>,
+        roll_breakdown: Option<String>,
+    ) -> Self {
+        Self {
+            message_type: "ChallengeOutcomePending",
+            resolution_id,
+            challenge_id,
+            challenge_name,
+            character_id,
+            character_name,
+            roll,
+            modifier,
+            total,
+            outcome_type,
+            outcome_description,
+            outcome_triggers,
+            roll_breakdown,
+        }
+    }
+}
+
+/// Notification that LLM-generated suggestions are ready
+#[derive(Debug, Clone, Serialize)]
+pub struct OutcomeSuggestionReadyNotification {
+    #[serde(rename = "type")]
+    pub message_type: &'static str,
+    pub resolution_id: String,
+    pub suggestions: Vec<String>,
+}
+
+impl OutcomeSuggestionReadyNotification {
+    pub fn new(resolution_id: String, suggestions: Vec<String>) -> Self {
+        Self {
+            message_type: "OutcomeSuggestionReady",
+            resolution_id,
+            suggestions,
+        }
+    }
+}
+

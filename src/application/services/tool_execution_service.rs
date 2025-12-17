@@ -787,6 +787,14 @@ mod tests {
             Ok(())
         }
 
+        fn broadcast_to_session(
+            &self,
+            _session_id: SessionId,
+            _message: &crate::application::ports::outbound::BroadcastMessage,
+        ) -> Result<(), crate::application::ports::outbound::SessionManagementError> {
+            Ok(())
+        }
+
         fn add_to_conversation_history(
             &mut self,
             _session_id: SessionId,

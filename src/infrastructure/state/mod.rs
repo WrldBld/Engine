@@ -1,4 +1,21 @@
 //! Shared application state
+//!
+//! This module provides a modular application state structure that composes
+//! several sub-structures for better organization and maintainability.
+
+mod asset_services;
+mod core_services;
+mod event_infra;
+mod game_services;
+mod player_services;
+mod queue_services;
+
+pub use asset_services::AssetServices;
+pub use core_services::CoreServices;
+pub use event_infra::EventInfrastructure;
+pub use game_services::GameServices;
+pub use player_services::PlayerServices;
+pub use queue_services::QueueServices;
 
 use std::sync::Arc;
 
@@ -8,18 +25,17 @@ use tokio::sync::RwLock;
 use crate::application::ports::outbound::AsyncSessionPort;
 use crate::application::services::{
     AssetGenerationQueueService, AssetServiceImpl,
-    challenge_resolution_service::ChallengeResolutionService, ChallengeServiceImpl,
-    CharacterServiceImpl, DMActionQueueService, DMApprovalQueueService, EventChainServiceImpl,
-    InteractionServiceImpl, LLMQueueService, LocationServiceImpl, NarrativeEventApprovalService,
-    NarrativeEventServiceImpl, PlayerActionQueueService, PlayerCharacterServiceImpl,
-    SceneResolutionServiceImpl, SceneServiceImpl, SheetTemplateService,
-    SkillServiceImpl, StoryEventService, RelationshipServiceImpl, WorkflowConfigService,
-    WorldServiceImpl, GenerationQueueProjectionService, SessionJoinService, OutcomeTriggerService,
+    challenge_resolution_service::ChallengeResolutionService, ChallengeOutcomeApprovalService,
+    ChallengeServiceImpl, CharacterServiceImpl, DMActionQueueService, DMApprovalQueueService,
+    EventChainServiceImpl, InteractionServiceImpl, LLMQueueService, LocationServiceImpl,
+    NarrativeEventApprovalService, NarrativeEventServiceImpl, PlayerActionQueueService,
+    PlayerCharacterServiceImpl, SceneResolutionServiceImpl, SceneServiceImpl, SettingsService,
+    SheetTemplateService, SkillServiceImpl, StoryEventService, RelationshipServiceImpl,
+    WorkflowConfigService, WorldServiceImpl, GenerationQueueProjectionService, SessionJoinService,
+    OutcomeTriggerService,
 };
 use crate::application::services::generation_service::{GenerationService, GenerationEvent};
-use crate::application::dto::{
-    AppEvent, ApprovalItem, AssetGenerationItem, DMActionItem, LLMRequestItem, PlayerActionItem,
-};
+use crate::application::dto::AppEvent;
 use crate::application::ports::outbound::{
     AppEventRepositoryPort, EventBusPort, GenerationReadStatePort,
 };
@@ -28,7 +44,7 @@ use crate::infrastructure::config::AppConfig;
 use crate::infrastructure::event_bus::{InProcessEventNotifier, SqliteEventBus};
 use crate::infrastructure::export::Neo4jWorldExporter;
 use crate::infrastructure::ollama::OllamaClient;
-use crate::infrastructure::persistence::Neo4jRepository;
+use crate::infrastructure::persistence::{Neo4jRepository, SqliteSettingsRepository};
 use crate::infrastructure::queues::QueueFactory;
 use crate::infrastructure::repositories::{
     SqliteAppEventRepository, SqliteGenerationReadStateRepository,
@@ -37,6 +53,9 @@ use crate::infrastructure::session::SessionManager;
 use crate::infrastructure::session_adapter::SessionManagerAdapter;
 
 /// Shared application state
+///
+/// This struct composes several sub-structures that group related services
+/// for better organization and maintainability.
 pub struct AppState {
     pub config: AppConfig,
     /// Neo4j repository - kept for potential direct access, normally use services
@@ -53,58 +72,15 @@ pub struct AppState {
     pub sessions: Arc<RwLock<SessionManager>>,
     /// Async session port used by application services (hexagonal boundary over SessionManager)
     pub async_session_port: Arc<dyn AsyncSessionPort>,
-    // Application services
-    pub world_service: WorldServiceImpl,
-    pub character_service: CharacterServiceImpl,
-    pub location_service: LocationServiceImpl,
-    pub scene_service: SceneServiceImpl,
-    pub skill_service: SkillServiceImpl,
-    pub interaction_service: InteractionServiceImpl,
-    pub relationship_service: RelationshipServiceImpl,
-    pub story_event_service: StoryEventService,
-    pub challenge_service: ChallengeServiceImpl,
-    pub challenge_resolution_service: Arc<
-        ChallengeResolutionService<
-            ChallengeServiceImpl,
-            SkillServiceImpl,
-            crate::infrastructure::queues::QueueBackendEnum<ApprovalItem>,
-            PlayerCharacterServiceImpl,
-        >,
-    >,
-    pub narrative_event_approval_service: Arc<NarrativeEventApprovalService<NarrativeEventServiceImpl>>,
-    pub narrative_event_service: NarrativeEventServiceImpl,
-    pub event_chain_service: EventChainServiceImpl,
-    pub asset_service: AssetServiceImpl,
-    pub workflow_config_service: WorkflowConfigService,
-    pub sheet_template_service: SheetTemplateService,
-    pub player_character_service: PlayerCharacterServiceImpl,
-    pub scene_resolution_service: SceneResolutionServiceImpl,
-    #[allow(dead_code)] // Kept for potential future direct generation access (currently event-driven via queue)
-    pub generation_service: Arc<GenerationService>,
-    pub session_join_service: Arc<SessionJoinService>,
-    // Queue services - using QueueBackendEnum for runtime backend selection
-    // Note: Services take Arc<Q> where Q implements the port, so Q = QueueBackendEnum<T>
-    // (not Arc<QueueBackendEnum<T>>) since Arc<QueueBackendEnum<T>> implements the port
-    pub player_action_queue_service: Arc<PlayerActionQueueService<
-        crate::infrastructure::queues::QueueBackendEnum<PlayerActionItem>,
-        crate::infrastructure::queues::QueueBackendEnum<LLMRequestItem>,
-    >>,
-    pub dm_action_queue_service: Arc<DMActionQueueService<crate::infrastructure::queues::QueueBackendEnum<DMActionItem>>>,
-    pub llm_queue_service: Arc<LLMQueueService<crate::infrastructure::queues::QueueBackendEnum<LLMRequestItem>, OllamaClient, crate::infrastructure::queues::InProcessNotifier>>,
-    pub asset_generation_queue_service: Arc<
-        AssetGenerationQueueService<
-            crate::infrastructure::queues::QueueBackendEnum<AssetGenerationItem>,
-            ComfyUIClient,
-            crate::infrastructure::queues::InProcessNotifier,
-        >,
-    >,
-    pub dm_approval_queue_service: Arc<DMApprovalQueueService<crate::infrastructure::queues::QueueBackendEnum<ApprovalItem>>>,
-    // Event bus
-    pub event_bus: Arc<dyn EventBusPort<AppEvent>>,
-    pub event_notifier: InProcessEventNotifier,
-    pub app_event_repository: Arc<dyn AppEventRepositoryPort>,
-    pub generation_read_state_repository: Arc<dyn GenerationReadStatePort>,
-    pub generation_queue_projection_service: Arc<GenerationQueueProjectionService>,
+
+    // Grouped services
+    pub core: CoreServices,
+    pub game: GameServices<OllamaClient>,
+    pub queues: QueueServices,
+    pub assets: AssetServices,
+    pub player: PlayerServices,
+    pub events: EventInfrastructure,
+    pub settings_service: Arc<SettingsService>,
 }
 
 impl AppState {
@@ -221,6 +197,24 @@ impl AppState {
             .map_err(|e| anyhow::anyhow!("Failed to connect to event database: {}", e))?;
         tracing::info!("Connected to event database: {}", event_db_path);
 
+        // Initialize settings repository (using separate SQLite database)
+        let settings_db_path = config.queue.sqlite_path.replace(".db", "_settings.db");
+        if let Some(parent) = std::path::Path::new(&settings_db_path).parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| anyhow::anyhow!("Failed to create settings database directory: {}", e))?;
+        }
+        let settings_pool = sqlx::SqlitePool::connect(&format!("sqlite:{}?mode=rwc", settings_db_path))
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to connect to settings database: {}", e))?;
+        tracing::info!("Connected to settings database: {}", settings_db_path);
+
+        let settings_repository = SqliteSettingsRepository::new(settings_pool)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to initialize settings repository: {}", e))?;
+        let settings_repository: Arc<dyn crate::application::ports::outbound::SettingsRepositoryPort> =
+            Arc::new(settings_repository);
+        let settings_service = Arc::new(SettingsService::new(settings_repository));
+
         let app_event_repository_impl = SqliteAppEventRepository::new(event_pool).await
             .map_err(|e| anyhow::anyhow!("Failed to initialize event repository: {}", e))?;
         // Generation read-state repository shares the same SQLite pool as app events
@@ -299,22 +293,20 @@ impl AppState {
             generation_event_tx,
         ));
 
-        Ok((Self {
-            config: config.clone(),
-            repository,
-            llm_client,
-            comfyui_client,
-            sessions: Arc::clone(&sessions),
-            relationship_service,
-            world_service: world_service.clone(),
-            character_service,
-            location_service,
-            scene_service,
-            skill_service: skill_service.clone(),
-            interaction_service,
-            story_event_service: story_event_service.clone(),
-            challenge_service: challenge_service.clone(),
-            challenge_resolution_service: Arc::new(ChallengeResolutionService::new(
+        // Create challenge outcome approval service (P3.3) - must be created before resolution service
+        // Wire LLM port for suggestion generation
+        let llm_for_suggestions = Arc::new(llm_client.clone());
+        let challenge_outcome_approval_service = Arc::new(
+            ChallengeOutcomeApprovalService::new(
+                async_session_port.clone(),
+                outcome_trigger_service.clone(),
+            )
+            .with_llm_port(llm_for_suggestions),
+        );
+
+        // Create challenge resolution service with approval service wired in
+        let challenge_resolution_service = Arc::new(
+            ChallengeResolutionService::new(
                 async_session_port.clone(),
                 Arc::new(challenge_service.clone()),
                 Arc::new(skill_service.clone()),
@@ -322,39 +314,94 @@ impl AppState {
                 event_bus.clone(),
                 dm_approval_queue_service.clone(),
                 outcome_trigger_service,
-            )),
-            narrative_event_service: narrative_event_service.clone(),
-            narrative_event_approval_service: Arc::new(NarrativeEventApprovalService::new(
-                async_session_port.clone(),
-                Arc::new(narrative_event_service),
-                Arc::new(story_event_service),
-            )),
+            )
+            .with_outcome_approval_service(challenge_outcome_approval_service.clone()),
+        );
+
+        // Create narrative event approval service
+        let narrative_event_approval_service = Arc::new(NarrativeEventApprovalService::new(
+            async_session_port.clone(),
+            Arc::new(narrative_event_service.clone()),
+            Arc::new(story_event_service.clone()),
+        ));
+
+        // Create session join service
+        let session_join_service = Arc::new(SessionJoinService::new(
+            async_session_port.clone(),
+            world_service.clone(),
+        ));
+
+        // Create generation queue projection service
+        let generation_queue_projection_service = Arc::new(GenerationQueueProjectionService::new(
+            asset_service.clone(),
+            app_event_repository.clone(),
+            generation_read_state_repository.clone(),
+        ));
+
+        // Build grouped services
+        let core = CoreServices::new(
+            world_service,
+            character_service,
+            location_service,
+            scene_service,
+            skill_service,
+            interaction_service,
+            relationship_service,
+        );
+
+        let game = GameServices::new(
+            story_event_service,
+            challenge_service,
+            challenge_resolution_service,
+            challenge_outcome_approval_service,
+            narrative_event_service,
+            narrative_event_approval_service,
             event_chain_service,
-            asset_service: asset_service.clone(),
-            workflow_config_service,
-            sheet_template_service,
-            player_character_service,
-            scene_resolution_service,
-            generation_service,
-            async_session_port: async_session_port.clone(),
-            session_join_service: Arc::new(SessionJoinService::new(
-                async_session_port,
-                world_service,
-            )),
+        );
+
+        let queues = QueueServices::new(
             player_action_queue_service,
             dm_action_queue_service,
             llm_queue_service,
             asset_generation_queue_service,
             dm_approval_queue_service,
+        );
+
+        let assets = AssetServices::new(
+            asset_service,
+            workflow_config_service,
+            generation_service,
+            generation_queue_projection_service,
+        );
+
+        let player = PlayerServices::new(
+            sheet_template_service,
+            player_character_service,
+            scene_resolution_service,
+            session_join_service,
+        );
+
+        let events = EventInfrastructure::new(
             event_bus,
             event_notifier,
-            app_event_repository: app_event_repository.clone(),
-            generation_read_state_repository: generation_read_state_repository.clone(),
-            generation_queue_projection_service: Arc::new(GenerationQueueProjectionService::new(
-                asset_service.clone(),
-                app_event_repository,
-                generation_read_state_repository,
-            )),
+            app_event_repository,
+            generation_read_state_repository,
+        );
+
+        Ok((Self {
+            config: config.clone(),
+            repository,
+            llm_client,
+            comfyui_client,
+            sessions: Arc::clone(&sessions),
+            async_session_port,
+            core,
+            game,
+            queues,
+            assets,
+            player,
+            events,
+            settings_service,
         }, generation_event_rx))
     }
 }

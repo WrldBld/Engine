@@ -10,12 +10,13 @@ mod ids;
 mod llm_context;
 mod relationship;
 mod rule_system;
+mod settings;
 mod want;
 
 pub use approval::{ApprovalDecision, ProposedToolInfo};
 pub use archetype::{ArchetypeChange, CampbellArchetype};
 pub use comfyui_config::ComfyUIConfig;
-pub use dice::{DiceFormula, DiceParseError, DiceRollInput, DiceRollResult};
+pub use dice::DiceRollInput;
 pub use directorial::{DirectorialNotes};
 pub use game_tools::{ChangeAmount, GameTool, InfoImportance, RelationshipChange};
 pub use ids::*;
@@ -28,5 +29,6 @@ pub use relationship::{FamilyRelation};
 pub use rule_system::{
     DiceSystem, RuleSystemConfig, RuleSystemType, RuleSystemVariant, StatDefinition, SuccessComparison,
 };
+pub use settings::AppSettings;
 
 pub use want::{ActantTarget, Want};

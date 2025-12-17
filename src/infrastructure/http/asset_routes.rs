@@ -27,7 +27,7 @@ pub async fn list_character_assets(
     Path(character_id): Path<String>,
 ) -> Result<Json<Vec<GalleryAssetResponseDto>>, (StatusCode, String)> {
     let assets = state
-        .asset_service
+        .assets.asset_service
         .list_assets(EntityType::Character, &character_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -58,14 +58,14 @@ pub async fn upload_character_asset(
     };
 
     let mut asset = state
-        .asset_service
+        .assets.asset_service
         .create_asset(create_request)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     if req.set_active {
         state
-            .asset_service
+            .assets.asset_service
             .activate_asset(asset.id)
             .await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -87,7 +87,7 @@ pub async fn activate_character_asset(
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid asset ID".to_string()))?;
 
     state
-        .asset_service
+        .assets.asset_service
         .activate_asset(AssetId::from_uuid(uuid))
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -105,7 +105,7 @@ pub async fn update_character_asset_label(
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid asset ID".to_string()))?;
 
     state
-        .asset_service
+        .assets.asset_service
         .update_asset_label(AssetId::from_uuid(uuid), req.label)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -122,7 +122,7 @@ pub async fn delete_character_asset(
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid asset ID".to_string()))?;
 
     state
-        .asset_service
+        .assets.asset_service
         .delete_asset(AssetId::from_uuid(uuid))
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -138,7 +138,7 @@ pub async fn list_location_assets(
     Path(location_id): Path<String>,
 ) -> Result<Json<Vec<GalleryAssetResponseDto>>, (StatusCode, String)> {
     let assets = state
-        .asset_service
+        .assets.asset_service
         .list_assets(EntityType::Location, &location_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -169,14 +169,14 @@ pub async fn upload_location_asset(
     };
 
     let mut asset = state
-        .asset_service
+        .assets.asset_service
         .create_asset(create_request)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     if req.set_active {
         state
-            .asset_service
+            .assets.asset_service
             .activate_asset(asset.id)
             .await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -198,7 +198,7 @@ pub async fn activate_location_asset(
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid asset ID".to_string()))?;
 
     state
-        .asset_service
+        .assets.asset_service
         .activate_asset(AssetId::from_uuid(uuid))
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -215,7 +215,7 @@ pub async fn delete_location_asset(
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid asset ID".to_string()))?;
 
     state
-        .asset_service
+        .assets.asset_service
         .delete_asset(AssetId::from_uuid(uuid))
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -231,7 +231,7 @@ pub async fn list_item_assets(
     Path(item_id): Path<String>,
 ) -> Result<Json<Vec<GalleryAssetResponseDto>>, (StatusCode, String)> {
     let assets = state
-        .asset_service
+        .assets.asset_service
         .list_assets(EntityType::Item, &item_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -262,14 +262,14 @@ pub async fn upload_item_asset(
     };
 
     let mut asset = state
-        .asset_service
+        .assets.asset_service
         .create_asset(create_request)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     if req.set_active {
         state
-            .asset_service
+            .assets.asset_service
             .activate_asset(asset.id)
             .await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -291,7 +291,7 @@ pub async fn activate_item_asset(
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid asset ID".to_string()))?;
 
     state
-        .asset_service
+        .assets.asset_service
         .activate_asset(AssetId::from_uuid(uuid))
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -308,7 +308,7 @@ pub async fn delete_item_asset(
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid asset ID".to_string()))?;
 
     state
-        .asset_service
+        .assets.asset_service
         .delete_asset(AssetId::from_uuid(uuid))
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -357,7 +357,7 @@ pub async fn queue_generation(
     }
 
     let batch = state
-        .asset_service
+        .assets.asset_service
         .create_batch(batch)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -374,7 +374,7 @@ pub async fn queue_generation(
         };
 
         match state
-            .asset_generation_queue_service
+                .queues.asset_generation_queue_service
             .enqueue(generation_item)
             .await
         {
@@ -417,7 +417,7 @@ pub async fn list_queue(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Vec<GenerationBatchResponseDto>>, (StatusCode, String)> {
     let batches = state
-        .asset_service
+        .assets.asset_service
         .list_active_batches()
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -435,7 +435,7 @@ pub async fn list_ready_batches(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Vec<GenerationBatchResponseDto>>, (StatusCode, String)> {
     let batches = state
-        .asset_service
+        .assets.asset_service
         .list_ready_batches()
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -457,7 +457,7 @@ pub async fn get_batch(
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid batch ID".to_string()))?;
 
     let batch = state
-        .asset_service
+        .assets.asset_service
         .get_batch(BatchId::from_uuid(uuid))
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -475,7 +475,7 @@ pub async fn get_batch_assets(
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid batch ID".to_string()))?;
 
     let batch = state
-        .asset_service
+        .assets.asset_service
         .get_batch(BatchId::from_uuid(uuid))
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -484,7 +484,7 @@ pub async fn get_batch_assets(
     let mut assets = Vec::new();
     for asset_id in batch.assets {
         if let Some(asset) = state
-            .asset_service
+            .assets.asset_service
             .get_asset(asset_id)
             .await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -506,7 +506,7 @@ pub async fn select_from_batch(
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid batch ID".to_string()))?;
 
     let batch = state
-        .asset_service
+        .assets.asset_service
         .get_batch(BatchId::from_uuid(uuid))
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -514,7 +514,7 @@ pub async fn select_from_batch(
 
     // Mark batch as completed
     state
-        .asset_service
+        .assets.asset_service
         .update_batch_status(batch.id, BatchStatus::Completed)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -531,7 +531,7 @@ pub async fn select_from_batch(
         let label = req.labels.get(i).cloned().flatten();
         if label.is_some() {
             state
-                .asset_service
+                .assets.asset_service
                 .update_asset_label(AssetId::from_uuid(asset_uuid), label)
                 .await
                 .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -545,7 +545,7 @@ pub async fn select_from_batch(
             let asset_id_str = asset_id.to_string();
             if !selected_set.contains(&asset_id_str) {
                 state
-                    .asset_service
+                    .assets.asset_service
                     .delete_asset(*asset_id)
                     .await
                     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -565,7 +565,7 @@ pub async fn cancel_batch(
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid batch ID".to_string()))?;
 
     let batch = state
-        .asset_service
+        .assets.asset_service
         .get_batch(BatchId::from_uuid(uuid))
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -580,7 +580,7 @@ pub async fn cancel_batch(
     }
 
     state
-        .asset_service
+        .assets.asset_service
         .delete_batch(batch.id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -598,7 +598,7 @@ pub async fn retry_batch(
 
     // Get the original batch
     let original_batch = state
-        .asset_service
+        .assets.asset_service
         .get_batch(BatchId::from_uuid(uuid))
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -629,14 +629,14 @@ pub async fn retry_batch(
     
     // Create the new batch
     let created_batch = state
-        .asset_service
+        .assets.asset_service
         .create_batch(new_batch.clone())
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     // Start processing the new batch
     state
-        .generation_service
+        .assets.generation_service
         .start_batch_processing(created_batch.clone())
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;

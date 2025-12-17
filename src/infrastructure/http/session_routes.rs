@@ -138,7 +138,7 @@ pub async fn create_or_get_dm_session(
 
     // Otherwise create a new session for this world
     let player_snapshot = state
-        .world_service
+        .core.world_service
         .export_world_snapshot(world_id)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;

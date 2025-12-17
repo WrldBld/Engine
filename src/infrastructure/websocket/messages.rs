@@ -102,6 +102,26 @@ pub enum ClientMessage {
         /// Outcome descriptions
         outcomes: AdHocOutcomes,
     },
+
+    // =========================================================================
+    // Challenge Outcome Approval Messages (P3.3)
+    // =========================================================================
+
+    /// DM approves/edits/requests suggestion for challenge outcome
+    ChallengeOutcomeDecision {
+        /// ID of the pending resolution
+        resolution_id: String,
+        /// The decision (accept, edit, or suggest)
+        decision: ChallengeOutcomeDecisionData,
+    },
+
+    /// DM requests LLM to suggest alternative outcome descriptions
+    RequestOutcomeSuggestion {
+        /// ID of the pending resolution
+        resolution_id: String,
+        /// Optional guidance for the LLM
+        guidance: Option<String>,
+    },
 }
 
 /// Messages from server (Engine) to client (Player)
@@ -289,6 +309,53 @@ pub enum ServerMessage {
         challenge_name: String,
         target_pc_id: String,
     },
+
+    // =========================================================================
+    // Challenge Outcome Approval Messages (P3.3)
+    // =========================================================================
+
+    /// Challenge roll submitted, awaiting DM approval (sent to rolling player)
+    ChallengeRollSubmitted {
+        challenge_id: String,
+        challenge_name: String,
+        roll: i32,
+        modifier: i32,
+        total: i32,
+        /// Determined outcome type (e.g., "Success", "Critical Failure")
+        outcome_type: String,
+        /// Status: "awaiting_dm_approval"
+        status: String,
+    },
+
+    /// Pending challenge outcome for DM approval queue
+    ChallengeOutcomePending {
+        /// Unique ID for this pending resolution
+        resolution_id: String,
+        challenge_id: String,
+        challenge_name: String,
+        character_id: String,
+        character_name: String,
+        roll: i32,
+        modifier: i32,
+        total: i32,
+        /// Determined outcome type (e.g., "Success", "Critical Failure")
+        outcome_type: String,
+        /// Pre-defined outcome description from challenge
+        outcome_description: String,
+        /// Triggers that will execute when approved
+        outcome_triggers: Vec<ProposedToolInfo>,
+        /// Roll breakdown string
+        #[serde(default)]
+        roll_breakdown: Option<String>,
+    },
+
+    /// LLM-generated outcome suggestions are ready (sent to DM)
+    OutcomeSuggestionReady {
+        /// Resolution ID this applies to
+        resolution_id: String,
+        /// Alternative outcome descriptions
+        suggestions: Vec<String>,
+    },
 }
 
 /// Information about a session participant
@@ -419,6 +486,25 @@ pub struct OutcomeDetailData {
     /// Proposed tool calls for this outcome
     #[serde(default)]
     pub proposed_tools: Vec<ProposedToolInfo>,
+}
+
+/// DM's decision on a challenge outcome (wire format)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case")]
+pub enum ChallengeOutcomeDecisionData {
+    /// Accept the outcome as-is
+    Accept,
+    /// Edit the outcome description
+    Edit {
+        /// The modified outcome text
+        modified_description: String,
+    },
+    /// Request LLM to suggest alternatives
+    Suggest {
+        /// Optional guidance for the LLM
+        #[serde(default)]
+        guidance: Option<String>,
+    },
 }
 
 

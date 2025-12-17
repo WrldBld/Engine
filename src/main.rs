@@ -61,7 +61,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Start background queue workers
     let llm_worker = {
-        let service = state.llm_queue_service.clone();
+        let service = state.queues.llm_queue_service.clone();
         let recovery_interval_clone = recovery_interval;
         tokio::spawn(async move {
             tracing::info!("Starting LLM queue worker");
@@ -70,7 +70,7 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let asset_worker = {
-        let service = state.asset_generation_queue_service.clone();
+        let service = state.queues.asset_generation_queue_service.clone();
         let recovery_interval_clone = recovery_interval;
         tokio::spawn(async move {
             tracing::info!("Starting asset generation queue worker");
@@ -80,11 +80,11 @@ async fn main() -> anyhow::Result<()> {
 
     // Player action queue worker (processes actions and routes to LLM queue)
     let player_action_worker = {
-        let service = state.player_action_queue_service.clone();
+        let service = state.queues.player_action_queue_service.clone();
         let sessions = state.sessions.clone();
-        let challenge_service = Arc::new(state.challenge_service.clone());
-        let skill_service = Arc::new(state.skill_service.clone());
-        let narrative_event_service = Arc::new(state.narrative_event_service.clone());
+        let challenge_service = Arc::new(state.game.challenge_service.clone());
+        let skill_service = Arc::new(state.core.skill_service.clone());
+        let narrative_event_service = Arc::new(state.game.narrative_event_service.clone());
         let notifier = service.queue.notifier();
         let recovery_interval_clone = recovery_interval;
         tokio::spawn(async move {
@@ -131,7 +131,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Approval notification worker (sends ApprovalRequired messages to DM)
     let approval_notification_worker_task = {
-        let service = state.dm_approval_queue_service.clone();
+        let service = state.queues.dm_approval_queue_service.clone();
         let async_session_port = state.async_session_port.clone();
         let recovery_interval_clone = recovery_interval;
         tokio::spawn(async move {
@@ -141,11 +141,11 @@ async fn main() -> anyhow::Result<()> {
 
     // DM action queue worker (processes approval decisions and other DM actions)
     let dm_action_worker_task = {
-        let service = state.dm_action_queue_service.clone();
-        let approval_service = state.dm_approval_queue_service.clone();
-        let narrative_event_service = Arc::new(state.narrative_event_service.clone());
-        let scene_service = Arc::new(state.scene_service.clone());
-        let interaction_service = Arc::new(state.interaction_service.clone());
+        let service = state.queues.dm_action_queue_service.clone();
+        let approval_service = state.queues.dm_approval_queue_service.clone();
+        let narrative_event_service = Arc::new(state.game.narrative_event_service.clone());
+        let scene_service = Arc::new(state.core.scene_service.clone());
+        let interaction_service = Arc::new(state.core.interaction_service.clone());
         let async_session_port = state.async_session_port.clone();
         let sessions = state.sessions.clone();
         let recovery_interval_clone = recovery_interval;
@@ -166,10 +166,10 @@ async fn main() -> anyhow::Result<()> {
 
     // Cleanup worker (removes old completed/failed queue items)
     let cleanup_worker = {
-        let player_action_service = state.player_action_queue_service.clone();
-        let llm_service = state.llm_queue_service.clone();
-        let approval_service = state.dm_approval_queue_service.clone();
-        let asset_service = state.asset_generation_queue_service.clone();
+        let player_action_service = state.queues.player_action_queue_service.clone();
+        let llm_service = state.queues.llm_queue_service.clone();
+        let approval_service = state.queues.dm_approval_queue_service.clone();
+        let asset_service = state.queues.asset_generation_queue_service.clone();
         let queue_config_clone = queue_config.clone();
         tokio::spawn(async move {
             tracing::info!("Starting queue cleanup worker");
@@ -197,7 +197,7 @@ async fn main() -> anyhow::Result<()> {
     // Generation event publisher (converts GenerationEvents to AppEvents and publishes to event bus)
     let generation_event_worker = {
         use crate::application::services::GenerationEventPublisher;
-        let event_bus = state.event_bus.clone();
+        let event_bus = state.events.event_bus.clone();
         let publisher = GenerationEventPublisher::new(event_bus);
         tokio::spawn(async move {
             tracing::info!("Starting generation event publisher");
@@ -269,10 +269,10 @@ async fn main() -> anyhow::Result<()> {
     // WebSocket event subscriber (converts AppEvents to ServerMessages and broadcasts to clients)
     let websocket_event_subscriber = {
         use crate::infrastructure::websocket_event_subscriber::WebSocketEventSubscriber;
-        
+
         // Reuse the event repository from AppState (no duplicate DB connection)
-        let app_event_repository = state.app_event_repository.clone();
-        let notifier = state.event_notifier.clone();
+        let app_event_repository = state.events.app_event_repository.clone();
+        let notifier = state.events.event_notifier.clone();
         let async_session_port = state.async_session_port.clone();
         let sessions = state.sessions.clone();
         let subscriber = WebSocketEventSubscriber::new(app_event_repository, notifier, async_session_port, sessions, 30);

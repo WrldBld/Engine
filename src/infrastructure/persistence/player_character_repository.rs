@@ -11,7 +11,7 @@ use neo4rs::Node;
 use crate::domain::entities::PlayerCharacter;
 use crate::domain::entities::CharacterSheetData;
 use crate::domain::value_objects::{
-    LocationId, PlayerCharacterId, SessionId, WorldId,
+    LocationId, PlayerCharacterId, SessionId,
 };
 
 /// Repository for PlayerCharacter operations
@@ -222,7 +222,7 @@ impl PlayerCharacterRepositoryPort for Neo4jPlayerCharacterRepository {
 fn parse_player_character_row(row: Row) -> Result<PlayerCharacter> {
     use crate::domain::value_objects::{LocationId, PlayerCharacterId, SessionId, WorldId};
     use chrono::DateTime;
-    use std::str::FromStr;
+    
 
     let node = row.get::<Node>("pc")
         .context("Expected 'pc' node in row")?;

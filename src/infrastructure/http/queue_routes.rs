@@ -6,12 +6,11 @@ use axum::{
     routing::get,
     Json, Router,
 };
-use serde::Serialize;
 use serde_json::json;
 use std::sync::Arc;
 
 use crate::application::ports::outbound::{ProcessingQueuePort, QueuePort, QueueItemStatus};
-use crate::application::services::{GenerationQueueProjectionService, GenerationQueueSnapshot};
+use crate::application::services::GenerationQueueSnapshot;
 use crate::infrastructure::state::AppState;
 
 /// Create queue-related routes
@@ -27,40 +26,40 @@ async fn queue_health_check(State(state): State<Arc<AppState>>) -> Json<serde_js
     use std::collections::HashMap;
 
     let player_action_depth = state
-        .player_action_queue_service
+                .queues.player_action_queue_service
         .depth()
         .await
         .unwrap_or(0);
 
     let llm_pending = state
-        .llm_queue_service
+                .queues.llm_queue_service
         .queue
         .depth()
         .await
         .unwrap_or(0);
 
     let llm_processing = state
-        .llm_queue_service
+                .queues.llm_queue_service
         .queue
         .processing_count()
         .await
         .unwrap_or(0);
 
     let approvals_pending = state
-        .dm_approval_queue_service
+                .queues.dm_approval_queue_service
         .queue
         .depth()
         .await
         .unwrap_or(0);
 
     let asset_pending = state
-        .asset_generation_queue_service
+                .queues.asset_generation_queue_service
         .depth()
         .await
         .unwrap_or(0);
 
     let asset_processing = state
-        .asset_generation_queue_service
+                .queues.asset_generation_queue_service
         .processing_count()
         .await
         .unwrap_or(0);
@@ -70,7 +69,7 @@ async fn queue_health_check(State(state): State<Arc<AppState>>) -> Json<serde_js
     // critical-path queue processing.
     let mut player_actions_by_session: HashMap<String, usize> = HashMap::new();
     if let Ok(items) = state
-        .player_action_queue_service
+                .queues.player_action_queue_service
         .queue
         .list_by_status(QueueItemStatus::Pending)
         .await
@@ -83,7 +82,7 @@ async fn queue_health_check(State(state): State<Arc<AppState>>) -> Json<serde_js
 
     let mut llm_requests_by_session: HashMap<String, usize> = HashMap::new();
     if let Ok(items) = state
-        .llm_queue_service
+                .queues.llm_queue_service
         .queue
         .list_by_status(QueueItemStatus::Pending)
         .await
@@ -101,7 +100,7 @@ async fn queue_health_check(State(state): State<Arc<AppState>>) -> Json<serde_js
 
     let mut asset_generation_by_session: HashMap<String, usize> = HashMap::new();
     if let Ok(items) = state
-        .asset_generation_queue_service
+                .queues.asset_generation_queue_service
         .queue
         .list_by_status(QueueItemStatus::Pending)
         .await
@@ -123,7 +122,7 @@ async fn queue_health_check(State(state): State<Arc<AppState>>) -> Json<serde_js
     let session_ids = state.async_session_port.list_session_ids().await;
 
     for session_id in session_ids {
-        if let Ok(pending) = state.dm_approval_queue_service.get_pending(session_id).await {
+        if let Ok(pending) = state.queues.dm_approval_queue_service.get_pending(session_id).await {
             if !pending.is_empty() {
                 approvals_by_session.insert(session_id.to_string(), pending.len());
             }
@@ -186,7 +185,7 @@ pub async fn get_generation_queue(
 
     // Delegate to the application-layer projection service for reconstruction.
     let snapshot = state
-        .generation_queue_projection_service
+        .assets.generation_queue_projection_service
         .project_queue(user_id.as_deref(), &world_key)
         .await
         .unwrap_or_else(|e| {
@@ -252,7 +251,7 @@ pub async fn update_generation_read_state(
 
     for batch_id in &body.read_batches {
         if let Err(e) = state
-            .generation_read_state_repository
+                .events.generation_read_state_repository
             .mark_read(&user_id, &world_key, batch_id, GenerationReadKind::Batch)
             .await
         {
@@ -265,7 +264,7 @@ pub async fn update_generation_read_state(
 
     for req_id in &body.read_suggestions {
         if let Err(e) = state
-            .generation_read_state_repository
+                .events.generation_read_state_repository
             .mark_read(&user_id, &world_key, req_id, GenerationReadKind::Suggestion)
             .await
         {

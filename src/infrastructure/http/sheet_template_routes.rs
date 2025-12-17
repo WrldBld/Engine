@@ -34,7 +34,7 @@ pub async fn get_template(
 
     // Try to get existing template
     if let Some(template) = state
-        .sheet_template_service
+                .player.sheet_template_service
         .get_default_for_world(&world_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -44,7 +44,7 @@ pub async fn get_template(
 
     // No template exists, generate from rule system
     let world = state
-        .world_service
+        .core.world_service
         .get_world(world_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -67,7 +67,7 @@ pub async fn list_templates(
 
     // Check world exists
     let world = state
-        .world_service
+        .core.world_service
         .get_world(world_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -75,7 +75,7 @@ pub async fn list_templates(
 
     // Get existing templates
     let templates = state
-        .sheet_template_service
+                .player.sheet_template_service
         .list_by_world(&world_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -107,7 +107,7 @@ pub async fn get_template_by_id(
     let template_id = SheetTemplateId::from_string(template_id);
 
     let template = state
-        .sheet_template_service
+                .player.sheet_template_service
         .get(&template_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -137,7 +137,7 @@ pub async fn initialize_template(
 
     // Get the world
     let world = state
-        .world_service
+        .core.world_service
         .get_world(world_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -145,7 +145,7 @@ pub async fn initialize_template(
 
     // Check if template already exists
     if state
-        .sheet_template_service
+                .player.sheet_template_service
         .has_templates(&world_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -162,7 +162,7 @@ pub async fn initialize_template(
 
     // Save it
     state
-        .sheet_template_service
+                .player.sheet_template_service
         .create(&template)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -183,7 +183,7 @@ pub async fn add_section(
 
     // Get existing template
     let mut template = state
-        .sheet_template_service
+                .player.sheet_template_service
         .get(&template_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -222,7 +222,7 @@ pub async fn add_section(
 
     // Save updates
     state
-        .sheet_template_service
+                .player.sheet_template_service
         .update(&template)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -243,7 +243,7 @@ pub async fn add_field(
 
     // Get existing template
     let mut template = state
-        .sheet_template_service
+                .player.sheet_template_service
         .get(&template_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -286,7 +286,7 @@ pub async fn add_field(
 
     // Save updates
     state
-        .sheet_template_service
+                .player.sheet_template_service
         .update(&template)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -306,7 +306,7 @@ pub async fn delete_template(
 
     // Get existing template
     let template = state
-        .sheet_template_service
+                .player.sheet_template_service
         .get(&template_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -322,7 +322,7 @@ pub async fn delete_template(
 
     // Delete
     state
-        .sheet_template_service
+                .player.sheet_template_service
         .delete(&template_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;

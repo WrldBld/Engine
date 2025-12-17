@@ -6,6 +6,7 @@
 
 pub mod asset_generation_queue_service;
 pub mod asset_service;
+pub mod challenge_outcome_approval_service;
 pub mod challenge_resolution_service;
 pub mod session_join_service;
 pub mod challenge_service;
@@ -18,16 +19,20 @@ pub mod generation_service;
 pub mod generation_queue_projection_service;
 pub mod interaction_service;
 pub mod llm_queue_service;
-pub mod llm_service;
+pub mod llm;
 pub mod location_service;
+
+// Re-export LLM service types for backward compatibility
 pub mod narrative_event_service;
 pub mod narrative_event_approval_service;
+pub mod outcome_suggestion_service;
 pub mod outcome_trigger_service;
 pub mod player_action_queue_service;
 pub mod player_character_service;
 pub mod relationship_service;
 pub mod scene_resolution_service;
 pub mod scene_service;
+pub mod settings_service;
 pub mod sheet_template_service;
 pub mod skill_service;
 pub mod story_event_service;
@@ -45,7 +50,7 @@ pub use world_service::{
 };
 
 // Re-export session join service types
-pub use session_join_service::{SessionJoinService, SessionJoinedInfo};
+pub use session_join_service::SessionJoinService;
 
 // Re-export scene service types
 pub use scene_service::{
@@ -54,7 +59,7 @@ pub use scene_service::{
 
 // Re-export scene resolution service types
 pub use scene_resolution_service::{
-    SceneResolutionResult, SceneResolutionService, SceneResolutionServiceImpl,
+    SceneResolutionService, SceneResolutionServiceImpl,
 };
 
 // Re-export character service types
@@ -104,7 +109,6 @@ pub use interaction_service::{InteractionService, InteractionServiceImpl};
 pub use challenge_service::{ChallengeService, ChallengeServiceImpl};
 
 // Re-export challenge resolution service
-pub use challenge_resolution_service::ChallengeResolutionService;
 
 // Re-export relationship service types
 pub use relationship_service::{RelationshipService, RelationshipServiceImpl};
@@ -114,6 +118,9 @@ pub use asset_service::{AssetService, AssetServiceImpl, CreateAssetRequest};
 
 // Re-export sheet template service types
 pub use sheet_template_service::SheetTemplateService;
+
+// Re-export settings service types
+pub use settings_service::SettingsService;
 
 // Re-export narrative event service types (used in HTTP routes)
 pub use narrative_event_service::{NarrativeEventService, NarrativeEventServiceImpl};
@@ -133,11 +140,17 @@ pub use player_action_queue_service::PlayerActionQueueService;
 pub use generation_queue_projection_service::{
     GenerationQueueProjectionService,
     GenerationQueueSnapshot,
-    GenerationBatchResponseDtoWithRead,
-    SuggestionTaskSnapshot,
 };
 
 // Re-export outcome trigger service
-pub use outcome_trigger_service::{OutcomeTriggerService, TriggerExecutionResult};
+pub use outcome_trigger_service::OutcomeTriggerService;
+
+// Re-export challenge outcome approval service (P3.3)
+pub use challenge_outcome_approval_service::{
+    ChallengeOutcomeApprovalService, ChallengeOutcomeError,
+};
+
+// Re-export outcome suggestion service (P3.3)
+pub use outcome_suggestion_service::{OutcomeSuggestionService, SuggestionError};
 
 // Note: PlayerActionService and ApprovalService were removed - functionality moved to queue services

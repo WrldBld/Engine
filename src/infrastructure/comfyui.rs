@@ -16,6 +16,19 @@ use crate::application::ports::outbound::{
 };
 use crate::domain::value_objects::ComfyUIConfig;
 
+// =============================================================================
+// Circuit Breaker Constants
+// =============================================================================
+
+/// Number of consecutive failures before opening the circuit breaker
+const CIRCUIT_BREAKER_FAILURE_THRESHOLD: u8 = 5;
+
+/// Duration in seconds to keep circuit breaker open before allowing retry
+const CIRCUIT_BREAKER_OPEN_DURATION_SECS: i64 = 60;
+
+/// Duration in seconds for health check cache validity
+const HEALTH_CHECK_CACHE_TTL_SECS: i64 = 30;
+
 /// Connection state for ComfyUI
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum ComfyUIConnectionState {
@@ -98,10 +111,9 @@ impl CircuitBreaker {
         *failure_count += 1;
         *self.last_failure.lock().unwrap_or_else(|p| p.into_inner()) = Some(Utc::now());
 
-        if *failure_count >= 5 {
-            // Open circuit for 60 seconds
+        if *failure_count >= CIRCUIT_BREAKER_FAILURE_THRESHOLD {
             *state = CircuitBreakerState::Open {
-                until: Utc::now() + chrono::Duration::seconds(60),
+                until: Utc::now() + chrono::Duration::seconds(CIRCUIT_BREAKER_OPEN_DURATION_SECS),
             };
         }
     }
@@ -258,7 +270,7 @@ impl ComfyUIClient {
         let cache = self.last_health_check.lock().unwrap_or_else(|p| p.into_inner());
         if let Some((timestamp, is_healthy)) = cache.as_ref() {
             let age = Utc::now().signed_duration_since(*timestamp);
-            if age.num_seconds() < 30 {
+            if age.num_seconds() < HEALTH_CHECK_CACHE_TTL_SECS {
                 if *is_healthy {
                     ComfyUIConnectionState::Connected
                 } else {

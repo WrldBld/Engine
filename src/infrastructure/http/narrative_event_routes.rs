@@ -35,7 +35,7 @@ pub async fn list_narrative_events(
     let world_id = WorldId::from_uuid(uuid);
 
     let events = state
-        .narrative_event_service
+                .game.narrative_event_service
         .list_by_world(world_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -58,7 +58,7 @@ pub async fn list_active_events(
     let world_id = WorldId::from_uuid(uuid);
 
     let events = state
-        .narrative_event_service
+                .game.narrative_event_service
         .list_active(world_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -81,7 +81,7 @@ pub async fn list_favorite_events(
     let world_id = WorldId::from_uuid(uuid);
 
     let events = state
-        .narrative_event_service
+                .game.narrative_event_service
         .list_favorites(world_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -104,7 +104,7 @@ pub async fn list_pending_events(
     let world_id = WorldId::from_uuid(uuid);
 
     let events = state
-        .narrative_event_service
+                .game.narrative_event_service
         .list_pending(world_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -127,7 +127,7 @@ pub async fn get_narrative_event(
     let event_id = NarrativeEventId::from_uuid(uuid);
 
     let event = state
-        .narrative_event_service
+                .game.narrative_event_service
         .get(event_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -148,7 +148,7 @@ pub async fn create_narrative_event(
 
     // Verify world exists
     let _ = state
-        .world_service
+        .core.world_service
         .get_world(world_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -168,7 +168,7 @@ pub async fn create_narrative_event(
 
     // Save via service
     let event = state
-        .narrative_event_service
+                .game.narrative_event_service
         .create(event)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -191,7 +191,7 @@ pub async fn update_narrative_event(
 
     // Get existing event
     let mut event = state
-        .narrative_event_service
+                .game.narrative_event_service
         .get(event_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -231,7 +231,7 @@ pub async fn update_narrative_event(
 
     // Save updates
     let event = state
-        .narrative_event_service
+                .game.narrative_event_service
         .update(event)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -250,7 +250,7 @@ pub async fn delete_narrative_event(
 
     // Verify event exists
     let _ = state
-        .narrative_event_service
+                .game.narrative_event_service
         .get(event_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -258,7 +258,7 @@ pub async fn delete_narrative_event(
 
     // Delete it
     state
-        .narrative_event_service
+                .game.narrative_event_service
         .delete(event_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -276,7 +276,7 @@ pub async fn toggle_favorite(
     let event_id = NarrativeEventId::from_uuid(uuid);
 
     let is_favorite = state
-        .narrative_event_service
+                .game.narrative_event_service
         .toggle_favorite(event_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -295,7 +295,7 @@ pub async fn set_active(
     let event_id = NarrativeEventId::from_uuid(uuid);
 
     state
-        .narrative_event_service
+                .game.narrative_event_service
         .set_active(event_id, is_active)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -313,7 +313,7 @@ pub async fn mark_triggered(
     let event_id = NarrativeEventId::from_uuid(uuid);
 
     state
-        .narrative_event_service
+                .game.narrative_event_service
         .mark_triggered(event_id, None)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -331,7 +331,7 @@ pub async fn reset_triggered(
     let event_id = NarrativeEventId::from_uuid(uuid);
 
     state
-        .narrative_event_service
+                .game.narrative_event_service
         .reset_triggered(event_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;

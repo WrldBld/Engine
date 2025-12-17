@@ -26,7 +26,7 @@ pub async fn list_scenes_by_act(
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid act ID".to_string()))?;
 
     let scenes = state
-        .scene_service
+        .core.scene_service
         .list_scenes_by_act(ActId::from_uuid(uuid))
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -70,7 +70,7 @@ pub async fn create_scene(
     };
 
     let scene = state
-        .scene_service
+        .core.scene_service
         .create_scene(service_request)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -87,7 +87,7 @@ pub async fn get_scene(
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid scene ID".to_string()))?;
 
     let scene = state
-        .scene_service
+        .core.scene_service
         .get_scene(SceneId::from_uuid(uuid))
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -116,7 +116,7 @@ pub async fn update_scene(
     };
 
     let _scene = state
-        .scene_service
+        .core.scene_service
         .update_scene(scene_id, service_request)
         .await
         .map_err(|e| {
@@ -130,7 +130,7 @@ pub async fn update_scene(
     // Update directorial notes if provided
     if !req.directorial_notes.is_empty() {
         state
-            .scene_service
+            .core.scene_service
             .update_directorial_notes(scene_id, req.directorial_notes)
             .await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -145,7 +145,7 @@ pub async fn update_scene(
         .collect();
 
     let scene = state
-        .scene_service
+        .core.scene_service
         .update_featured_characters(scene_id, featured_characters)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -162,7 +162,7 @@ pub async fn delete_scene(
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid scene ID".to_string()))?;
 
     state
-        .scene_service
+        .core.scene_service
         .delete_scene(SceneId::from_uuid(uuid))
         .await
         .map_err(|e| {
@@ -186,7 +186,7 @@ pub async fn update_directorial_notes(
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid scene ID".to_string()))?;
 
     state
-        .scene_service
+        .core.scene_service
         .update_directorial_notes(SceneId::from_uuid(uuid), req.notes)
         .await
         .map_err(|e| {

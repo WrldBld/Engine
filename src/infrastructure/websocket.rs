@@ -14,7 +14,7 @@ use axum::{
 use futures_util::{SinkExt, StreamExt};
 use tokio::sync::mpsc;
 
-use crate::application::dto::DMAction;
+use crate::application::dto::{AdHocOutcomesDto, ChallengeOutcomeDecision, DMAction};
 use crate::application::services::scene_service::SceneService;
 use crate::application::services::scene_resolution_service::SceneResolutionService;
 use crate::application::services::player_character_service::PlayerCharacterService;
@@ -64,9 +64,32 @@ fn to_service_dice_input(input: messages::DiceInputType) -> crs::DiceInputType {
     }
 }
 
+/// Convert messages::AdHocOutcomes to application dto AdHocOutcomesDto
+fn to_adhoc_outcomes_dto(outcomes: messages::AdHocOutcomes) -> AdHocOutcomesDto {
+    AdHocOutcomesDto {
+        success: outcomes.success,
+        failure: outcomes.failure,
+        critical_success: outcomes.critical_success,
+        critical_failure: outcomes.critical_failure,
+    }
+}
+
 /// Try to deserialize a serde_json::Value into a ServerMessage
 fn value_to_server_message(value: serde_json::Value) -> Option<ServerMessage> {
     serde_json::from_value(value).ok()
+}
+
+/// Convert wire format ChallengeOutcomeDecisionData to application DTO ChallengeOutcomeDecision
+fn to_challenge_outcome_decision(decision: messages::ChallengeOutcomeDecisionData) -> ChallengeOutcomeDecision {
+    match decision {
+        messages::ChallengeOutcomeDecisionData::Accept => ChallengeOutcomeDecision::Accept,
+        messages::ChallengeOutcomeDecisionData::Edit { modified_description } => {
+            ChallengeOutcomeDecision::Edit { modified_description }
+        }
+        messages::ChallengeOutcomeDecisionData::Suggest { guidance } => {
+            ChallengeOutcomeDecision::Suggest { guidance }
+        }
+    }
 }
 
 /// WebSocket upgrade handler
@@ -190,7 +213,7 @@ async fn handle_message(
             });
 
             // Delegate to injected SessionJoinService to join or create a session
-            match state.session_join_service.join_or_create_session_for_world(
+            match state.player.session_join_service.join_or_create_session_for_world(
                 client_id.to_string(),
                 user_id.clone(),
                 wire_to_canonical_role(role),
@@ -280,14 +303,14 @@ async fn handle_message(
 
                     // Get PC for this user
                     match state
-                        .player_character_service
+                .player.player_character_service
                         .get_pc_by_user_and_session(&player_id, session_id)
                         .await
                     {
                         Ok(Some(pc)) => {
                             // Update PC location
                             if let Err(e) = state
-                                .player_character_service
+                .player.player_character_service
                                 .update_pc_location(pc.id, location_uuid)
                                 .await
                             {
@@ -300,16 +323,16 @@ async fn handle_message(
 
                             // Resolve scene for the new location
                             match state
-                                .scene_resolution_service
+                .player.scene_resolution_service
                                 .resolve_scene_for_pc(pc.id)
                                 .await
                             {
                                 Ok(Some(scene)) => {
                                     // Load scene with relations to build SceneUpdate
-                                    match state.scene_service.get_scene_with_relations(scene.id).await {
+                                    match state.core.scene_service.get_scene_with_relations(scene.id).await {
                                         Ok(Some(scene_with_relations)) => {
                                             // Load interactions for the scene
-                                            let interaction_templates = match state.interaction_service.list_interactions(scene.id).await {
+                                            let interaction_templates = match state.core.interaction_service.list_interactions(scene.id).await {
                                                 Ok(templates) => templates,
                                                 Err(_) => vec![],
                                             };
@@ -390,7 +413,7 @@ async fn handle_message(
 
                                             // Check for split party and notify DM
                                             if let Ok(resolution_result) = state
-                                                .scene_resolution_service
+                .player.scene_resolution_service
                                                 .resolve_scene_for_session(session_id)
                                                 .await
                                             {
@@ -398,7 +421,7 @@ async fn handle_message(
                                                     // Get location details for notification
                                                     let mut split_locations = Vec::new();
                                                     let pcs = match state
-                                                        .player_character_service
+                .player.player_character_service
                                                         .get_pcs_by_session(session_id)
                                                         .await
                                                     {
@@ -418,7 +441,7 @@ async fn handle_message(
                                                     // Build location info
                                                     for (loc_id_str, pcs_at_loc) in location_pcs.iter() {
                                                         if let Ok(location) = state
-                                                            .location_service
+                                                            .core.location_service
                                                             .get_location(crate::domain::value_objects::LocationId::from_uuid(
                                                                 uuid::Uuid::parse_str(loc_id_str).unwrap_or_default()
                                                             ))
@@ -426,7 +449,7 @@ async fn handle_message(
                                                         {
                                                             if let Some(loc) = location {
                                                                 split_locations.push(crate::infrastructure::websocket::messages::SplitPartyLocation {
-                                                                    location_id: loc_id_str.clone(),
+                                                                    location_id: loc_id_str.to_string(),
                                                                     location_name: loc.name,
                                                                     pc_count: pcs_at_loc.len(),
                                                                     pc_names: pcs_at_loc.iter().map(|pc| pc.name.clone()).collect(),
@@ -499,7 +522,7 @@ async fn handle_message(
 
             // Enqueue to PlayerActionQueue - returns immediately
             match state
-                .player_action_queue_service
+                .queues.player_action_queue_service
                 .enqueue_action(
                         session_id,
                     player_id.clone(),
@@ -512,7 +535,7 @@ async fn handle_message(
                 Ok(_) => {
                     // Get queue depth for status update
                     let depth = state
-                        .player_action_queue_service
+                        .queues.player_action_queue_service
                         .depth()
                         .await
                         .unwrap_or(0);
@@ -584,7 +607,7 @@ async fn handle_message(
             };
 
             // Load scene from database with relations
-            let scene_with_relations = match state.scene_service.get_scene_with_relations(scene_uuid).await {
+            let scene_with_relations = match state.core.scene_service.get_scene_with_relations(scene_uuid).await {
                 Ok(Some(scene_data)) => scene_data,
                 Ok(None) => {
                     return Some(ServerMessage::Error {
@@ -602,7 +625,7 @@ async fn handle_message(
             };
 
             // Load interactions for the scene
-            let interactions = match state.interaction_service.list_interactions(scene_uuid).await {
+            let interactions = match state.core.interaction_service.list_interactions(scene_uuid).await {
                 Ok(interactions) => interactions
                     .into_iter()
                     .map(|i| {
@@ -728,7 +751,7 @@ async fn handle_message(
                 };
 
                 match state
-                    .dm_action_queue_service
+                    .queues.dm_action_queue_service
                     .enqueue_action(session_id, dm_id, dm_action)
                     .await
                 {
@@ -760,7 +783,7 @@ async fn handle_message(
                 challenge_id
             );
             state
-                .challenge_resolution_service
+                .game.challenge_resolution_service
                 .handle_roll(client_id.to_string(), challenge_id, roll)
                 .await
                 .and_then(value_to_server_message)
@@ -776,7 +799,7 @@ async fn handle_message(
                 challenge_id
             );
             state
-                .challenge_resolution_service
+                .game.challenge_resolution_service
                 .handle_roll_input(client_id.to_string(), challenge_id, to_service_dice_input(input_type))
                 .await
                 .and_then(value_to_server_message)
@@ -787,7 +810,7 @@ async fn handle_message(
             target_character_id,
         } => {
             state
-                .challenge_resolution_service
+                .game.challenge_resolution_service
                 .handle_trigger(client_id.to_string(), challenge_id, target_character_id)
                 .await
                 .and_then(value_to_server_message)
@@ -798,7 +821,7 @@ async fn handle_message(
             approved,
             modified_difficulty,
         } => state
-            .challenge_resolution_service
+            .game.challenge_resolution_service
             .handle_suggestion_decision(client_id.to_string(), request_id, approved, modified_difficulty)
             .await
             .and_then(value_to_server_message),
@@ -809,7 +832,7 @@ async fn handle_message(
             approved,
             selected_outcome,
         } => state
-            .narrative_event_approval_service
+            .game.narrative_event_approval_service
             .handle_decision(
                 client_id.to_string(),
                 request_id,
@@ -833,7 +856,7 @@ async fn handle_message(
 
             // Best-effort: look up the approval item for context
             let maybe_approval = state
-                .dm_approval_queue_service
+                .queues.dm_approval_queue_service
                 .get_by_id(&request_id)
                 .await
                 .ok()
@@ -884,7 +907,7 @@ async fn handle_message(
             // Remove the challenge suggestion from the approval queue
             // The approval will be re-queued for a non-challenge response
             state
-                .dm_approval_queue_service
+                .queues.dm_approval_queue_service
                 .discard_challenge(&client_id.to_string(), &request_id)
                 .await;
             Some(ServerMessage::ChallengeDiscarded { request_id })
@@ -903,16 +926,121 @@ async fn handle_message(
                 target_pc_id
             );
             state
-                .challenge_resolution_service
+                .game.challenge_resolution_service
                 .handle_adhoc_challenge(
                     client_id.to_string(),
                     challenge_name,
                     skill_name,
                     difficulty,
                     target_pc_id,
+                    to_adhoc_outcomes_dto(outcomes),
                 )
                 .await
                 .and_then(value_to_server_message)
+        }
+
+        // =====================================================================
+        // Challenge Outcome Approval (P3.3)
+        // =====================================================================
+        ClientMessage::ChallengeOutcomeDecision {
+            resolution_id,
+            decision,
+        } => {
+            tracing::info!(
+                "DM decision on challenge outcome {}: {:?}",
+                resolution_id,
+                decision
+            );
+
+            // Only DMs should approve - check via async port
+            let client_id_str = client_id.to_string();
+            if !state.async_session_port.is_client_dm(&client_id_str).await {
+                return Some(ServerMessage::Error {
+                    code: "NOT_AUTHORIZED".to_string(),
+                    message: "Only the DM can approve challenge outcomes".to_string(),
+                });
+            }
+
+            let session_id = match state.async_session_port.get_client_session(&client_id_str).await {
+                Some(sid) => sid,
+                None => {
+                    return Some(ServerMessage::Error {
+                        code: "NO_SESSION".to_string(),
+                        message: "Client is not in a session".to_string(),
+                    });
+                }
+            };
+
+            // Convert wire decision to service decision
+            let svc_decision = to_challenge_outcome_decision(decision);
+
+            // Process the decision via the approval service
+            match state.game.challenge_outcome_approval_service
+                .process_decision(session_id, &resolution_id, svc_decision)
+                .await
+            {
+                Ok(()) => {
+                    // Success - resolution broadcast is handled by the service
+                    None
+                }
+                Err(e) => {
+                    tracing::error!("Failed to process challenge outcome decision: {}", e);
+                    Some(ServerMessage::Error {
+                        code: "APPROVAL_ERROR".to_string(),
+                        message: format!("Failed to process decision: {}", e),
+                    })
+                }
+            }
+        }
+
+        ClientMessage::RequestOutcomeSuggestion {
+            resolution_id,
+            guidance,
+        } => {
+            tracing::info!(
+                "DM requesting outcome suggestion for {}: {:?}",
+                resolution_id,
+                guidance
+            );
+
+            // Only DMs should request suggestions
+            let client_id_str = client_id.to_string();
+            if !state.async_session_port.is_client_dm(&client_id_str).await {
+                return Some(ServerMessage::Error {
+                    code: "NOT_AUTHORIZED".to_string(),
+                    message: "Only the DM can request outcome suggestions".to_string(),
+                });
+            }
+
+            let session_id = match state.async_session_port.get_client_session(&client_id_str).await {
+                Some(sid) => sid,
+                None => {
+                    return Some(ServerMessage::Error {
+                        code: "NO_SESSION".to_string(),
+                        message: "Client is not in a session".to_string(),
+                    });
+                }
+            };
+
+            // Process as a Suggest decision - the service will handle LLM generation
+            let svc_decision = ChallengeOutcomeDecision::Suggest { guidance };
+
+            match state.game.challenge_outcome_approval_service
+                .process_decision(session_id, &resolution_id, svc_decision)
+                .await
+            {
+                Ok(()) => {
+                    // Success - the service will send OutcomeSuggestionReady when LLM completes
+                    None
+                }
+                Err(e) => {
+                    tracing::error!("Failed to request outcome suggestions: {}", e);
+                    Some(ServerMessage::Error {
+                        code: "SUGGESTION_ERROR".to_string(),
+                        message: format!("Failed to request suggestions: {}", e),
+                    })
+                }
+            }
         }
     }
 }
@@ -920,6 +1048,6 @@ async fn handle_message(
 // Re-export message types from the dedicated messages module
 pub mod messages;
 pub use messages::{
-    CharacterData, CharacterPosition, ClientMessage, DirectorialContext, InteractionData,
+    CharacterData, CharacterPosition, ClientMessage, InteractionData,
     ParticipantInfo, ParticipantRole, SceneData, ServerMessage,
 };

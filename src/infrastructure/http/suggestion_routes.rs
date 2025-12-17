@@ -243,7 +243,7 @@ pub async fn suggest(
     };
 
     // Enqueue to LLM queue
-    state.llm_queue_service.enqueue(llm_request)
+    state.queues.llm_queue_service.enqueue(llm_request)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to enqueue suggestion: {}", e)))?;
 
@@ -265,7 +265,7 @@ pub async fn cancel_suggestion(
     State(state): State<Arc<AppState>>,
     Path(request_id): Path<String>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    match state.llm_queue_service.cancel_suggestion(&request_id).await {
+    match state.queues.llm_queue_service.cancel_suggestion(&request_id).await {
         Ok(true) => Ok(StatusCode::NO_CONTENT),
         Ok(false) => Err((StatusCode::NOT_FOUND, "Suggestion request not found or already processed".to_string())),
         Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
@@ -303,7 +303,7 @@ pub async fn retry_suggestion(
     };
 
     // Enqueue to LLM queue
-    state.llm_queue_service.enqueue(llm_request)
+    state.queues.llm_queue_service.enqueue(llm_request)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to enqueue retry: {}", e)))?;
 

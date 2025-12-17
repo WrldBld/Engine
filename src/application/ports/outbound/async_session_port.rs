@@ -4,7 +4,6 @@
 //! application services. It abstracts over the locking/synchronization details
 //! of the underlying session manager implementation.
 
-use std::sync::Arc;
 
 use async_trait::async_trait;
 use tokio::sync::mpsc;

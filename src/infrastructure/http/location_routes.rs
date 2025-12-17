@@ -31,7 +31,7 @@ pub async fn list_locations(
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid world ID".to_string()))?;
 
     let locations = state
-        .location_service
+        .core.location_service
         .list_locations(WorldId::from_uuid(uuid))
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -78,7 +78,7 @@ pub async fn create_location(
     };
 
     let location = state
-        .location_service
+        .core.location_service
         .create_location(service_request)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -95,7 +95,7 @@ pub async fn get_location(
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid location ID".to_string()))?;
 
     let location = state
-        .location_service
+        .core.location_service
         .get_location(LocationId::from_uuid(uuid))
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -135,7 +135,7 @@ pub async fn update_location(
     };
 
     let location = state
-        .location_service
+        .core.location_service
         .update_location(LocationId::from_uuid(uuid), service_request)
         .await
         .map_err(|e| {
@@ -158,7 +158,7 @@ pub async fn delete_location(
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid location ID".to_string()))?;
 
     state
-        .location_service
+        .core.location_service
         .delete_location(LocationId::from_uuid(uuid))
         .await
         .map_err(|e| {
@@ -184,7 +184,7 @@ pub async fn list_available_starting_locations(
 
     // Get all locations in the world
     let locations = state
-        .location_service
+        .core.location_service
         .list_locations(WorldId::from_uuid(uuid))
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -208,7 +208,7 @@ pub async fn get_connections(
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid location ID".to_string()))?;
 
     let connections = state
-        .location_service
+        .core.location_service
         .get_connections(LocationId::from_uuid(uuid))
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -259,7 +259,7 @@ pub async fn create_connection(
     };
 
     state
-        .location_service
+        .core.location_service
         .create_connection(service_request)
         .await
         .map_err(|e| {

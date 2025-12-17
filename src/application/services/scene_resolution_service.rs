@@ -13,7 +13,7 @@ use crate::application::ports::outbound::{
 };
 use crate::domain::entities::Scene;
 use crate::domain::value_objects::{
-    LocationId, PlayerCharacterId, SceneId, SessionId,
+    LocationId, PlayerCharacterId, SessionId,
 };
 
 /// Result of scene resolution

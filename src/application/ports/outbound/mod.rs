@@ -9,6 +9,7 @@ mod queue_notification_port;
 mod queue_port;
 mod repository_port;
 mod session_management_port;
+mod settings_port;
 mod world_exporter_port;
 mod generation_read_state_port;
 
@@ -41,6 +42,8 @@ pub use session_management_port::{
 };
 // Note: ProposedToolInfo is now in domain::value_objects
 
+pub use settings_port::{SettingsError, SettingsRepositoryPort};
+
 pub use queue_notification_port::{QueueNotificationPort, WaitResult};
 
 pub use queue_port::{
@@ -56,6 +59,6 @@ pub use world_exporter_port::{
 pub use generation_read_state_port::{GenerationReadKind, GenerationReadStatePort};
 
 pub use async_session_port::{
-    AsyncSessionError, AsyncSessionPort, MessageSender, SessionJoinInfo,
+    AsyncSessionError, AsyncSessionPort, SessionJoinInfo,
     SessionParticipantInfo, SessionParticipantRole, SessionWorldData,
 };

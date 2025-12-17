@@ -8,12 +8,14 @@
 
 use std::sync::Arc;
 
-use crate::application::dto::AppEvent;
+use crate::application::dto::{AdHocOutcomesDto, AppEvent};
 use crate::application::ports::outbound::AsyncSessionPort;
 use crate::application::ports::outbound::EventBusPort;
-use crate::application::ports::outbound::{ApprovalQueuePort, ChallengeRepositoryPort};
+use crate::application::ports::outbound::ApprovalQueuePort;
+use crate::application::dto::{OutcomeTriggerRequestDto, PendingChallengeResolutionDto};
 use crate::application::services::{
-    ChallengeService, DMApprovalQueueService, OutcomeTriggerService, PlayerCharacterService, SkillService,
+    ChallengeOutcomeApprovalService, ChallengeService, DMApprovalQueueService, OutcomeTriggerService,
+    PlayerCharacterService, SkillService,
 };
 use crate::domain::entities::OutcomeType;
 use crate::domain::value_objects::{ChallengeId, DiceRollInput, SessionId, PlayerCharacterId};
@@ -74,6 +76,7 @@ struct AdHocChallengeCreatedMessage {
     challenge_id: String,
     challenge_name: String,
     target_pc_id: String,
+    outcomes: AdHocOutcomesDto,
 }
 
 /// Helper function to create error messages
@@ -86,14 +89,26 @@ fn error_message(code: &str, message: &str) -> Option<serde_json::Value> {
     serde_json::to_value(&error_msg).ok()
 }
 
+/// Preamble data gathered for challenge resolution.
+/// This struct holds the common data needed by both `handle_roll` and `handle_roll_input`.
+struct ChallengePreamble {
+    challenge: crate::domain::entities::Challenge,
+    session_id: Option<SessionId>,
+    player_name: String,
+    character_modifier: i32,
+    character_id: String,
+}
+
+use crate::application::ports::outbound::LlmPort;
+
 /// Service responsible for challenge-related flows.
 ///
-/// # TODO: Architecture Violation
+/// This service uses `AsyncSessionPort` for all session operations, maintaining
+/// hexagonal architecture compliance. Session lookups and broadcasts go through
+/// the port trait rather than concrete infrastructure types.
 ///
-/// This service previously depended on `SessionManager` (a concrete infrastructure type)
-/// rather than the async session port trait, which violated hexagonal architecture rules.
-/// It now uses `AsyncSessionPort`, so all session lookups and broadcasts go through a port.
-pub struct ChallengeResolutionService<S: ChallengeService, K: SkillService, Q: ApprovalQueuePort<crate::application::dto::ApprovalItem>, P: PlayerCharacterService> {
+/// Generic over `L: LlmPort` for LLM-powered suggestion generation via the approval service.
+pub struct ChallengeResolutionService<S: ChallengeService, K: SkillService, Q: ApprovalQueuePort<crate::application::dto::ApprovalItem>, P: PlayerCharacterService, L: LlmPort> {
     sessions: Arc<dyn AsyncSessionPort>,
     challenge_service: Arc<S>,
     skill_service: Arc<K>,
@@ -101,14 +116,16 @@ pub struct ChallengeResolutionService<S: ChallengeService, K: SkillService, Q: A
     event_bus: Arc<dyn EventBusPort<AppEvent>>,
     dm_approval_queue_service: Arc<DMApprovalQueueService<Q>>,
     outcome_trigger_service: Arc<OutcomeTriggerService>,
+    challenge_outcome_approval_service: Option<Arc<ChallengeOutcomeApprovalService<L>>>,
 }
 
-impl<S, K, Q, P> ChallengeResolutionService<S, K, Q, P>
+impl<S, K, Q, P, L> ChallengeResolutionService<S, K, Q, P, L>
 where
     S: ChallengeService,
     K: SkillService,
     Q: ApprovalQueuePort<crate::application::dto::ApprovalItem>,
     P: PlayerCharacterService,
+    L: LlmPort + 'static,
 {
     pub fn new(
         sessions: Arc<dyn AsyncSessionPort>,
@@ -127,7 +144,17 @@ where
             event_bus,
             dm_approval_queue_service,
             outcome_trigger_service,
+            challenge_outcome_approval_service: None,
         }
+    }
+
+    /// Set the challenge outcome approval service for P3.3 DM approval workflow
+    pub fn with_outcome_approval_service(
+        mut self,
+        service: Arc<ChallengeOutcomeApprovalService<L>>,
+    ) -> Self {
+        self.challenge_outcome_approval_service = Some(service);
+        self
     }
 
     /// Get a player character ID for a client in a session.
@@ -180,12 +207,125 @@ where
         }
     }
 
+    /// Gather the common preamble data needed for challenge resolution.
+    ///
+    /// This extracts the duplicated setup logic from `handle_roll` and `handle_roll_input`:
+    /// - Challenge ID parsing and loading
+    /// - Session retrieval
+    /// - Player name lookup
+    /// - Character modifier lookup
+    /// - Character ID resolution
+    ///
+    /// Returns `Ok(preamble)` on success, or `Err(error_message)` on failure.
+    async fn gather_challenge_preamble(
+        &self,
+        client_id: &str,
+        challenge_id_str: &str,
+        log_prefix: &str,
+    ) -> Result<ChallengePreamble, Option<serde_json::Value>> {
+        // Parse challenge_id
+        let challenge_uuid = match uuid::Uuid::parse_str(challenge_id_str) {
+            Ok(uuid) => ChallengeId::from_uuid(uuid),
+            Err(_) => {
+                return Err(error_message("INVALID_CHALLENGE_ID", "Invalid challenge ID format"));
+            }
+        };
+
+        // Load challenge from service
+        let challenge = match self.challenge_service.get_challenge(challenge_uuid).await {
+            Ok(Some(challenge)) => challenge,
+            Ok(None) => {
+                return Err(error_message(
+                    "CHALLENGE_NOT_FOUND",
+                    &format!("Challenge {} not found", challenge_id_str),
+                ));
+            }
+            Err(e) => {
+                tracing::error!("Failed to load challenge: {}", e);
+                return Err(error_message("CHALLENGE_LOAD_ERROR", "Failed to load challenge"));
+            }
+        };
+
+        // Get session and player info via async session port
+        let session_id = match self.sessions.get_client_session(client_id).await {
+            Some(sid) => Some(sid),
+            None => {
+                return Err(error_message(
+                    "NOT_IN_SESSION",
+                    "You must join a session before submitting challenge rolls",
+                ));
+            }
+        };
+
+        let player_name = self
+            .sessions
+            .get_client_user_id(client_id)
+            .await
+            .unwrap_or_else(|| "Unknown Player".to_string());
+
+        // Look up character's skill modifier from PlayerCharacterService
+        let character_modifier = if let Some(session_id_val) = session_id {
+            if let Some(pc_id) = self.get_client_player_character(client_id, session_id_val).await {
+                match self
+                    .player_character_service
+                    .get_skill_modifier(pc_id, challenge.skill_id.clone())
+                    .await
+                {
+                    Ok(modifier) => {
+                        debug!(
+                            pc_id = %pc_id,
+                            skill_id = %challenge.skill_id,
+                            modifier = modifier,
+                            "Found skill modifier for player character ({})", log_prefix
+                        );
+                        modifier
+                    }
+                    Err(e) => {
+                        debug!(
+                            pc_id = %pc_id,
+                            skill_id = %challenge.skill_id,
+                            error = %e,
+                            "Failed to get skill modifier, defaulting to 0 ({})", log_prefix
+                        );
+                        0
+                    }
+                }
+            } else {
+                debug!(
+                    session_id = %session_id_val,
+                    client_id = %client_id,
+                    "Could not find player character for client ({})", log_prefix
+                );
+                0
+            }
+        } else {
+            0
+        };
+
+        // Get character ID from player character lookup
+        let character_id = if let Some(session_id_val) = session_id {
+            self.get_client_player_character(client_id, session_id_val)
+                .await
+                .map(|id| id.to_string())
+                .unwrap_or_else(|| player_name.clone())
+        } else {
+            player_name.clone()
+        };
+
+        Ok(ChallengePreamble {
+            challenge,
+            session_id,
+            player_name,
+            character_modifier,
+            character_id,
+        })
+    }
+
     /// Internal helper to resolve challenge outcome and broadcast results.
     ///
     /// This handles the common logic shared between `handle_roll()` and `handle_roll_input()`:
-    /// 1. Publishes AppEvent for challenge resolution
-    /// 2. Executes outcome triggers
-    /// 3. Broadcasts ChallengeResolved message to all session participants
+    /// 1. If session has DM and approval service is configured, queue for DM approval (P3.3)
+    /// 2. Otherwise: Publishes AppEvent, executes triggers, broadcasts ChallengeResolved
     async fn resolve_challenge_internal(
         &self,
         challenge_id_str: &str,
@@ -201,6 +341,56 @@ where
         roll_breakdown: Option<String>,
         individual_rolls: Option<Vec<i32>>,
     ) {
+        // P3.3: If session has DM and approval service is configured, queue for approval
+        if let Some(sid) = session_id {
+            if self.sessions.session_has_dm(sid).await {
+                if let Some(ref approval_service) = self.challenge_outcome_approval_service {
+                    // Build PendingChallengeResolutionDto for approval queue
+                    let resolution = PendingChallengeResolutionDto {
+                        resolution_id: uuid::Uuid::new_v4().to_string(),
+                        challenge_id: challenge_id_str.to_string(),
+                        challenge_name: challenge.name.clone(),
+                        character_id: character_id.clone(),
+                        character_name: player_name.clone(),
+                        roll,
+                        modifier,
+                        total,
+                        outcome_type: outcome_type.display_name().to_string(),
+                        outcome_description: outcome.description.clone(),
+                        outcome_triggers: outcome
+                            .triggers
+                            .iter()
+                            .cloned()
+                            .map(OutcomeTriggerRequestDto::from)
+                            .collect(),
+                        roll_breakdown: roll_breakdown.clone(),
+                        individual_rolls: individual_rolls.clone(),
+                        timestamp: chrono::Utc::now().to_rfc3339(),
+                    };
+
+                    match approval_service.queue_for_approval(sid, resolution).await {
+                        Ok(resolution_id) => {
+                            info!(
+                                resolution_id = %resolution_id,
+                                challenge_id = %challenge_id_str,
+                                "Challenge outcome queued for DM approval"
+                            );
+                            // Return early - don't broadcast yet, DM will approve
+                            return;
+                        }
+                        Err(e) => {
+                            tracing::error!(
+                                "Failed to queue challenge for DM approval: {}, falling back to immediate broadcast",
+                                e
+                            );
+                            // Fall through to immediate broadcast
+                        }
+                    }
+                }
+            }
+        }
+
+        // No DM or approval service not configured - immediate resolution
         let success =
             outcome_type == OutcomeType::Success || outcome_type == OutcomeType::CriticalSuccess;
 
@@ -268,112 +458,38 @@ where
         }
     }
 
-    /// Handle a player submitting a challenge roll.
+    /// Handle a player submitting a challenge roll (legacy method with simple integer roll).
     pub async fn handle_roll(
         &self,
         client_id: String,
         challenge_id_str: String,
         roll: i32,
     ) -> Option<serde_json::Value> {
-        // Parse challenge_id
-        let challenge_uuid = match uuid::Uuid::parse_str(&challenge_id_str) {
-            Ok(uuid) => ChallengeId::from_uuid(uuid),
-            Err(_) => {
-                return error_message("INVALID_CHALLENGE_ID", "Invalid challenge ID format");
-            }
-        };
-
-        // Load challenge from service
-        let challenge = match self.challenge_service.get_challenge(challenge_uuid).await {
-            Ok(Some(challenge)) => challenge,
-            Ok(None) => {
-                return error_message("CHALLENGE_NOT_FOUND", &format!("Challenge {} not found", challenge_id_str));
-            }
-            Err(e) => {
-                tracing::error!("Failed to load challenge: {}", e);
-                return error_message("CHALLENGE_LOAD_ERROR", "Failed to load challenge");
-            }
-        };
-
-        // Get session and player info via async session port
-        let session_id = match self.sessions.get_client_session(&client_id).await {
-            Some(sid) => Some(sid),
-            None => {
-                return error_message("NOT_IN_SESSION", "You must join a session before submitting challenge rolls");
-            }
-        };
-
-        let player_name = self
-            .sessions
-            .get_client_user_id(&client_id)
+        // Gather common preamble data
+        let preamble = match self
+            .gather_challenge_preamble(&client_id, &challenge_id_str, "legacy roll")
             .await
-            .unwrap_or_else(|| "Unknown Player".to_string());
-
-        // Look up character's skill modifier from PlayerCharacterService
-        let character_modifier = if let Some(session_id_val) = session_id {
-            if let Some(pc_id) = self.get_client_player_character(&client_id, session_id_val).await {
-                match self
-                    .player_character_service
-                    .get_skill_modifier(pc_id, challenge.skill_id.clone())
-                    .await
-                {
-                    Ok(modifier) => {
-                        debug!(
-                            pc_id = %pc_id,
-                            skill_id = %challenge.skill_id,
-                            modifier = modifier,
-                            "Found skill modifier for player character (legacy roll path)"
-                        );
-                        modifier
-                    }
-                    Err(e) => {
-                        debug!(
-                            pc_id = %pc_id,
-                            skill_id = %challenge.skill_id,
-                            error = %e,
-                            "Failed to get skill modifier, defaulting to 0 (legacy roll path)"
-                        );
-                        0
-                    }
-                }
-            } else {
-                debug!(
-                    session_id = %session_id_val,
-                    client_id = %client_id,
-                    "Could not find player character for client (legacy roll path)"
-                );
-                0
-            }
-        } else {
-            0
+        {
+            Ok(p) => p,
+            Err(err_msg) => return err_msg,
         };
 
         // Evaluate challenge result
         let (outcome_type, outcome) =
-            evaluate_challenge_result(&challenge, roll, character_modifier);
-
-        // Get character ID from player character lookup
-        let character_id = if let Some(session_id_val) = session_id {
-            self.get_client_player_character(&client_id, session_id_val)
-                .await
-                .map(|id| id.to_string())
-                .unwrap_or_else(|| player_name.clone())
-        } else {
-            player_name.clone()
-        };
+            evaluate_challenge_result(&preamble.challenge, roll, preamble.character_modifier);
 
         // Use common helper to publish events, execute triggers, and broadcast
         self.resolve_challenge_internal(
             &challenge_id_str,
-            &challenge,
+            &preamble.challenge,
             outcome_type,
             outcome,
-            session_id,
-            character_id,
-            player_name,
+            preamble.session_id,
+            preamble.character_id,
+            preamble.player_name,
             roll,
-            character_modifier,
-            roll + character_modifier,
+            preamble.character_modifier,
+            roll + preamble.character_modifier,
             None, // Legacy method doesn't have formula info
             None,
         )
@@ -390,87 +506,23 @@ where
         challenge_id_str: String,
         dice_input: DiceInputType,
     ) -> Option<serde_json::Value> {
+        // Gather common preamble data
+        let preamble = match self
+            .gather_challenge_preamble(&client_id, &challenge_id_str, "dice input roll")
+            .await
+        {
+            Ok(p) => p,
+            Err(err_msg) => return err_msg,
+        };
+
         // Convert DiceInputType to DiceRollInput
         let roll_input = match dice_input {
             DiceInputType::Formula(formula) => DiceRollInput::Formula(formula),
             DiceInputType::Manual(value) => DiceRollInput::ManualResult(value),
         };
 
-        // Parse challenge_id
-        let challenge_uuid = match uuid::Uuid::parse_str(&challenge_id_str) {
-            Ok(uuid) => ChallengeId::from_uuid(uuid),
-            Err(_) => {
-                return error_message("INVALID_CHALLENGE_ID", "Invalid challenge ID format");
-            }
-        };
-
-        // Load challenge from service
-        let challenge = match self.challenge_service.get_challenge(challenge_uuid).await {
-            Ok(Some(challenge)) => challenge,
-            Ok(None) => {
-                return error_message("CHALLENGE_NOT_FOUND", &format!("Challenge {} not found", challenge_id_str));
-            }
-            Err(e) => {
-                tracing::error!("Failed to load challenge: {}", e);
-                return error_message("CHALLENGE_LOAD_ERROR", "Failed to load challenge");
-            }
-        };
-
-        // Get session and player info via async session port
-        let session_id = match self.sessions.get_client_session(&client_id).await {
-            Some(sid) => Some(sid),
-            None => {
-                return error_message("NOT_IN_SESSION", "You must join a session before submitting challenge rolls");
-            }
-        };
-
-        let player_name = self
-            .sessions
-            .get_client_user_id(&client_id)
-            .await
-            .unwrap_or_else(|| "Unknown Player".to_string());
-
-        // Look up character's skill modifier from PlayerCharacterService
-        let character_modifier = if let Some(session_id_val) = session_id {
-            if let Some(pc_id) = self.get_client_player_character(&client_id, session_id_val).await {
-                // Try to get the skill modifier from the player character service
-                match self.player_character_service
-                    .get_skill_modifier(pc_id, challenge.skill_id.clone())
-                    .await
-                {
-                    Ok(modifier) => {
-                        debug!(
-                            pc_id = %pc_id,
-                            skill_id = %challenge.skill_id,
-                            modifier = modifier,
-                            "Found skill modifier for player character"
-                        );
-                        modifier
-                    }
-                    Err(e) => {
-                        debug!(
-                            pc_id = %pc_id,
-                            skill_id = %challenge.skill_id,
-                            error = %e,
-                            "Failed to get skill modifier, defaulting to 0"
-                        );
-                        0
-                    }
-                }
-            } else {
-                debug!(
-                    session_id = %session_id_val,
-                    client_id = %client_id,
-                    "Could not find player character for client"
-                );
-                0
-            }
-        } else {
-            0
-        };
-
-        // Resolve the dice roll
-        let roll_result = match roll_input.resolve_with_modifier(character_modifier) {
+        // Resolve the dice roll with character modifier
+        let roll_result = match roll_input.resolve_with_modifier(preamble.character_modifier) {
             Ok(result) => result,
             Err(e) => {
                 return error_message("INVALID_DICE_FORMULA", &format!("Invalid dice formula: {}", e));
@@ -486,27 +538,17 @@ where
 
         // Evaluate challenge result
         let (outcome_type, outcome) =
-            evaluate_challenge_result(&challenge, raw_roll, character_modifier);
-
-        // Get character ID from player character lookup
-        let character_id = if let Some(session_id_val) = session_id {
-            self.get_client_player_character(&client_id, session_id_val)
-                .await
-                .map(|id| id.to_string())
-                .unwrap_or_else(|| player_name.clone())
-        } else {
-            player_name.clone()
-        };
+            evaluate_challenge_result(&preamble.challenge, raw_roll, preamble.character_modifier);
 
         // Use common helper to publish events, execute triggers, and broadcast
         self.resolve_challenge_internal(
             &challenge_id_str,
-            &challenge,
+            &preamble.challenge,
             outcome_type,
             outcome,
-            session_id,
-            character_id,
-            player_name,
+            preamble.session_id,
+            preamble.character_id,
+            preamble.player_name,
             raw_roll,
             roll_result.modifier_applied,
             roll_result.total,
@@ -722,6 +764,7 @@ where
         skill_name: String,
         difficulty: String,
         target_pc_id: String,
+        outcomes: AdHocOutcomesDto,
     ) -> Option<serde_json::Value> {
         // Check if client is DM
         if !self.sessions.is_client_dm(&client_id).await {
@@ -774,12 +817,13 @@ where
             }
         }
 
-        // Notify DM that challenge was created
+        // Notify DM that challenge was created (includes outcomes for confirmation)
         let msg = AdHocChallengeCreatedMessage {
             r#type: "AdHocChallengeCreated",
             challenge_id: adhoc_challenge_id,
             challenge_name,
             target_pc_id,
+            outcomes,
         };
         serde_json::to_value(&msg).ok()
     }

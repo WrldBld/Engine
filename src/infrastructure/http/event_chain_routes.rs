@@ -35,7 +35,7 @@ pub async fn list_event_chains(
     let world_id = WorldId::from_uuid(uuid);
 
     let chains = state
-        .event_chain_service
+                .game.event_chain_service
         .list_event_chains(world_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -55,7 +55,7 @@ pub async fn list_active_chains(
     let world_id = WorldId::from_uuid(uuid);
 
     let chains = state
-        .event_chain_service
+                .game.event_chain_service
         .list_active(world_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -75,7 +75,7 @@ pub async fn list_favorite_chains(
     let world_id = WorldId::from_uuid(uuid);
 
     let chains = state
-        .event_chain_service
+                .game.event_chain_service
         .list_favorites(world_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -95,7 +95,7 @@ pub async fn list_chain_statuses(
     let world_id = WorldId::from_uuid(uuid);
 
     let statuses = state
-        .event_chain_service
+                .game.event_chain_service
         .list_statuses(world_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -118,7 +118,7 @@ pub async fn get_event_chain(
     let chain_id = EventChainId::from_uuid(uuid);
 
     let chain = state
-        .event_chain_service
+                .game.event_chain_service
         .get_event_chain(chain_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -139,7 +139,7 @@ pub async fn create_event_chain(
 
     // Verify world exists
     let _ = state
-        .world_service
+        .core.world_service
         .get_world(world_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -174,7 +174,7 @@ pub async fn create_event_chain(
 
     // Save via service
     let created_chain = state
-        .event_chain_service
+                .game.event_chain_service
         .create_event_chain(chain)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -197,7 +197,7 @@ pub async fn update_event_chain(
 
     // Get existing chain
     let mut chain = state
-        .event_chain_service
+                .game.event_chain_service
         .get_event_chain(chain_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -239,7 +239,7 @@ pub async fn update_event_chain(
 
     // Save updates
     let updated_chain = state
-        .event_chain_service
+                .game.event_chain_service
         .update_event_chain(chain)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -258,7 +258,7 @@ pub async fn delete_event_chain(
 
     // Delete via service (which will verify existence)
     state
-        .event_chain_service
+                .game.event_chain_service
         .delete_event_chain(chain_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -276,7 +276,7 @@ pub async fn toggle_favorite(
     let chain_id = EventChainId::from_uuid(uuid);
 
     let is_favorite = state
-        .event_chain_service
+                .game.event_chain_service
         .toggle_favorite(chain_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -295,7 +295,7 @@ pub async fn set_active(
     let chain_id = EventChainId::from_uuid(uuid);
 
     state
-        .event_chain_service
+                .game.event_chain_service
         .set_active(chain_id, is_active)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -313,7 +313,7 @@ pub async fn reset_chain(
     let chain_id = EventChainId::from_uuid(uuid);
 
     state
-        .event_chain_service
+                .game.event_chain_service
         .reset_chain(chain_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -338,7 +338,7 @@ pub async fn add_event_to_chain(
     // If position is specified, we need to get the chain and insert at position
     if let Some(position) = req.position {
         let mut chain = state
-            .event_chain_service
+                .game.event_chain_service
             .get_event_chain(chain_id)
             .await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -347,14 +347,14 @@ pub async fn add_event_to_chain(
         chain.insert_event(position, event_id);
 
         state
-            .event_chain_service
+                .game.event_chain_service
             .update_event_chain(chain)
             .await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     } else {
         // Just append to the end
         state
-            .event_chain_service
+                .game.event_chain_service
             .add_event_to_chain(chain_id, event_id)
             .await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -377,7 +377,7 @@ pub async fn remove_event_from_chain(
     let event_id = NarrativeEventId::from_uuid(event_uuid);
 
     state
-        .event_chain_service
+                .game.event_chain_service
         .remove_event_from_chain(chain_id, event_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -399,7 +399,7 @@ pub async fn complete_event_in_chain(
     let event_id = NarrativeEventId::from_uuid(event_uuid);
 
     state
-        .event_chain_service
+                .game.event_chain_service
         .complete_event(chain_id, event_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;

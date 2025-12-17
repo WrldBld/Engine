@@ -14,6 +14,10 @@ use crate::domain::entities::{
 };
 use crate::domain::value_objects::{GridMapId, LocationId, WorldId};
 
+// Validation constants
+const MAX_LOCATION_NAME_LENGTH: usize = 255;
+const MAX_LOCATION_DESCRIPTION_LENGTH: usize = 10000;
+
 /// Request to create a new location
 #[derive(Debug, Clone)]
 pub struct CreateLocationRequest {
@@ -154,12 +158,12 @@ impl LocationServiceImpl {
         if request.name.trim().is_empty() {
             anyhow::bail!("Location name cannot be empty");
         }
-        if request.name.len() > 255 {
-            anyhow::bail!("Location name cannot exceed 255 characters");
+        if request.name.len() > MAX_LOCATION_NAME_LENGTH {
+            anyhow::bail!("Location name cannot exceed {MAX_LOCATION_NAME_LENGTH} characters");
         }
         if let Some(ref description) = request.description {
-            if description.len() > 10000 {
-                anyhow::bail!("Location description cannot exceed 10000 characters");
+            if description.len() > MAX_LOCATION_DESCRIPTION_LENGTH {
+                anyhow::bail!("Location description cannot exceed {MAX_LOCATION_DESCRIPTION_LENGTH} characters");
             }
         }
         Ok(())
@@ -171,13 +175,13 @@ impl LocationServiceImpl {
             if name.trim().is_empty() {
                 anyhow::bail!("Location name cannot be empty");
             }
-            if name.len() > 255 {
-                anyhow::bail!("Location name cannot exceed 255 characters");
+            if name.len() > MAX_LOCATION_NAME_LENGTH {
+                anyhow::bail!("Location name cannot exceed {MAX_LOCATION_NAME_LENGTH} characters");
             }
         }
         if let Some(ref description) = request.description {
-            if description.len() > 10000 {
-                anyhow::bail!("Location description cannot exceed 10000 characters");
+            if description.len() > MAX_LOCATION_DESCRIPTION_LENGTH {
+                anyhow::bail!("Location description cannot exceed {MAX_LOCATION_DESCRIPTION_LENGTH} characters");
             }
         }
         Ok(())

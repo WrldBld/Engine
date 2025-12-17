@@ -10,14 +10,14 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::application::services::{
-    PlayerCharacterService, PlayerCharacterServiceImpl,
+    PlayerCharacterService,
     SceneResolutionService,
     CreatePlayerCharacterRequest, UpdatePlayerCharacterRequest,
 };
 use crate::domain::entities::PlayerCharacter;
 use crate::domain::entities::{CharacterSheetData, FieldValue};
 use crate::domain::value_objects::{
-    LocationId, PlayerCharacterId, SessionId, WorldId,
+    LocationId, PlayerCharacterId, SessionId,
 };
 use crate::infrastructure::state::AppState;
 
@@ -223,7 +223,7 @@ pub async fn create_player_character(
     };
 
     let pc = state
-        .player_character_service
+                .player.player_character_service
         .create_pc(service_request)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -239,7 +239,7 @@ pub async fn create_player_character(
 
     // Resolve scene for the new PC
     let scene_result = state
-        .scene_resolution_service
+                .player.scene_resolution_service
         .resolve_scene_for_pc(pc.id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -259,7 +259,7 @@ pub async fn list_player_characters(
     let session_id = SessionId::from_uuid(session_uuid);
 
     let pcs = state
-        .player_character_service
+                .player.player_character_service
         .get_pcs_by_session(session_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -280,7 +280,7 @@ pub async fn get_my_player_character(
     let session_id = SessionId::from_uuid(session_uuid);
 
     let pc = state
-        .player_character_service
+                .player.player_character_service
         .get_pc_by_user_and_session(&user_id, session_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -299,7 +299,7 @@ pub async fn get_player_character(
     let pc_id = PlayerCharacterId::from_uuid(pc_uuid);
 
     let pc = state
-        .player_character_service
+                .player.player_character_service
         .get_pc(pc_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -329,7 +329,7 @@ pub async fn update_player_character(
     };
 
     let pc = state
-        .player_character_service
+                .player.player_character_service
         .update_pc(pc_id, service_request)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -352,14 +352,14 @@ pub async fn update_player_character_location(
     let location_id = LocationId::from_uuid(location_uuid);
 
     state
-        .player_character_service
+                .player.player_character_service
         .update_pc_location(pc_id, location_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     // Resolve scene for the updated location
     let scene_result = state
-        .scene_resolution_service
+                .player.scene_resolution_service
         .resolve_scene_for_pc(pc_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -382,7 +382,7 @@ pub async fn delete_player_character(
     let pc_id = PlayerCharacterId::from_uuid(pc_uuid);
 
     state
-        .player_character_service
+                .player.player_character_service
         .delete_pc(pc_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;

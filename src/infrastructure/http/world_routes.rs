@@ -24,7 +24,7 @@ pub async fn list_worlds(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Vec<WorldResponseDto>>, (StatusCode, String)> {
     let worlds = state
-        .world_service
+        .core.world_service
         .list_worlds()
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -44,7 +44,7 @@ pub async fn create_world(
     };
 
     let world = state
-        .world_service
+        .core.world_service
         .create_world(service_request)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -61,7 +61,7 @@ pub async fn get_world(
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid world ID".to_string()))?;
 
     let world = state
-        .world_service
+        .core.world_service
         .get_world(WorldId::from_uuid(uuid))
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -86,7 +86,7 @@ pub async fn update_world(
     };
 
     let world = state
-        .world_service
+        .core.world_service
         .update_world(WorldId::from_uuid(uuid), service_request)
         .await
         .map_err(|e| {
@@ -109,7 +109,7 @@ pub async fn delete_world(
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid world ID".to_string()))?;
 
     state
-        .world_service
+        .core.world_service
         .delete_world(WorldId::from_uuid(uuid))
         .await
         .map_err(|e| {
@@ -134,7 +134,7 @@ pub async fn list_acts(
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid world ID".to_string()))?;
 
     let acts = state
-        .world_service
+        .core.world_service
         .get_acts(WorldId::from_uuid(uuid))
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -164,7 +164,7 @@ pub async fn create_act(
     };
 
     let act = state
-        .world_service
+        .core.world_service
         .create_act(WorldId::from_uuid(uuid), service_request)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;

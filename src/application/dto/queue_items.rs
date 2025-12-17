@@ -179,6 +179,8 @@ pub enum DecisionType {
     ToolUsage,
     ChallengeSuggestion,
     SceneTransition,
+    /// Challenge outcome pending DM approval (P3.3)
+    ChallengeOutcome,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -187,4 +189,47 @@ pub enum DecisionUrgency {
     Normal = 0,
     AwaitingPlayer = 1,
     SceneCritical = 2,
+}
+
+/// Challenge outcome awaiting DM approval (P3.3)
+///
+/// After a player rolls, the outcome is queued here for DM review.
+/// The DM can accept, edit, or request LLM suggestions.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChallengeOutcomeApprovalItem {
+    /// Unique ID for this resolution
+    pub resolution_id: String,
+    /// Session where the challenge occurred
+    pub session_id: SessionId,
+    /// ID of the challenge
+    pub challenge_id: String,
+    /// Name of the challenge
+    pub challenge_name: String,
+    /// ID of the character who rolled
+    pub character_id: String,
+    /// Name of the character who rolled
+    pub character_name: String,
+    /// Raw die roll (before modifier)
+    pub roll: i32,
+    /// Character's skill modifier
+    pub modifier: i32,
+    /// Total result (roll + modifier)
+    pub total: i32,
+    /// Determined outcome type (e.g., "Success", "Critical Failure")
+    pub outcome_type: String,
+    /// The pre-defined outcome description
+    pub outcome_description: String,
+    /// Triggers that will execute when approved
+    pub outcome_triggers: Vec<ProposedToolInfo>,
+    /// Roll breakdown string
+    #[serde(default)]
+    pub roll_breakdown: Option<String>,
+    /// When the roll was submitted
+    pub timestamp: DateTime<Utc>,
+    /// LLM-generated suggestions (if requested)
+    #[serde(default)]
+    pub suggestions: Option<Vec<String>>,
+    /// Whether LLM is currently generating suggestions
+    #[serde(default)]
+    pub is_generating_suggestions: bool,
 }

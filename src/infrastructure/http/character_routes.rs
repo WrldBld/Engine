@@ -32,7 +32,7 @@ pub async fn list_characters(
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid world ID".to_string()))?;
 
     let characters = state
-        .character_service
+        .core.character_service
         .list_characters(WorldId::from_uuid(uuid))
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -66,7 +66,7 @@ pub async fn create_character(
     };
 
     let character = state
-        .character_service
+        .core.character_service
         .create_character(service_request)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -86,7 +86,7 @@ pub async fn get_character(
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid character ID".to_string()))?;
 
     let character = state
-        .character_service
+        .core.character_service
         .get_character(CharacterId::from_uuid(uuid))
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -119,7 +119,7 @@ pub async fn update_character(
     };
 
     let character = state
-        .character_service
+        .core.character_service
         .update_character(CharacterId::from_uuid(uuid), service_request)
         .await
         .map_err(|e| {
@@ -142,7 +142,7 @@ pub async fn delete_character(
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid character ID".to_string()))?;
 
     state
-        .character_service
+        .core.character_service
         .delete_character(CharacterId::from_uuid(uuid))
         .await
         .map_err(|e| {
@@ -172,7 +172,7 @@ pub async fn change_archetype(
     };
 
     state
-        .character_service
+        .core.character_service
         .change_archetype(CharacterId::from_uuid(uuid), service_request)
         .await
         .map_err(|e| {
@@ -197,7 +197,7 @@ pub async fn get_social_network(
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid world ID".to_string()))?;
 
     let network = state
-        .relationship_service
+        .core.relationship_service
         .get_social_network(WorldId::from_uuid(uuid))
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -237,7 +237,7 @@ pub async fn create_relationship(
     }
 
     state
-        .relationship_service
+        .core.relationship_service
         .create_relationship(&relationship)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -263,7 +263,7 @@ pub async fn delete_relationship(
     })?;
 
     state
-        .relationship_service
+        .core.relationship_service
         .delete_relationship(RelationshipId::from_uuid(uuid))
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
