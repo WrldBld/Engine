@@ -52,7 +52,7 @@ impl CircuitBreaker {
 
     /// Check if circuit is open (should reject requests)
     fn is_open(&self) -> bool {
-        let state = self.state.lock().unwrap();
+        let state = self.state.lock().unwrap_or_else(|p| p.into_inner());
         match *state {
             CircuitBreakerState::Open { until } => {
                 if Utc::now() < until {
@@ -68,7 +68,7 @@ impl CircuitBreaker {
 
     /// Check if circuit allows requests (closed or half-open)
     fn check_circuit(&self) -> Result<(), ComfyUIError> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
         match *state {
             CircuitBreakerState::Open { until } => {
                 if Utc::now() >= until {
@@ -85,18 +85,18 @@ impl CircuitBreaker {
 
     /// Record a successful operation
     fn record_success(&self) {
-        let mut state = self.state.lock().unwrap();
-        let mut failure_count = self.failure_count.lock().unwrap();
+        let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        let mut failure_count = self.failure_count.lock().unwrap_or_else(|p| p.into_inner());
         *failure_count = 0;
         *state = CircuitBreakerState::Closed;
     }
 
     /// Record a failed operation
     fn record_failure(&self) {
-        let mut state = self.state.lock().unwrap();
-        let mut failure_count = self.failure_count.lock().unwrap();
+        let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        let mut failure_count = self.failure_count.lock().unwrap_or_else(|p| p.into_inner());
         *failure_count += 1;
-        *self.last_failure.lock().unwrap() = Some(Utc::now());
+        *self.last_failure.lock().unwrap_or_else(|p| p.into_inner()) = Some(Utc::now());
 
         if *failure_count >= 5 {
             // Open circuit for 60 seconds
@@ -134,13 +134,13 @@ impl ComfyUIClient {
 
     /// Get a copy of the current config
     pub fn config(&self) -> ComfyUIConfig {
-        self.config.lock().unwrap().clone()
+        self.config.lock().unwrap_or_else(|p| p.into_inner()).clone()
     }
 
     /// Update the config
     pub fn update_config(&self, new_config: ComfyUIConfig) -> Result<(), String> {
         new_config.validate()?;
-        *self.config.lock().unwrap() = new_config;
+        *self.config.lock().unwrap_or_else(|p| p.into_inner()) = new_config;
         Ok(())
     }
 
@@ -148,7 +148,7 @@ impl ComfyUIClient {
     async fn cached_health_check(&self) -> Result<bool, ComfyUIError> {
         // Check cache first (5 second TTL)
         {
-            let cache = self.last_health_check.lock().unwrap();
+            let cache = self.last_health_check.lock().unwrap_or_else(|p| p.into_inner());
             if let Some((timestamp, result)) = cache.as_ref() {
                 let age = Utc::now().signed_duration_since(*timestamp);
                 if age.num_seconds() < 5 {
@@ -163,7 +163,7 @@ impl ComfyUIClient {
 
         // Update cache
         {
-            let mut cache = self.last_health_check.lock().unwrap();
+            let mut cache = self.last_health_check.lock().unwrap_or_else(|p| p.into_inner());
             *cache = Some((Utc::now(), is_healthy));
         }
 
@@ -194,7 +194,7 @@ impl ComfyUIClient {
     {
         let mut last_error: Option<String> = None;
 
-        let config = self.config.lock().unwrap().clone();
+        let config = self.config.lock().unwrap_or_else(|p| p.into_inner()).clone();
         for attempt in 0..=config.max_retries {
             // Check circuit breaker
             if let Err(e) = self.circuit_breaker.check_circuit() {
@@ -241,7 +241,7 @@ impl ComfyUIClient {
             }
         }
 
-        let config = self.config.lock().unwrap().clone();
+        let config = self.config.lock().unwrap_or_else(|p| p.into_inner()).clone();
         self.circuit_breaker.record_failure();
         Err(ComfyUIError::MaxRetriesExceeded(config.max_retries))
     }
@@ -249,13 +249,13 @@ impl ComfyUIClient {
     /// Get current connection state
     pub fn connection_state(&self) -> ComfyUIConnectionState {
         if self.circuit_breaker.is_open() {
-            let state = self.circuit_breaker.state.lock().unwrap();
+            let state = self.circuit_breaker.state.lock().unwrap_or_else(|p| p.into_inner());
             if let CircuitBreakerState::Open { until } = *state {
                 return ComfyUIConnectionState::CircuitOpen { until };
             }
         }
 
-        let cache = self.last_health_check.lock().unwrap();
+        let cache = self.last_health_check.lock().unwrap_or_else(|p| p.into_inner());
         if let Some((timestamp, is_healthy)) = cache.as_ref() {
             let age = Utc::now().signed_duration_since(*timestamp);
             if age.num_seconds() < 30 {
@@ -280,7 +280,7 @@ impl ComfyUIClient {
         // Health check before queuing
         self.cached_health_check().await?;
 
-        let config = self.config.lock().unwrap().clone();
+        let config = self.config.lock().unwrap_or_else(|p| p.into_inner()).clone();
         self.with_retry(|| {
             let client = self.client.clone();
             let base_url = self.base_url.clone();
@@ -324,7 +324,7 @@ impl ComfyUIClient {
     /// Get the history of a completed prompt
     pub async fn get_history(&self, prompt_id: &str) -> Result<HistoryResponse, ComfyUIError> {
         let prompt_id = prompt_id.to_string();
-        let config = self.config.lock().unwrap().clone();
+        let config = self.config.lock().unwrap_or_else(|p| p.into_inner()).clone();
         self.with_retry(|| {
             let client = self.client.clone();
             let base_url = self.base_url.clone();
@@ -368,7 +368,7 @@ impl ComfyUIClient {
         let filename = filename.to_string();
         let subfolder = subfolder.to_string();
         let folder_type = folder_type.to_string();
-        let config = self.config.lock().unwrap().clone();
+        let config = self.config.lock().unwrap_or_else(|p| p.into_inner()).clone();
         self.with_retry(|| {
             let client = self.client.clone();
             let base_url = self.base_url.clone();

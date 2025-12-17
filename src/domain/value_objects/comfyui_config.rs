@@ -1,4 +1,13 @@
 //! ComfyUI Configuration - Value object for ComfyUI retry and timeout settings
+//!
+//! # Architectural Note (ADR-001: Domain Serialization)
+//!
+//! `ComfyUIConfig` includes serde derives because:
+//! 1. It is loaded from configuration files at startup
+//! 2. The config file format IS the domain specification
+//! 3. This is a pure data structure with no behavior
+//!
+//! This is an accepted exception to the "no serde in domain" rule.
 
 use serde::{Deserialize, Serialize};
 

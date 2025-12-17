@@ -902,8 +902,6 @@ async fn handle_message(
                 challenge_name,
                 target_pc_id
             );
-            // Convert AdHocOutcomes to serde_json::Value
-            let outcomes_json = serde_json::to_value(&outcomes).unwrap_or_default();
             state
                 .challenge_resolution_service
                 .handle_adhoc_challenge(
@@ -912,7 +910,6 @@ async fn handle_message(
                     skill_name,
                     difficulty,
                     target_pc_id,
-                    outcomes_json,
                 )
                 .await
                 .and_then(value_to_server_message)

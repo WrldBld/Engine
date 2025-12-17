@@ -180,6 +180,94 @@ where
         }
     }
 
+    /// Internal helper to resolve challenge outcome and broadcast results.
+    ///
+    /// This handles the common logic shared between `handle_roll()` and `handle_roll_input()`:
+    /// 1. Publishes AppEvent for challenge resolution
+    /// 2. Executes outcome triggers
+    /// 3. Broadcasts ChallengeResolved message to all session participants
+    async fn resolve_challenge_internal(
+        &self,
+        challenge_id_str: &str,
+        challenge: &crate::domain::entities::Challenge,
+        outcome_type: OutcomeType,
+        outcome: &crate::domain::entities::Outcome,
+        session_id: Option<SessionId>,
+        character_id: String,
+        player_name: String,
+        roll: i32,
+        modifier: i32,
+        total: i32,
+        roll_breakdown: Option<String>,
+        individual_rolls: Option<Vec<i32>>,
+    ) {
+        let success =
+            outcome_type == OutcomeType::Success || outcome_type == OutcomeType::CriticalSuccess;
+
+        // Publish AppEvent for challenge resolution
+        let world_id = challenge.world_id;
+        let app_event = AppEvent::ChallengeResolved {
+            challenge_id: Some(challenge_id_str.to_string()),
+            challenge_name: challenge.name.clone(),
+            world_id: world_id.to_string(),
+            character_id,
+            success,
+            roll: Some(roll),
+            total: Some(total),
+            session_id: session_id.map(|sid| sid.to_string()),
+        };
+        if let Err(e) = self.event_bus.publish(app_event).await {
+            tracing::error!("Failed to publish ChallengeResolved event: {}", e);
+        }
+
+        // Execute outcome triggers
+        if let Some(sid) = session_id {
+            let trigger_result = self
+                .outcome_trigger_service
+                .execute_triggers(&outcome.triggers, self.sessions.as_ref(), sid)
+                .await;
+
+            if !trigger_result.warnings.is_empty() {
+                info!(
+                    trigger_count = trigger_result.trigger_count,
+                    warnings = ?trigger_result.warnings,
+                    "Outcome triggers executed with warnings"
+                );
+            }
+        }
+
+        // Broadcast ChallengeResolved to all participants
+        if let Some(session_id) = session_id {
+            let result_msg = ChallengeResolvedMessage {
+                r#type: "ChallengeResolved",
+                challenge_id: challenge_id_str.to_string(),
+                challenge_name: challenge.name.clone(),
+                character_name: player_name,
+                roll,
+                modifier,
+                total,
+                outcome: outcome_type.display_name().to_string(),
+                outcome_description: outcome.description.clone(),
+                roll_breakdown,
+                individual_rolls,
+            };
+            if let Ok(json) = serde_json::to_value(&result_msg) {
+                if let Err(e) = self
+                    .sessions
+                    .broadcast_to_session(session_id, json)
+                    .await
+                {
+                    tracing::error!("Failed to broadcast ChallengeResolved: {}", e);
+                }
+            } else {
+                tracing::error!(
+                    "Failed to serialize ChallengeResolved message for challenge {}",
+                    challenge_id_str
+                );
+            }
+        }
+    }
+
     /// Handle a player submitting a challenge roll.
     pub async fn handle_roll(
         &self,
@@ -263,11 +351,6 @@ where
         // Evaluate challenge result
         let (outcome_type, outcome) =
             evaluate_challenge_result(&challenge, roll, character_modifier);
-        let success =
-            outcome_type == OutcomeType::Success || outcome_type == OutcomeType::CriticalSuccess;
-
-        // Publish AppEvent for challenge resolution
-        let world_id = challenge.world_id;
 
         // Get character ID from player character lookup
         let character_id = if let Some(session_id_val) = session_id {
@@ -279,66 +362,22 @@ where
             player_name.clone()
         };
 
-        let app_event = AppEvent::ChallengeResolved {
-            challenge_id: Some(challenge_id_str.clone()),
-            challenge_name: challenge.name.clone(),
-            world_id: world_id.to_string(),
+        // Use common helper to publish events, execute triggers, and broadcast
+        self.resolve_challenge_internal(
+            &challenge_id_str,
+            &challenge,
+            outcome_type,
+            outcome,
+            session_id,
             character_id,
-            success,
-            roll: Some(roll),
-            total: Some(roll + character_modifier),
-            session_id: session_id.map(|sid| sid.to_string()),
-        };
-        if let Err(e) = self.event_bus.publish(app_event).await {
-            tracing::error!("Failed to publish ChallengeResolved event: {}", e);
-        }
-
-        // Execute outcome triggers (Phase 22D integration) for legacy path as well
-        if let Some(sid) = session_id {
-            let trigger_result = self
-                .outcome_trigger_service
-                .execute_triggers(&outcome.triggers, self.sessions.as_ref(), sid)
-                .await;
-
-            if !trigger_result.warnings.is_empty() {
-                info!(
-                    trigger_count = trigger_result.trigger_count,
-                    warnings = ?trigger_result.warnings,
-                    "Outcome triggers (legacy roll) executed with warnings"
-                );
-            }
-        }
-
-        // Broadcast ChallengeResolved to all participants
-        if let Some(session_id) = session_id {
-            let result_msg = ChallengeResolvedMessage {
-                r#type: "ChallengeResolved",
-                challenge_id: challenge_id_str.clone(),
-                challenge_name: challenge.name.clone(),
-                character_name: player_name,
-                roll,
-                modifier: character_modifier,
-                total: roll + character_modifier,
-                outcome: outcome_type.display_name().to_string(),
-                outcome_description: outcome.description.clone(),
-                roll_breakdown: None, // Legacy method doesn't have formula info
-                individual_rolls: None,
-            };
-            if let Ok(json) = serde_json::to_value(&result_msg) {
-                if let Err(e) = self
-                    .sessions
-                    .broadcast_to_session(session_id, json)
-                    .await
-                {
-                    tracing::error!("Failed to broadcast ChallengeResolved: {}", e);
-                }
-            } else {
-                tracing::error!(
-                    "Failed to serialize ChallengeResolved message for challenge {}",
-                    challenge_id_str
-                );
-            }
-        }
+            player_name,
+            roll,
+            character_modifier,
+            roll + character_modifier,
+            None, // Legacy method doesn't have formula info
+            None,
+        )
+        .await;
 
         None
     }
@@ -448,11 +487,6 @@ where
         // Evaluate challenge result
         let (outcome_type, outcome) =
             evaluate_challenge_result(&challenge, raw_roll, character_modifier);
-        let success =
-            outcome_type == OutcomeType::Success || outcome_type == OutcomeType::CriticalSuccess;
-
-        // Publish AppEvent for challenge resolution
-        let world_id = challenge.world_id;
 
         // Get character ID from player character lookup
         let character_id = if let Some(session_id_val) = session_id {
@@ -464,70 +498,26 @@ where
             player_name.clone()
         };
 
-        let app_event = AppEvent::ChallengeResolved {
-            challenge_id: Some(challenge_id_str.clone()),
-            challenge_name: challenge.name.clone(),
-            world_id: world_id.to_string(),
+        // Use common helper to publish events, execute triggers, and broadcast
+        self.resolve_challenge_internal(
+            &challenge_id_str,
+            &challenge,
+            outcome_type,
+            outcome,
+            session_id,
             character_id,
-            success,
-            roll: Some(raw_roll),
-            total: Some(roll_result.total),
-            session_id: session_id.map(|sid| sid.to_string()),
-        };
-        if let Err(e) = self.event_bus.publish(app_event).await {
-            tracing::error!("Failed to publish ChallengeResolved event: {}", e);
-        }
-
-        // Execute outcome triggers (Phase 22D integration)
-        if let Some(sid) = session_id {
-            let trigger_result = self
-                .outcome_trigger_service
-                .execute_triggers(&outcome.triggers, self.sessions.as_ref(), sid)
-                .await;
-
-            if !trigger_result.warnings.is_empty() {
-                info!(
-                    trigger_count = trigger_result.trigger_count,
-                    warnings = ?trigger_result.warnings,
-                    "Outcome triggers executed with warnings"
-                );
-            }
-        }
-
-        // Broadcast ChallengeResolved to all participants
-        if let Some(session_id) = session_id {
-            let result_msg = ChallengeResolvedMessage {
-                r#type: "ChallengeResolved",
-                challenge_id: challenge_id_str.clone(),
-                challenge_name: challenge.name.clone(),
-                character_name: player_name,
-                roll: raw_roll,
-                modifier: roll_result.modifier_applied,
-                total: roll_result.total,
-                outcome: outcome_type.display_name().to_string(),
-                outcome_description: outcome.description.clone(),
-                roll_breakdown: Some(roll_result.breakdown()),
-                individual_rolls: if roll_result.is_manual() {
-                    None
-                } else {
-                    Some(roll_result.individual_rolls.clone())
-                },
-            };
-            if let Ok(json) = serde_json::to_value(&result_msg) {
-                if let Err(e) = self
-                    .sessions
-                    .broadcast_to_session(session_id, json)
-                    .await
-                {
-                    tracing::error!("Failed to broadcast ChallengeResolved: {}", e);
-                }
+            player_name,
+            raw_roll,
+            roll_result.modifier_applied,
+            roll_result.total,
+            Some(roll_result.breakdown()),
+            if roll_result.is_manual() {
+                None
             } else {
-                tracing::error!(
-                    "Failed to serialize ChallengeResolved message for challenge {}",
-                    challenge_id_str
-                );
-            }
-        }
+                Some(roll_result.individual_rolls.clone())
+            },
+        )
+        .await;
 
         None
     }
@@ -732,7 +722,6 @@ where
         skill_name: String,
         difficulty: String,
         target_pc_id: String,
-        outcomes: serde_json::Value,  // Accept generic JSON for adhoc outcomes
     ) -> Option<serde_json::Value> {
         // Check if client is DM
         if !self.sessions.is_client_dm(&client_id).await {

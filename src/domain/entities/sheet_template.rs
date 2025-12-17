@@ -5,6 +5,16 @@
 //! - Fields (individual data points with types)
 //! - Derived values (calculated from other fields)
 //! - Layout hints for UI rendering
+//!
+//! # Architectural Note (ADR-001: Domain Serialization)
+//!
+//! `CharacterSheetData` and `FieldValue` types intentionally include serde derives because:
+//! 1. They are stored as JSON blobs in Neo4j (not normalized tables)
+//! 2. Creating separate infrastructure DTOs would add significant boilerplate
+//!    with no actual decoupling benefit (the JSON schema IS the domain contract)
+//! 3. The types are value objects with no behavior, so serialization is intrinsic
+//!
+//! This is an accepted exception to the "no serde in domain" rule.
 
 use std::collections::HashMap;
 use serde::{Deserialize, Serialize};

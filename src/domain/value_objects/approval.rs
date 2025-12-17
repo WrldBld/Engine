@@ -1,4 +1,13 @@
 //! Approval-related value objects
+//!
+//! # Architectural Note (ADR-001: Domain Serialization)
+//!
+//! `ProposedToolInfo` and `ApprovalDecision` include serde derives because:
+//! 1. They are serialized directly in WebSocket messages for DM approval workflow
+//! 2. The wire format IS the domain contract - no translation layer adds value
+//! 3. These are simple value objects with no domain behavior
+//!
+//! This is an accepted exception to the "no serde in domain" rule.
 
 use serde::{Deserialize, Serialize};
 
