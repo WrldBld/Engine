@@ -122,6 +122,102 @@ pub enum ClientMessage {
         /// Optional guidance for the LLM
         guidance: Option<String>,
     },
+
+    /// DM requests LLM to generate outcome branches
+    RequestOutcomeBranches {
+        /// ID of the pending resolution
+        resolution_id: String,
+        /// Optional guidance for branch generation
+        guidance: Option<String>,
+    },
+
+    /// DM selects an outcome branch
+    SelectOutcomeBranch {
+        /// ID of the pending resolution
+        resolution_id: String,
+        /// ID of the selected branch
+        branch_id: String,
+        /// Optional edits to the branch description
+        modified_description: Option<String>,
+    },
+
+    // =========================================================================
+    // Phase 23D: NPC Location Sharing (Observations)
+    // =========================================================================
+
+    /// DM shares NPC location with player (creates HeardAbout observation)
+    ShareNpcLocation {
+        /// The PC who will receive this info
+        pc_id: String,
+        /// The NPC whose location is being shared
+        npc_id: String,
+        /// The location where the NPC is (claimed to be)
+        location_id: String,
+        /// The region within the location
+        region_id: String,
+        /// Optional notes (e.g., "The bartender told you...")
+        notes: Option<String>,
+    },
+
+    // =========================================================================
+    // Phase 23C: Navigation
+    // =========================================================================
+
+    /// Player selects a PC to play
+    SelectPlayerCharacter {
+        /// The PC ID to select
+        pc_id: String,
+    },
+
+    /// Player moves to a different region within the same location
+    MoveToRegion {
+        /// The PC that is moving
+        pc_id: String,
+        /// The target region ID
+        region_id: String,
+    },
+
+    /// Player exits to a different location
+    ExitToLocation {
+        /// The PC that is moving
+        pc_id: String,
+        /// The target location ID
+        location_id: String,
+        /// Optional specific arrival region (uses location default if not provided)
+        arrival_region_id: Option<String>,
+    },
+
+    // =========================================================================
+    // Phase 23E: DM Event System
+    // =========================================================================
+
+    /// DM triggers an NPC approach event (NPC approaches a player)
+    TriggerApproachEvent {
+        /// The NPC who is approaching
+        npc_id: String,
+        /// The PC being approached
+        target_pc_id: String,
+        /// Narrative description of the approach
+        description: String,
+    },
+
+    /// DM triggers a location event (narration for all PCs in a region)
+    TriggerLocationEvent {
+        /// The region where the event happens
+        region_id: String,
+        /// Narrative description of the event
+        description: String,
+    },
+
+    // =========================================================================
+    // Phase 23F: Game Time Control
+    // =========================================================================
+
+    /// DM advances the in-game time
+    AdvanceGameTime {
+        /// Number of hours to advance
+        hours: u32,
+    },
 }
 
 /// Messages from server (Engine) to client (Player)
@@ -356,6 +452,102 @@ pub enum ServerMessage {
         /// Alternative outcome descriptions
         suggestions: Vec<String>,
     },
+
+    /// LLM-generated outcome branches are ready for selection (sent to DM)
+    OutcomeBranchesReady {
+        /// Resolution ID this applies to
+        resolution_id: String,
+        /// Outcome tier (e.g., "Success", "Critical Failure")
+        outcome_type: String,
+        /// Available branches to choose from
+        branches: Vec<OutcomeBranchData>,
+    },
+
+    // =========================================================================
+    // Phase 23E: DM Event System
+    // =========================================================================
+
+    /// An NPC is approaching the player (sent to target PC)
+    ApproachEvent {
+        /// The NPC's ID
+        npc_id: String,
+        /// The NPC's name
+        npc_name: String,
+        /// The NPC's sprite asset (if any)
+        npc_sprite: Option<String>,
+        /// Narrative description of the approach
+        description: String,
+    },
+
+    /// A location event occurred (sent to all PCs in region)
+    LocationEvent {
+        /// The region where the event occurred
+        region_id: String,
+        /// Narrative description of the event
+        description: String,
+    },
+
+    /// NPC location was shared with the player (sent to target PC)
+    NpcLocationShared {
+        /// The NPC's ID
+        npc_id: String,
+        /// The NPC's name
+        npc_name: String,
+        /// The region name where NPC was seen/heard about
+        region_name: String,
+        /// Optional notes from the source
+        notes: Option<String>,
+    },
+
+    // =========================================================================
+    // Phase 23C: Navigation & Scene Updates
+    // =========================================================================
+
+    /// PC was selected for play
+    PcSelected {
+        /// The selected PC's ID
+        pc_id: String,
+        /// The PC's name
+        pc_name: String,
+        /// Current location ID
+        location_id: String,
+        /// Current region ID (if any)
+        region_id: Option<String>,
+    },
+
+    /// Scene changed due to PC movement
+    SceneChanged {
+        /// The PC that moved
+        pc_id: String,
+        /// New region info
+        region: RegionData,
+        /// NPCs present in the new region
+        npcs_present: Vec<NpcPresenceData>,
+        /// Navigation options from this region
+        navigation: NavigationData,
+    },
+
+    /// Movement was blocked (locked door, etc.)
+    MovementBlocked {
+        /// The PC that tried to move
+        pc_id: String,
+        /// Why movement was blocked
+        reason: String,
+    },
+
+    // =========================================================================
+    // Phase 23F: Game Time Control
+    // =========================================================================
+
+    /// Game time has been updated (broadcast to all)
+    GameTimeUpdated {
+        /// Display string (e.g., "Day 3, 2:30 PM")
+        display: String,
+        /// Time of day (Morning, Afternoon, Evening, Night)
+        time_of_day: String,
+        /// Whether time is paused
+        is_paused: bool,
+    },
 }
 
 /// Information about a session participant
@@ -507,4 +699,85 @@ pub enum ChallengeOutcomeDecisionData {
     },
 }
 
+/// Outcome branch data for DM selection
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OutcomeBranchData {
+    /// Unique identifier for this branch
+    pub id: String,
+    /// Short title/summary of this outcome
+    pub title: String,
+    /// Full narrative description
+    pub description: String,
+    /// Optional mechanical effects
+    #[serde(default)]
+    pub effects: Vec<String>,
+}
 
+// =============================================================================
+// Phase 23C: Navigation Data Structures
+// =============================================================================
+
+/// Region data for scene display
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegionData {
+    /// Region ID
+    pub id: String,
+    /// Region name
+    pub name: String,
+    /// Parent location ID
+    pub location_id: String,
+    /// Parent location name
+    pub location_name: String,
+    /// Backdrop image asset
+    pub backdrop_asset: Option<String>,
+    /// Atmosphere description
+    pub atmosphere: Option<String>,
+}
+
+/// NPC presence data for scene display
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NpcPresenceData {
+    /// Character ID
+    pub character_id: String,
+    /// Character name
+    pub name: String,
+    /// Sprite asset for display
+    pub sprite_asset: Option<String>,
+    /// Portrait asset
+    pub portrait_asset: Option<String>,
+}
+
+/// Navigation options from current region
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NavigationData {
+    /// Connected regions within same location
+    pub connected_regions: Vec<NavigationTarget>,
+    /// Exits to other locations
+    pub exits: Vec<NavigationExit>,
+}
+
+/// A navigation target (region within same location)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NavigationTarget {
+    /// Region ID
+    pub region_id: String,
+    /// Region name
+    pub name: String,
+    /// Whether this path is locked
+    pub is_locked: bool,
+    /// Description of why it's locked (if applicable)
+    pub lock_description: Option<String>,
+}
+
+/// An exit to another location
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NavigationExit {
+    /// Target location ID
+    pub location_id: String,
+    /// Target location name
+    pub location_name: String,
+    /// Arrival region in target location
+    pub arrival_region_id: String,
+    /// Description of the exit
+    pub description: Option<String>,
+}

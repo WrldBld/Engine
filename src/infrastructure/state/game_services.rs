@@ -6,8 +6,9 @@ use crate::application::dto::ApprovalItem;
 use crate::application::ports::outbound::LlmPort;
 use crate::application::services::{
     challenge_resolution_service::ChallengeResolutionService, ChallengeOutcomeApprovalService,
-    ChallengeServiceImpl, EventChainServiceImpl, NarrativeEventApprovalService,
+    ChallengeServiceImpl, EventChainServiceImpl, EventEffectExecutor, NarrativeEventApprovalService,
     NarrativeEventServiceImpl, PlayerCharacterServiceImpl, SkillServiceImpl, StoryEventService,
+    TriggerEvaluationService,
 };
 
 /// Services for game mechanics, challenges, and narrative events
@@ -32,6 +33,10 @@ pub struct GameServices<L: LlmPort> {
     pub narrative_event_service: NarrativeEventServiceImpl,
     pub narrative_event_approval_service: Arc<NarrativeEventApprovalService<NarrativeEventServiceImpl>>,
     pub event_chain_service: EventChainServiceImpl,
+    /// Service for evaluating narrative event triggers (Phase 2)
+    pub trigger_evaluation_service: Arc<TriggerEvaluationService>,
+    /// Service for executing narrative event outcome effects (Phase 2)
+    pub event_effect_executor: Arc<EventEffectExecutor>,
 }
 
 impl<L: LlmPort + 'static> GameServices<L> {
@@ -53,6 +58,8 @@ impl<L: LlmPort + 'static> GameServices<L> {
         narrative_event_service: NarrativeEventServiceImpl,
         narrative_event_approval_service: Arc<NarrativeEventApprovalService<NarrativeEventServiceImpl>>,
         event_chain_service: EventChainServiceImpl,
+        trigger_evaluation_service: Arc<TriggerEvaluationService>,
+        event_effect_executor: Arc<EventEffectExecutor>,
     ) -> Self {
         Self {
             story_event_service,
@@ -62,6 +69,8 @@ impl<L: LlmPort + 'static> GameServices<L> {
             narrative_event_service,
             narrative_event_approval_service,
             event_chain_service,
+            trigger_evaluation_service,
+            event_effect_executor,
         }
     }
 }

@@ -85,6 +85,9 @@ async fn main() -> anyhow::Result<()> {
         let challenge_service = Arc::new(state.game.challenge_service.clone());
         let skill_service = Arc::new(state.core.skill_service.clone());
         let narrative_event_service = Arc::new(state.game.narrative_event_service.clone());
+        let character_repo: Arc<dyn crate::application::ports::outbound::CharacterRepositoryPort> =
+            Arc::new(state.repository.characters());
+        let settings_service = state.settings_service.clone();
         let notifier = service.queue.notifier();
         let recovery_interval_clone = recovery_interval;
         tokio::spawn(async move {
@@ -94,18 +97,24 @@ async fn main() -> anyhow::Result<()> {
                 let challenge_service_clone = challenge_service.clone();
                 let skill_service_clone = skill_service.clone();
                 let narrative_event_service_clone = narrative_event_service.clone();
+                let character_repo_clone = character_repo.clone();
+                let settings_service_clone = settings_service.clone();
                 match service
                     .process_next(|action| {
                         let sessions = sessions_clone.clone();
                         let challenge_service = challenge_service_clone.clone();
                         let skill_service = skill_service_clone.clone();
                         let narrative_event_service = narrative_event_service_clone.clone();
+                        let character_repo = character_repo_clone.clone();
+                        let settings_service = settings_service_clone.clone();
                         async move {
                         build_prompt_from_action(
                             &sessions,
                             &challenge_service,
                             &skill_service,
                             &narrative_event_service,
+                            &character_repo,
+                            &settings_service,
                                 &action,
                         )
                         .await

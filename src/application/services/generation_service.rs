@@ -17,7 +17,7 @@ use crate::application::ports::outbound::{AssetRepositoryPort, ComfyUIPort};
 use crate::domain::entities::{
     AssetType, BatchStatus, EntityType, GalleryAsset, GenerationBatch, GenerationMetadata,
 };
-use crate::domain::value_objects::{AssetId, BatchId};
+use crate::domain::value_objects::{AssetId, BatchId, WorldId};
 
 /// Events emitted by the generation service
 #[derive(Debug, Clone)]
@@ -79,6 +79,7 @@ pub enum GenerationEvent {
 /// Request to generate assets
 #[derive(Debug, Clone)]
 pub struct GenerationRequest {
+    pub world_id: WorldId,
     pub entity_type: EntityType,
     pub entity_id: String,
     pub asset_type: AssetType,
@@ -138,6 +139,7 @@ impl GenerationService {
 
         let batch = GenerationBatch {
             id: batch_id,
+            world_id: request.world_id,
             entity_type: request.entity_type,
             entity_id: request.entity_id.clone(),
             asset_type: request.asset_type,
@@ -613,9 +615,9 @@ impl GenerationService {
         self.repository.get_batch(batch_id).await
     }
 
-    /// List all active (queued or generating) batches
-    pub async fn list_active_batches(&self) -> Result<Vec<GenerationBatch>> {
-        self.repository.list_active_batches().await
+    /// List all active (queued or generating) batches for a specific world
+    pub async fn list_active_batches_by_world(&self, world_id: WorldId) -> Result<Vec<GenerationBatch>> {
+        self.repository.list_active_batches_by_world(world_id).await
     }
 
     /// List batches ready for selection

@@ -32,7 +32,7 @@ use crate::application::services::{
     PlayerCharacterServiceImpl, SceneResolutionServiceImpl, SceneServiceImpl, SettingsService,
     SheetTemplateService, SkillServiceImpl, StoryEventService, RelationshipServiceImpl,
     WorkflowConfigService, WorldServiceImpl, GenerationQueueProjectionService, SessionJoinService,
-    OutcomeTriggerService,
+    OutcomeTriggerService, TriggerEvaluationService, EventEffectExecutor,
 };
 use crate::application::services::generation_service::{GenerationService, GenerationEvent};
 use crate::application::dto::AppEvent;
@@ -58,14 +58,11 @@ use crate::infrastructure::session_adapter::SessionManagerAdapter;
 /// for better organization and maintainability.
 pub struct AppState {
     pub config: AppConfig,
-    /// Neo4j repository - kept for potential direct access, normally use services
+    /// Neo4j repository - direct access for specialized operations
     ///
-    /// This field is private and marked `#[allow(dead_code)]` because all data access
-    /// should go through the individual repository ports (world_repo, character_repo, etc.)
-    /// which provide proper trait-based abstraction. This field is retained in case
-    /// direct repository access is needed for advanced operations.
-    #[allow(dead_code)]
-    repository: Neo4jRepository,
+    /// While most data access should go through service layers, some operations
+    /// (like region management) may need direct repository access.
+    pub repository: Neo4jRepository,
     pub llm_client: OllamaClient,
     pub comfyui_client: ComfyUIClient,
     /// Active WebSocket sessions
@@ -99,6 +96,24 @@ impl AppState {
 
         // Initialize ComfyUI client
         let comfyui_client = ComfyUIClient::new(&config.comfyui_base_url);
+
+        // Initialize settings service early (needed by other services for validation)
+        let settings_db_path = config.queue.sqlite_path.replace(".db", "_settings.db");
+        if let Some(parent) = std::path::Path::new(&settings_db_path).parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| anyhow::anyhow!("Failed to create settings database directory: {}", e))?;
+        }
+        let settings_pool = sqlx::SqlitePool::connect(&format!("sqlite:{}?mode=rwc", settings_db_path))
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to connect to settings database: {}", e))?;
+        tracing::info!("Connected to settings database: {}", settings_db_path);
+
+        let settings_repository = SqliteSettingsRepository::new(settings_pool)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to initialize settings repository: {}", e))?;
+        let settings_repository: Arc<dyn crate::application::ports::outbound::SettingsRepositoryPort> =
+            Arc::new(settings_repository);
+        let settings_service = Arc::new(SettingsService::new(settings_repository));
 
         // Create individual repository ports as Arc'd trait objects
         let world_repo: Arc<dyn crate::application::ports::outbound::WorldRepositoryPort> =
@@ -137,15 +152,18 @@ impl AppState {
             Arc::new(Neo4jWorldExporter::new(repository.clone()));
 
         // Initialize application services
-        let world_service = WorldServiceImpl::new(world_repo.clone(), world_exporter);
+        let world_service = WorldServiceImpl::new(world_repo.clone(), world_exporter, settings_service.clone());
         let character_service = CharacterServiceImpl::new(
             world_repo.clone(),
             character_repo.clone(),
             relationship_repo.clone(),
+            settings_service.clone(),
         );
         let location_service = LocationServiceImpl::new(world_repo.clone(), location_repo.clone());
+        let relationship_repo_for_effects = relationship_repo.clone();
         let relationship_service = RelationshipServiceImpl::new(relationship_repo);
         let scene_repo_for_resolution = scene_repo.clone();
+        let character_repo_for_triggers = character_repo.clone();
         let scene_service = SceneServiceImpl::new(scene_repo.clone(), location_repo.clone(), character_repo);
         let skill_service = SkillServiceImpl::new(skill_repo.clone(), world_repo.clone());
         let interaction_service = InteractionServiceImpl::new(interaction_repo);
@@ -154,11 +172,19 @@ impl AppState {
         let challenge_service = ChallengeServiceImpl::new(challenge_repo.clone());
         // Narrative event service will be created after event_bus
         let narrative_event_repo_for_service = narrative_event_repo.clone();
+        // Repos needed for trigger evaluation service (Phase 2)
+        let narrative_event_repo_for_triggers = narrative_event_repo.clone();
+        let challenge_repo_for_triggers = challenge_repo.clone();
+        let story_event_repo_for_triggers = story_event_repo.clone();
+        // Repos needed for event effect executor (Phase 2)
+        let narrative_event_repo_for_effects = narrative_event_repo.clone();
+        let challenge_repo_for_effects = challenge_repo.clone();
         let event_chain_service = EventChainServiceImpl::new(event_chain_repo);
         let asset_repo_for_service = asset_repo.clone();
         let asset_service = AssetServiceImpl::new(asset_repo_for_service);
         let workflow_config_service = WorkflowConfigService::new(workflow_repo);
         let sheet_template_service = SheetTemplateService::new(sheet_template_repo);
+        let player_character_repo_for_triggers = player_character_repo.clone();
         let player_character_service = PlayerCharacterServiceImpl::new(
             player_character_repo.clone(),
             location_repo.clone(),
@@ -197,23 +223,7 @@ impl AppState {
             .map_err(|e| anyhow::anyhow!("Failed to connect to event database: {}", e))?;
         tracing::info!("Connected to event database: {}", event_db_path);
 
-        // Initialize settings repository (using separate SQLite database)
-        let settings_db_path = config.queue.sqlite_path.replace(".db", "_settings.db");
-        if let Some(parent) = std::path::Path::new(&settings_db_path).parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| anyhow::anyhow!("Failed to create settings database directory: {}", e))?;
-        }
-        let settings_pool = sqlx::SqlitePool::connect(&format!("sqlite:{}?mode=rwc", settings_db_path))
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to connect to settings database: {}", e))?;
-        tracing::info!("Connected to settings database: {}", settings_db_path);
-
-        let settings_repository = SqliteSettingsRepository::new(settings_pool)
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to initialize settings repository: {}", e))?;
-        let settings_repository: Arc<dyn crate::application::ports::outbound::SettingsRepositoryPort> =
-            Arc::new(settings_repository);
-        let settings_service = Arc::new(SettingsService::new(settings_repository));
+        // Note: settings_service was initialized earlier (needed by services for validation)
 
         let app_event_repository_impl = SqliteAppEventRepository::new(event_pool).await
             .map_err(|e| anyhow::anyhow!("Failed to initialize event repository: {}", e))?;
@@ -294,14 +304,15 @@ impl AppState {
         ));
 
         // Create challenge outcome approval service (P3.3) - must be created before resolution service
-        // Wire LLM port for suggestion generation
+        // Wire LLM port for suggestion generation and settings service for branch count
         let llm_for_suggestions = Arc::new(llm_client.clone());
         let challenge_outcome_approval_service = Arc::new(
             ChallengeOutcomeApprovalService::new(
                 async_session_port.clone(),
                 outcome_trigger_service.clone(),
             )
-            .with_llm_port(llm_for_suggestions),
+            .with_llm_port(llm_for_suggestions)
+            .with_settings_service(settings_service.clone()),
         );
 
         // Create challenge resolution service with approval service wired in
@@ -323,6 +334,23 @@ impl AppState {
             async_session_port.clone(),
             Arc::new(narrative_event_service.clone()),
             Arc::new(story_event_service.clone()),
+        ));
+
+        // Create trigger evaluation service (Phase 2)
+        let trigger_evaluation_service = Arc::new(TriggerEvaluationService::new(
+            narrative_event_repo_for_triggers,
+            challenge_repo_for_triggers,
+            character_repo_for_triggers,
+            player_character_repo_for_triggers,
+            story_event_repo_for_triggers,
+        ));
+
+        // Create event effect executor (Phase 2)
+        let event_effect_executor = Arc::new(EventEffectExecutor::new(
+            async_session_port.clone(),
+            challenge_repo_for_effects,
+            narrative_event_repo_for_effects,
+            relationship_repo_for_effects,
         ));
 
         // Create session join service
@@ -357,6 +385,8 @@ impl AppState {
             narrative_event_service,
             narrative_event_approval_service,
             event_chain_service,
+            trigger_evaluation_service,
+            event_effect_executor,
         );
 
         let queues = QueueServices::new(

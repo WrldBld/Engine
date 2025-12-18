@@ -48,7 +48,8 @@ pub struct LocationData {
     pub description: String,
     pub location_type: String,
     pub backdrop_asset: Option<String>,
-    pub parent_id: Option<String>,
+    pub atmosphere: Option<String>,
+    // Note: parent_id is now derived from CONTAINS_LOCATION edges, not stored here
 }
 
 /// Character data for Player clients

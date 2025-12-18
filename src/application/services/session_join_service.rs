@@ -29,15 +29,6 @@ struct SessionSnapshotMessage {
     world_snapshot: serde_json::Value,
 }
 
-/// Internal world snapshot structure (application layer)
-struct WorldSnapshot {
-    world: crate::domain::entities::World,
-    locations: Vec<crate::domain::entities::Location>,
-    characters: Vec<crate::domain::entities::Character>,
-    scenes: Vec<crate::domain::entities::Scene>,
-    current_scene_id: Option<String>,
-}
-
 /// Information returned when a client successfully joins a session
 pub struct SessionJoinedInfo {
     pub session_id: SessionId,
@@ -228,140 +219,13 @@ async fn gather_participants(
         .map(|p| ParticipantInfo {
             user_id: p.user_id,
             role: p.role,
-            character_name: None, // TODO: Load from character selection
+            character_name: p.character_name,
         })
         .collect()
 }
 
-/// Convert PlayerWorldSnapshot to internal representation for legacy callers
-/// (kept for reference and potential future use).
-#[allow(dead_code)]
-pub fn convert_to_internal_snapshot(player_snapshot: &PlayerWorldSnapshot) -> crate::infrastructure::session::WorldSnapshot {
-    use crate::domain::entities::{
-        Character, Location, LocationType, Scene, StatBlock, TimeContext, World,
-    };
-    use crate::domain::value_objects::{
-        ActId, CampbellArchetype, CharacterId, LocationId, SceneId,
-    };
-
-    // Convert world data
-    let world_id = uuid::Uuid::parse_str(&player_snapshot.world.id)
-        .map(WorldId::from_uuid)
-        .unwrap_or_else(|_| WorldId::new());
-
-    use chrono::Utc;
-    let now = Utc::now();
-
-    let world = World {
-        id: world_id,
-        name: player_snapshot.world.name.clone(),
-        description: player_snapshot.world.description.clone(),
-        rule_system: player_snapshot.world.rule_system.clone().into(),
-        created_at: now,
-        updated_at: now,
-    };
-
-    // Convert locations
-    let locations: Vec<Location> = player_snapshot
-        .locations
-        .iter()
-        .map(|l| {
-            let location_id = uuid::Uuid::parse_str(&l.id)
-                .map(LocationId::from_uuid)
-                .unwrap_or_else(|_| LocationId::new());
-            let parent_id = l
-                .parent_id
-                .as_ref()
-                .and_then(|pid| uuid::Uuid::parse_str(pid).map(LocationId::from_uuid).ok());
-
-            Location {
-                id: location_id,
-                world_id,
-                parent_id,
-                name: l.name.clone(),
-                description: l.description.clone(),
-                location_type: LocationType::Interior, // Default to Interior
-                backdrop_asset: l.backdrop_asset.clone(),
-                grid_map_id: None,
-                backdrop_regions: Vec::new(),
-            }
-        })
-        .collect();
-
-    // Convert characters
-    let characters: Vec<Character> = player_snapshot
-        .characters
-        .iter()
-        .map(|c| {
-            let character_id = uuid::Uuid::parse_str(&c.id)
-                .map(CharacterId::from_uuid)
-                .unwrap_or_else(|_| CharacterId::new());
-
-            Character {
-                id: character_id,
-                world_id,
-                name: c.name.clone(),
-                description: c.description.clone(),
-                sprite_asset: c.sprite_asset.clone(),
-                portrait_asset: c.portrait_asset.clone(),
-                base_archetype: CampbellArchetype::Ally, // Default archetype
-                current_archetype: CampbellArchetype::Ally,
-                archetype_history: Vec::new(),
-                wants: Vec::new(),
-                stats: StatBlock::default(),
-                inventory: Vec::new(),
-                is_alive: c.is_alive,
-                is_active: c.is_active,
-            }
-        })
-        .collect();
-
-    // Convert scenes
-    let scenes: Vec<Scene> = player_snapshot
-        .scenes
-        .iter()
-        .map(|s| {
-            let scene_id = uuid::Uuid::parse_str(&s.id)
-                .map(SceneId::from_uuid)
-                .unwrap_or_else(|_| SceneId::new());
-            let location_id = uuid::Uuid::parse_str(&s.location_id)
-                .map(LocationId::from_uuid)
-                .unwrap_or_else(|_| LocationId::new());
-            let featured_characters: Vec<CharacterId> = s
-                .featured_characters
-                .iter()
-                .filter_map(|cid| uuid::Uuid::parse_str(cid).map(CharacterId::from_uuid).ok())
-                .collect();
-
-            Scene {
-                id: scene_id,
-                act_id: ActId::new(), // Placeholder
-                name: s.name.clone(),
-                location_id,
-                time_context: TimeContext::Unspecified,
-                backdrop_override: s.backdrop_override.clone(),
-                entry_conditions: Vec::new(),
-                featured_characters,
-                directorial_notes: s.directorial_notes.clone(),
-                order: 0,
-            }
-        })
-        .collect();
-
-    crate::infrastructure::session::WorldSnapshot {
-        world,
-        locations,
-        characters,
-        scenes,
-        current_scene_id: player_snapshot
-            .current_scene
-            .as_ref()
-            .map(|s| s.id.clone()),
-    }
-}
-
 /// Create a demo world snapshot for testing
-fn create_demo_world() -> WorldSnapshot {
+fn create_demo_world() -> crate::application::dto::WorldSnapshot {
     #[cfg(debug_assertions)]
     tracing::warn!("Creating demo world - this should only happen in development");
 
@@ -378,7 +242,7 @@ fn create_demo_world() -> WorldSnapshot {
         updated_at: Utc::now(),
     };
 
-    WorldSnapshot {
+    crate::application::dto::WorldSnapshot {
         world,
         locations: vec![],
         characters: vec![],

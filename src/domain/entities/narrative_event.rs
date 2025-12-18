@@ -2,6 +2,17 @@
 //!
 //! NarrativeEvents represent future events that can trigger when conditions are met.
 //! They support complex triggers, branching outcomes, and chaining to other events.
+//!
+//! # Graph Relationships (stored as Neo4j edges, not embedded fields)
+//!
+//! - `TIED_TO_SCENE` → Scene: Optional scene this event is tied to
+//! - `TIED_TO_LOCATION` → Location: Optional location this event is tied to
+//! - `BELONGS_TO_ACT` → Act: Optional act for Monomyth integration
+//! - `FEATURES_NPC` → Character: NPCs that should be featured in this event
+//! - `CONTAINS_EVENT` ← EventChain: Chain membership (edge stored on EventChain side)
+//!
+//! Note: `trigger_conditions` and `outcomes` remain as JSON fields because they contain
+//! complex nested structures with non-entity data (keywords, descriptions, effects).
 
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
@@ -11,6 +22,15 @@ use crate::domain::value_objects::{
 };
 
 /// A narrative event that can be triggered when conditions are met
+///
+/// # Graph Relationships
+///
+/// The following associations are stored as graph edges (not embedded fields):
+/// - Scene association: Use `TIED_TO_SCENE` edge via repository methods
+/// - Location association: Use `TIED_TO_LOCATION` edge via repository methods
+/// - Act association: Use `BELONGS_TO_ACT` edge via repository methods
+/// - Featured NPCs: Use `FEATURES_NPC` edges via repository methods
+/// - Chain membership: Use `CONTAINS_EVENT` edge (from EventChain) via EventChainRepositoryPort
 #[derive(Debug, Clone)]
 pub struct NarrativeEvent {
     pub id: NarrativeEventId,
@@ -26,6 +46,7 @@ pub struct NarrativeEvent {
 
     // Trigger Configuration
     /// Conditions that must be met to trigger this event
+    /// (Kept as JSON - contains complex nested structures with non-entity data)
     pub trigger_conditions: Vec<NarrativeTrigger>,
     /// How multiple conditions are evaluated
     pub trigger_logic: TriggerLogic,
@@ -35,11 +56,11 @@ pub struct NarrativeEvent {
     pub scene_direction: String,
     /// Suggested opening dialogue or action
     pub suggested_opening: Option<String>,
-    /// NPCs that should be featured in this event
-    pub featured_npcs: Vec<CharacterId>,
+    // NOTE: featured_npcs moved to FEATURES_NPC edges
 
     // Outcomes
     /// Possible outcomes with their effects and chains
+    /// (Kept as JSON - contains complex nested structures with non-entity data)
     pub outcomes: Vec<EventOutcome>,
     /// Default outcome if DM doesn't select one
     pub default_outcome: Option<String>,
@@ -64,13 +85,7 @@ pub struct NarrativeEvent {
     /// Expiration - event becomes inactive after this (optional)
     pub expires_after_turns: Option<u32>,
 
-    // Associations
-    /// Scene this event is tied to (if any)
-    pub scene_id: Option<SceneId>,
-    /// Location this event is tied to (if any)
-    pub location_id: Option<LocationId>,
-    /// Act this event belongs to (optional Monomyth integration)
-    pub act_id: Option<ActId>,
+    // NOTE: scene_id, location_id, act_id moved to graph edges
 
     // Organization
     /// Priority for ordering multiple triggered events (higher = first)
@@ -78,11 +93,7 @@ pub struct NarrativeEvent {
     /// Is this a favorite for quick access
     pub is_favorite: bool,
 
-    // Chain Membership
-    /// Part of an event chain
-    pub chain_id: Option<EventChainId>,
-    /// Position in chain (if part of one)
-    pub chain_position: Option<u32>,
+    // NOTE: chain_id, chain_position moved to CONTAINS_EVENT edge (from EventChain)
 
     // Metadata
     pub created_at: DateTime<Utc>,
@@ -377,7 +388,7 @@ impl NarrativeEvent {
             trigger_logic: TriggerLogic::All,
             scene_direction: String::new(),
             suggested_opening: None,
-            featured_npcs: Vec::new(),
+            // NOTE: featured_npcs now stored as FEATURES_NPC edges
             outcomes: Vec::new(),
             default_outcome: None,
             is_active: true,
@@ -388,13 +399,10 @@ impl NarrativeEvent {
             trigger_count: 0,
             delay_turns: 0,
             expires_after_turns: None,
-            scene_id: None,
-            location_id: None,
-            act_id: None,
+            // NOTE: scene_id, location_id, act_id now stored as graph edges
             priority: 0,
             is_favorite: false,
-            chain_id: None,
-            chain_position: None,
+            // NOTE: chain_id, chain_position now stored as CONTAINS_EVENT edge
             created_at: now,
             updated_at: now,
         }
@@ -598,5 +606,58 @@ impl TriggerEvaluation {
             self.total_triggers,
             (self.confidence * 100.0) as u32
         )
+    }
+}
+
+// =============================================================================
+// Edge Support Structs
+// =============================================================================
+
+/// Represents a featured NPC in a narrative event (via FEATURES_NPC edge)
+#[derive(Debug, Clone)]
+pub struct FeaturedNpc {
+    /// The character ID of the featured NPC
+    pub character_id: CharacterId,
+    /// Optional role description for this NPC in the event
+    pub role: Option<String>,
+}
+
+impl FeaturedNpc {
+    pub fn new(character_id: CharacterId) -> Self {
+        Self {
+            character_id,
+            role: None,
+        }
+    }
+
+    pub fn with_role(character_id: CharacterId, role: impl Into<String>) -> Self {
+        Self {
+            character_id,
+            role: Some(role.into()),
+        }
+    }
+}
+
+/// Represents an event's membership in an EventChain (via CONTAINS_EVENT edge)
+///
+/// Note: This edge is stored from EventChain → NarrativeEvent, so this struct
+/// is used when querying chain membership from the event's perspective.
+#[derive(Debug, Clone)]
+pub struct EventChainMembership {
+    /// The chain this event belongs to
+    pub chain_id: EventChainId,
+    /// Position in the chain (0-indexed)
+    pub position: u32,
+    /// Whether this event has been completed in the chain
+    pub is_completed: bool,
+}
+
+impl EventChainMembership {
+    pub fn new(chain_id: EventChainId, position: u32) -> Self {
+        Self {
+            chain_id,
+            position,
+            is_completed: false,
+        }
     }
 }

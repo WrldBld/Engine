@@ -2,6 +2,14 @@
 //!
 //! This service provides use case implementations for creating, updating,
 //! and managing scenes, including character assignment and directorial notes.
+//!
+//! # Graph-First Architecture
+//!
+//! Scene relationships are stored as graph edges:
+//! - Location: `AT_LOCATION` edge via `scene_repository.set_location()`
+//! - Featured characters: `FEATURES_CHARACTER` edge via `scene_repository.add_featured_character()`
+//!
+//! The service creates the scene node first, then establishes edge relationships.
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -11,7 +19,9 @@ use tracing::{debug, info, instrument};
 use crate::application::ports::outbound::{
     CharacterRepositoryPort, LocationRepositoryPort, SceneRepositoryPort,
 };
-use crate::domain::entities::{Character, Location, Scene, SceneCondition, TimeContext};
+use crate::domain::entities::{
+    Character, Location, Scene, SceneCharacter, SceneCharacterRole, SceneCondition, TimeContext,
+};
 use crate::domain::value_objects::{ActId, CharacterId, LocationId, SceneId};
 
 /// Request to create a new scene
@@ -168,6 +178,7 @@ impl SceneService for SceneServiceImpl {
                 .ok_or_else(|| anyhow::anyhow!("Character not found: {}", char_id))?;
         }
 
+        // Create scene entity (location_id kept for backward compatibility during migration)
         let mut scene = Scene::new(request.act_id, &request.name, request.location_id);
 
         if let Some(time_context) = request.time_context {
@@ -179,14 +190,31 @@ impl SceneService for SceneServiceImpl {
         }
 
         scene.backdrop_override = request.backdrop_override;
-        scene.featured_characters = request.featured_characters;
+        // NOTE: featured_characters Vec kept for backward compatibility
+        scene.featured_characters = request.featured_characters.clone();
         scene.entry_conditions = request.entry_conditions;
         scene.order = request.order;
 
+        // Create the scene node
         self.scene_repository
             .create(&scene)
             .await
             .context("Failed to create scene in repository")?;
+
+        // Create AT_LOCATION edge
+        self.scene_repository
+            .set_location(scene.id, request.location_id)
+            .await
+            .context("Failed to set scene location edge")?;
+
+        // Create FEATURES_CHARACTER edges for each featured character
+        for char_id in &request.featured_characters {
+            let scene_char = SceneCharacter::new(SceneCharacterRole::Primary);
+            self.scene_repository
+                .add_featured_character(scene.id, *char_id, &scene_char)
+                .await
+                .context("Failed to add featured character edge")?;
+        }
 
         info!(scene_id = %scene.id, "Created scene: {} in act {}", scene.name, request.act_id);
         Ok(scene)
@@ -210,20 +238,41 @@ impl SceneService for SceneServiceImpl {
             None => return Ok(None),
         };
 
-        // Load the location
+        // Load the location via AT_LOCATION edge
+        let location_id = self
+            .scene_repository
+            .get_location(id)
+            .await?
+            .or(Some(scene.location_id)) // Fallback to embedded field during migration
+            .ok_or_else(|| anyhow::anyhow!("Scene has no location: {}", id))?;
+
         let location = self
             .location_repository
-            .get(scene.location_id)
+            .get(location_id)
             .await?
-            .ok_or_else(|| {
-                anyhow::anyhow!("Location not found for scene: {}", scene.location_id)
-            })?;
+            .ok_or_else(|| anyhow::anyhow!("Location not found for scene: {}", location_id))?;
 
-        // Load all featured characters
+        // Load all featured characters via FEATURES_CHARACTER edges
+        let featured_char_edges = self
+            .scene_repository
+            .get_featured_characters(id)
+            .await
+            .unwrap_or_default();
+
         let mut featured_characters = Vec::new();
-        for char_id in &scene.featured_characters {
-            if let Some(character) = self.character_repository.get(*char_id).await? {
-                featured_characters.push(character);
+        if !featured_char_edges.is_empty() {
+            // Use edge data if available
+            for (char_id, _scene_char) in featured_char_edges {
+                if let Some(character) = self.character_repository.get(char_id).await? {
+                    featured_characters.push(character);
+                }
+            }
+        } else {
+            // Fallback to embedded field during migration
+            for char_id in &scene.featured_characters {
+                if let Some(character) = self.character_repository.get(*char_id).await? {
+                    featured_characters.push(character);
+                }
             }
         }
 
@@ -337,14 +386,30 @@ impl SceneService for SceneServiceImpl {
             .await?
             .ok_or_else(|| anyhow::anyhow!("Scene not found: {}", scene_id))?;
 
-        // Add if not already present
-        if !scene.featured_characters.contains(&character_id) {
-            scene.featured_characters.push(character_id);
+        // Check if already present via edge
+        let existing = self
+            .scene_repository
+            .get_featured_characters(scene_id)
+            .await
+            .unwrap_or_default();
+        let already_present = existing.iter().any(|(id, _)| *id == character_id);
 
+        if !already_present {
+            // Create FEATURES_CHARACTER edge
+            let scene_char = SceneCharacter::new(SceneCharacterRole::Primary);
             self.scene_repository
-                .update(&scene)
+                .add_featured_character(scene_id, character_id, &scene_char)
                 .await
-                .context("Failed to update scene with new character")?;
+                .context("Failed to add featured character edge")?;
+
+            // Update embedded field for backward compatibility
+            if !scene.featured_characters.contains(&character_id) {
+                scene.featured_characters.push(character_id);
+                self.scene_repository
+                    .update(&scene)
+                    .await
+                    .context("Failed to update scene with new character")?;
+            }
 
             debug!(scene_id = %scene_id, character_id = %character_id, "Added character to scene");
         }
@@ -364,6 +429,13 @@ impl SceneService for SceneServiceImpl {
             .await?
             .ok_or_else(|| anyhow::anyhow!("Scene not found: {}", scene_id))?;
 
+        // Remove FEATURES_CHARACTER edge
+        self.scene_repository
+            .remove_featured_character(scene_id, character_id)
+            .await
+            .context("Failed to remove featured character edge")?;
+
+        // Update embedded field for backward compatibility
         if let Some(pos) = scene
             .featured_characters
             .iter()
@@ -375,9 +447,9 @@ impl SceneService for SceneServiceImpl {
                 .update(&scene)
                 .await
                 .context("Failed to update scene after removing character")?;
-
-            debug!(scene_id = %scene_id, character_id = %character_id, "Removed character from scene");
         }
+
+        debug!(scene_id = %scene_id, character_id = %character_id, "Removed character from scene");
 
         Ok(scene)
     }
@@ -403,6 +475,36 @@ impl SceneService for SceneServiceImpl {
             .await?
             .ok_or_else(|| anyhow::anyhow!("Scene not found: {}", scene_id))?;
 
+        // Get current featured characters from edges
+        let current_chars = self
+            .scene_repository
+            .get_featured_characters(scene_id)
+            .await
+            .unwrap_or_default();
+
+        // Remove characters no longer in the list
+        for (char_id, _) in &current_chars {
+            if !character_ids.contains(char_id) {
+                self.scene_repository
+                    .remove_featured_character(scene_id, *char_id)
+                    .await
+                    .context("Failed to remove featured character edge")?;
+            }
+        }
+
+        // Add new characters
+        let current_char_ids: Vec<CharacterId> = current_chars.iter().map(|(id, _)| *id).collect();
+        for char_id in &character_ids {
+            if !current_char_ids.contains(char_id) {
+                let scene_char = SceneCharacter::new(SceneCharacterRole::Primary);
+                self.scene_repository
+                    .add_featured_character(scene_id, *char_id, &scene_char)
+                    .await
+                    .context("Failed to add featured character edge")?;
+            }
+        }
+
+        // Update embedded field for backward compatibility
         scene.featured_characters = character_ids;
 
         self.scene_repository

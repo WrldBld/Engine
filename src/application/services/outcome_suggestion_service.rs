@@ -4,8 +4,9 @@
 //! Used when DM requests alternative outcome text.
 
 use std::sync::Arc;
+use uuid::Uuid;
 
-use crate::application::dto::OutcomeSuggestionRequest;
+use crate::application::dto::{OutcomeBranchDto, OutcomeSuggestionRequest};
 use crate::application::ports::outbound::LlmPort;
 
 /// Error type for outcome suggestion operations
@@ -59,6 +60,48 @@ impl<L: LlmPort> OutcomeSuggestionService<L> {
         Ok(suggestions)
     }
 
+    /// Generate outcome branches with structured data
+    ///
+    /// Returns N branches based on the configured branch count, each with
+    /// a unique ID, title, and description for DM selection.
+    ///
+    /// # Arguments
+    /// * `request` - The suggestion request context
+    /// * `branch_count` - Number of branches to generate
+    /// * `tokens_per_branch` - Max tokens per branch for LLM (from settings, default 200)
+    pub async fn generate_branches(
+        &self,
+        request: &OutcomeSuggestionRequest,
+        branch_count: usize,
+        tokens_per_branch: u32,
+    ) -> Result<Vec<OutcomeBranchDto>, SuggestionError> {
+        let system_prompt = self.build_branch_system_prompt(branch_count);
+        let user_prompt = self.build_branch_user_prompt(request, branch_count);
+
+        use crate::application::ports::outbound::{ChatMessage, LlmRequest};
+
+        let messages = vec![ChatMessage::user(user_prompt)];
+
+        // Calculate max tokens based on branch count and configurable tokens per branch
+        let max_tokens = tokens_per_branch * branch_count as u32;
+
+        let llm_request = LlmRequest::new(messages)
+            .with_system_prompt(system_prompt)
+            .with_temperature(0.8)
+            .with_max_tokens(Some(max_tokens));
+
+        let response = self
+            .llm
+            .generate(llm_request)
+            .await
+            .map_err(|e| SuggestionError::LlmError(format!("{:?}", e)))?;
+
+        // Parse branches from response
+        let branches = self.parse_branches(&response.content, branch_count)?;
+
+        Ok(branches)
+    }
+
     /// Build the system prompt for outcome generation
     fn build_system_prompt(&self) -> String {
         r#"You are a creative TTRPG game master assistant specializing in vivid challenge outcomes.
@@ -71,6 +114,28 @@ Your task is to generate engaging outcome descriptions for skill challenges. Eac
 - Add sensory details and dramatic tension
 
 Format: Return exactly 3 suggestions, each on its own line. Do not number them or add prefixes."#.to_string()
+    }
+
+    /// Build the system prompt for branch generation
+    fn build_branch_system_prompt(&self, branch_count: usize) -> String {
+        format!(
+            r#"You are a creative TTRPG game master assistant specializing in vivid challenge outcomes.
+
+Your task is to generate {} distinct outcome branches for skill challenges. Each branch should offer a different narrative direction while staying consistent with the outcome tier.
+
+For each branch, provide:
+1. A SHORT TITLE (3-5 words) summarizing the outcome
+2. A DESCRIPTION (2-3 sentences) of evocative narrative in second person ("You...")
+
+The branches should offer meaningfully different narrative paths, not just rephrased versions of the same outcome.
+
+FORMAT: Use this exact format for each branch, separated by blank lines:
+TITLE: [short title]
+DESCRIPTION: [narrative description]
+
+Do not number the branches or add any other formatting."#,
+            branch_count
+        )
     }
 
     /// Build the user prompt for a specific request
@@ -101,6 +166,38 @@ Format: Return exactly 3 suggestions, each on its own line. Do not number them o
         prompt
     }
 
+    /// Build the user prompt for branch generation
+    fn build_branch_user_prompt(&self, request: &OutcomeSuggestionRequest, branch_count: usize) -> String {
+        let mut prompt = format!(
+            "Generate {} distinct {} outcome branches for:\n\n\
+            Challenge: {}\n\
+            Description: {}\n\
+            Skill: {}\n\
+            Roll Context: {}",
+            branch_count,
+            request.outcome_type,
+            request.challenge_name,
+            request.challenge_description,
+            request.skill_name,
+            request.roll_context,
+        );
+
+        if let Some(guidance) = &request.guidance {
+            prompt.push_str(&format!("\n\nDM Guidance: {}", guidance));
+        }
+
+        if let Some(context) = &request.narrative_context {
+            prompt.push_str(&format!("\n\nNarrative Context: {}", context));
+        }
+
+        prompt.push_str(&format!(
+            "\n\nProvide {} branches using the TITLE:/DESCRIPTION: format:",
+            branch_count
+        ));
+
+        prompt
+    }
+
     /// Parse suggestions from LLM response
     fn parse_suggestions(&self, content: &str) -> Result<Vec<String>, SuggestionError> {
         let suggestions: Vec<String> = content
@@ -124,11 +221,99 @@ Format: Return exactly 3 suggestions, each on its own line. Do not number them o
 
         Ok(suggestions)
     }
+
+    /// Parse branches from LLM response
+    fn parse_branches(&self, content: &str, expected_count: usize) -> Result<Vec<OutcomeBranchDto>, SuggestionError> {
+        let mut branches = Vec::new();
+        let mut current_title: Option<String> = None;
+        let mut current_description: Option<String> = None;
+
+        for line in content.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                // End of a branch block - save if we have both parts
+                if let (Some(title), Some(desc)) = (current_title.take(), current_description.take()) {
+                    branches.push(OutcomeBranchDto::new(
+                        Uuid::new_v4().to_string(),
+                        title,
+                        desc,
+                    ));
+                }
+                continue;
+            }
+
+            // Check for TITLE: prefix (case insensitive)
+            if let Some(title) = line.strip_prefix("TITLE:").or_else(|| line.strip_prefix("Title:")) {
+                current_title = Some(title.trim().to_string());
+            }
+            // Check for DESCRIPTION: prefix (case insensitive)
+            else if let Some(desc) = line.strip_prefix("DESCRIPTION:").or_else(|| line.strip_prefix("Description:")) {
+                current_description = Some(desc.trim().to_string());
+            }
+            // If we have a title but no description, and this line doesn't have a prefix,
+            // treat it as a continuation of the description
+            else if current_title.is_some() && current_description.is_none() {
+                // Might be a description without prefix
+                current_description = Some(line.to_string());
+            }
+            // Continuation of description
+            else if current_description.is_some() {
+                if let Some(ref mut desc) = current_description {
+                    desc.push(' ');
+                    desc.push_str(line);
+                }
+            }
+        }
+
+        // Don't forget the last branch if content doesn't end with blank line
+        if let (Some(title), Some(desc)) = (current_title.take(), current_description.take()) {
+            branches.push(OutcomeBranchDto::new(
+                Uuid::new_v4().to_string(),
+                title,
+                desc,
+            ));
+        }
+
+        // If parsing failed, fall back to line-by-line and create generic titles
+        if branches.is_empty() {
+            let lines: Vec<&str> = content
+                .lines()
+                .map(|l| l.trim())
+                .filter(|l| !l.is_empty())
+                .collect();
+
+            for (i, line) in lines.into_iter().take(expected_count).enumerate() {
+                // Strip any leading numbering
+                let clean = line
+                    .trim_start_matches(|c: char| c.is_numeric() || c == '.' || c == ')' || c == ' ')
+                    .trim();
+                
+                // Generate a title from first few words
+                let words: Vec<&str> = clean.split_whitespace().take(5).collect();
+                let title = words.join(" ");
+                
+                branches.push(OutcomeBranchDto::new(
+                    Uuid::new_v4().to_string(),
+                    format!("Option {}: {}", i + 1, title),
+                    clean.to_string(),
+                ));
+            }
+        }
+
+        if branches.is_empty() {
+            return Err(SuggestionError::ParseError(
+                "No valid branches in LLM response".to_string(),
+            ));
+        }
+
+        Ok(branches)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::application::ports::outbound::{FinishReason, ToolDefinition};
 
     #[test]
     fn test_parse_suggestions_simple() {
@@ -156,6 +341,36 @@ mod tests {
         assert_eq!(result[0], "You succeed with flying colors!");
     }
 
+    #[test]
+    fn test_parse_branches_structured() {
+        let service = OutcomeSuggestionService {
+            llm: Arc::new(MockLlm),
+        };
+
+        let content = "TITLE: Swift Success\nDESCRIPTION: You move with precision and grace.\n\nTITLE: Lucky Break\nDESCRIPTION: Fortune favors you today.";
+        let result = service.parse_branches(content, 2).unwrap();
+
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].title, "Swift Success");
+        assert_eq!(result[0].description, "You move with precision and grace.");
+        assert_eq!(result[1].title, "Lucky Break");
+    }
+
+    #[test]
+    fn test_parse_branches_fallback() {
+        let service = OutcomeSuggestionService {
+            llm: Arc::new(MockLlm),
+        };
+
+        // Unstructured input - should fall back to line-by-line
+        let content = "You succeed brilliantly!\nThe task is completed with ease.";
+        let result = service.parse_branches(content, 2).unwrap();
+
+        assert_eq!(result.len(), 2);
+        // Should have generated titles from content
+        assert!(result[0].title.starts_with("Option 1:"));
+    }
+
     struct MockLlm;
 
     #[async_trait::async_trait]
@@ -168,13 +383,23 @@ mod tests {
         ) -> Result<crate::application::ports::outbound::LlmResponse, Self::Error> {
             Ok(crate::application::ports::outbound::LlmResponse {
                 content: "Mock response".to_string(),
-                tool_calls: None,
-                finish_reason: Some("stop".to_string()),
+                tool_calls: Vec::new(),
+                finish_reason: FinishReason::Stop,
+                usage: None,
             })
         }
 
-        async fn health_check(&self) -> Result<(), Self::Error> {
-            Ok(())
+        async fn generate_with_tools(
+            &self,
+            _request: crate::application::ports::outbound::LlmRequest,
+            _tools: Vec<ToolDefinition>,
+        ) -> Result<crate::application::ports::outbound::LlmResponse, Self::Error> {
+            Ok(crate::application::ports::outbound::LlmResponse {
+                content: "Mock response".to_string(),
+                tool_calls: Vec::new(),
+                finish_reason: FinishReason::Stop,
+                usage: None,
+            })
         }
     }
 }

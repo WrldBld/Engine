@@ -225,52 +225,43 @@ where
         let now = Utc::now();
         let now_str = now.to_rfc3339();
 
-        // SQLite doesn't support RETURNING in UPDATE, so we need to:
-        // 1. Find the item to dequeue
-        // 2. Update it
-        // 3. Return it
-        
-        // First, find the item
-        let row = sqlx::query(
+        // Use atomic UPDATE with subquery to avoid TOCTOU race condition.
+        // This atomically selects and updates the next available item.
+        // The WHERE clause includes status check to prevent double-processing.
+        let result = sqlx::query(
             r#"
-            SELECT id FROM queue_items
-            WHERE queue_name = ?
-            AND (
-                (status = 'pending')
-                OR (status = 'delayed' AND scheduled_at <= ?)
+            UPDATE queue_items
+            SET status = 'processing', updated_at = ?, attempts = attempts + 1
+            WHERE id = (
+                SELECT id FROM queue_items
+                WHERE queue_name = ?
+                AND (
+                    (status = 'pending')
+                    OR (status = 'delayed' AND scheduled_at <= ?)
+                )
+                ORDER BY priority DESC, created_at ASC
+                LIMIT 1
             )
-            ORDER BY priority DESC, created_at ASC
-            LIMIT 1
+            AND queue_name = ?
+            AND (status = 'pending' OR status = 'delayed')
+            RETURNING id
             "#,
         )
+        .bind(&now_str)
         .bind(&self.queue_name)
         .bind(&now_str)
+        .bind(&self.queue_name)
         .fetch_optional(&self.pool)
         .await
         .map_err(|e| QueueError::Database(e.to_string()))?;
 
-        if let Some(row) = row {
+        if let Some(row) = result {
             let id_str: String = row.get("id");
             let id = uuid::Uuid::parse_str(&id_str)
                 .map_err(|e| QueueError::Backend(format!("Invalid UUID: {}", e)))?;
             let id = QueueItemId::from_uuid(id);
 
-            // Update the item
-            sqlx::query(
-                r#"
-                UPDATE queue_items
-                SET status = 'processing', updated_at = ?, attempts = attempts + 1
-                WHERE id = ? AND queue_name = ?
-                "#,
-            )
-            .bind(&now_str)
-            .bind(&id_str)
-            .bind(&self.queue_name)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| QueueError::Database(e.to_string()))?;
-
-            // Fetch the updated item
+            // Fetch the full item with all fields
             self.get(id).await
         } else {
             Ok(None)

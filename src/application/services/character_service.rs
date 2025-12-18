@@ -2,6 +2,13 @@
 //!
 //! This service provides use case implementations for creating, updating,
 //! and managing characters, including archetype changes and wants.
+//!
+//! # Graph-First Design (Phase 0.C)
+//!
+//! Wants are managed via repository edge methods, not embedded in Character:
+//! - `character_repository.create_want()` - Creates want and HAS_WANT edge
+//! - `character_repository.get_wants()` - Gets wants via edge traversal
+//! - `character_repository.delete_want()` - Removes want node and edges
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -11,9 +18,10 @@ use tracing::{debug, info, instrument};
 use crate::application::ports::outbound::{
     CharacterRepositoryPort, RelationshipRepositoryPort, WorldRepositoryPort,
 };
-use crate::domain::entities::{Character, StatBlock};
+use crate::application::services::SettingsService;
+use crate::domain::entities::{Character, CharacterWant, StatBlock, Want};
 use crate::domain::value_objects::{
-    CampbellArchetype, CharacterId, Relationship, Want, WantId, WorldId,
+    AppSettings, CampbellArchetype, CharacterId, Relationship, WantId, WorldId,
 };
 
 /// Request to create a new character
@@ -26,7 +34,17 @@ pub struct CreateCharacterRequest {
     pub sprite_asset: Option<String>,
     pub portrait_asset: Option<String>,
     pub stats: Option<StatBlock>,
-    pub wants: Vec<Want>,
+    /// Initial wants to create (will be created as nodes with HAS_WANT edges)
+    pub initial_wants: Vec<CreateWantRequest>,
+}
+
+/// Request to create a want for a character
+#[derive(Debug, Clone)]
+pub struct CreateWantRequest {
+    pub description: String,
+    pub intensity: f32,
+    pub known_to_player: bool,
+    pub priority: u32,
 }
 
 /// Request to update an existing character
@@ -53,6 +71,7 @@ pub struct ChangeArchetypeRequest {
 pub struct CharacterWithRelationships {
     pub character: Character,
     pub relationships: Vec<Relationship>,
+    pub wants: Vec<CharacterWant>,
 }
 
 /// Character service trait defining the application use cases
@@ -64,7 +83,7 @@ pub trait CharacterService: Send + Sync {
     /// Get a character by ID
     async fn get_character(&self, id: CharacterId) -> Result<Option<Character>>;
 
-    /// Get a character with all their relationships
+    /// Get a character with all their relationships and wants
     async fn get_character_with_relationships(
         &self,
         id: CharacterId,
@@ -103,14 +122,17 @@ pub trait CharacterService: Send + Sync {
     /// Revert character to their base archetype
     async fn revert_to_base_archetype(&self, id: CharacterId) -> Result<Character>;
 
-    /// Add a want to a character
-    async fn add_want(&self, id: CharacterId, want: Want) -> Result<Character>;
+    /// Add a want to a character (creates Want node and HAS_WANT edge)
+    async fn add_want(&self, id: CharacterId, request: CreateWantRequest) -> Result<Want>;
 
-    /// Remove a want from a character
-    async fn remove_want(&self, id: CharacterId, want_id: WantId) -> Result<Character>;
+    /// Remove a want from a character (deletes Want node and edges)
+    async fn remove_want(&self, id: CharacterId, want_id: WantId) -> Result<()>;
 
-    /// Update wants for a character
-    async fn update_wants(&self, id: CharacterId, wants: Vec<Want>) -> Result<Character>;
+    /// Get all wants for a character
+    async fn get_wants(&self, id: CharacterId) -> Result<Vec<CharacterWant>>;
+
+    /// Update a want's properties
+    async fn update_want(&self, want: &Want) -> Result<()>;
 
     /// Set character as dead
     async fn kill_character(&self, id: CharacterId) -> Result<Character>;
@@ -127,6 +149,7 @@ pub struct CharacterServiceImpl {
     world_repository: Arc<dyn WorldRepositoryPort>,
     character_repository: Arc<dyn CharacterRepositoryPort>,
     relationship_repository: Arc<dyn RelationshipRepositoryPort>,
+    settings_service: Arc<SettingsService>,
 }
 
 impl CharacterServiceImpl {
@@ -135,43 +158,45 @@ impl CharacterServiceImpl {
         world_repository: Arc<dyn WorldRepositoryPort>,
         character_repository: Arc<dyn CharacterRepositoryPort>,
         relationship_repository: Arc<dyn RelationshipRepositoryPort>,
+        settings_service: Arc<SettingsService>,
     ) -> Self {
         Self {
             world_repository,
             character_repository,
             relationship_repository,
+            settings_service,
         }
     }
 
-    /// Validate a character creation request
-    fn validate_create_request(request: &CreateCharacterRequest) -> Result<()> {
+    /// Validate a character creation request using settings
+    fn validate_create_request(request: &CreateCharacterRequest, settings: &AppSettings) -> Result<()> {
         if request.name.trim().is_empty() {
             anyhow::bail!("Character name cannot be empty");
         }
-        if request.name.len() > 255 {
-            anyhow::bail!("Character name cannot exceed 255 characters");
+        if request.name.len() > settings.max_name_length {
+            anyhow::bail!("Character name cannot exceed {} characters", settings.max_name_length);
         }
         if let Some(ref description) = request.description {
-            if description.len() > 10000 {
-                anyhow::bail!("Character description cannot exceed 10000 characters");
+            if description.len() > settings.max_description_length {
+                anyhow::bail!("Character description cannot exceed {} characters", settings.max_description_length);
             }
         }
         Ok(())
     }
 
-    /// Validate a character update request
-    fn validate_update_request(request: &UpdateCharacterRequest) -> Result<()> {
+    /// Validate a character update request using settings
+    fn validate_update_request(request: &UpdateCharacterRequest, settings: &AppSettings) -> Result<()> {
         if let Some(ref name) = request.name {
             if name.trim().is_empty() {
                 anyhow::bail!("Character name cannot be empty");
             }
-            if name.len() > 255 {
-                anyhow::bail!("Character name cannot exceed 255 characters");
+            if name.len() > settings.max_name_length {
+                anyhow::bail!("Character name cannot exceed {} characters", settings.max_name_length);
             }
         }
         if let Some(ref description) = request.description {
-            if description.len() > 10000 {
-                anyhow::bail!("Character description cannot exceed 10000 characters");
+            if description.len() > settings.max_description_length {
+                anyhow::bail!("Character description cannot exceed {} characters", settings.max_description_length);
             }
         }
         Ok(())
@@ -182,7 +207,9 @@ impl CharacterServiceImpl {
 impl CharacterService for CharacterServiceImpl {
     #[instrument(skip(self), fields(world_id = %request.world_id, name = %request.name))]
     async fn create_character(&self, request: CreateCharacterRequest) -> Result<Character> {
-        Self::validate_create_request(&request)?;
+        // Get settings for the world to apply appropriate validation limits
+        let settings = self.settings_service.get_for_world(request.world_id).await;
+        Self::validate_create_request(&request, &settings)?;
 
         // Verify the world exists
         let _ = self
@@ -205,14 +232,28 @@ impl CharacterService for CharacterServiceImpl {
         if let Some(stats) = request.stats {
             character.stats = stats;
         }
-        for want in request.wants {
-            character = character.with_want(want);
-        }
 
+        // Create the character first
         self.character_repository
             .create(&character)
             .await
             .context("Failed to create character in repository")?;
+
+        // Then create wants via edge-based operations
+        for want_request in request.initial_wants {
+            let want = Want::new(&want_request.description)
+                .with_intensity(want_request.intensity);
+            let want = if want_request.known_to_player {
+                want.known()
+            } else {
+                want
+            };
+
+            self.character_repository
+                .create_want(character.id, &want, want_request.priority)
+                .await
+                .context("Failed to create want for character")?;
+        }
 
         info!(
             character_id = %character.id,
@@ -251,9 +292,16 @@ impl CharacterService for CharacterServiceImpl {
             .await
             .context("Failed to get relationships for character")?;
 
+        let wants = self
+            .character_repository
+            .get_wants(id)
+            .await
+            .context("Failed to get wants for character")?;
+
         Ok(Some(CharacterWithRelationships {
             character,
             relationships,
+            wants,
         }))
     }
 
@@ -284,13 +332,15 @@ impl CharacterService for CharacterServiceImpl {
         id: CharacterId,
         request: UpdateCharacterRequest,
     ) -> Result<Character> {
-        Self::validate_update_request(&request)?;
-
         let mut character = self
             .character_repository
             .get(id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("Character not found: {}", id))?;
+
+        // Get settings for the character's world to apply appropriate validation limits
+        let settings = self.settings_service.get_for_world(character.world_id).await;
+        Self::validate_update_request(&request, &settings)?;
 
         if let Some(name) = request.name {
             character.name = name;
@@ -427,18 +477,24 @@ impl CharacterService for CharacterServiceImpl {
         Ok(character)
     }
 
-    #[instrument(skip(self, want), fields(character_id = %id))]
-    async fn add_want(&self, id: CharacterId, want: Want) -> Result<Character> {
-        let mut character = self
+    #[instrument(skip(self, request), fields(character_id = %id))]
+    async fn add_want(&self, id: CharacterId, request: CreateWantRequest) -> Result<Want> {
+        // Verify character exists
+        let character = self
             .character_repository
             .get(id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("Character not found: {}", id))?;
 
-        character.wants.push(want.clone());
+        let want = Want::new(&request.description).with_intensity(request.intensity);
+        let want = if request.known_to_player {
+            want.known()
+        } else {
+            want
+        };
 
         self.character_repository
-            .update(&character)
+            .create_want(id, &want, request.priority)
             .await
             .context("Failed to add want to character")?;
 
@@ -448,53 +504,46 @@ impl CharacterService for CharacterServiceImpl {
             "Added want to character: {}",
             character.name
         );
-        Ok(character)
+        Ok(want)
     }
 
     #[instrument(skip(self), fields(character_id = %id, want_id = %want_id))]
-    async fn remove_want(&self, id: CharacterId, want_id: WantId) -> Result<Character> {
-        let mut character = self
+    async fn remove_want(&self, id: CharacterId, want_id: WantId) -> Result<()> {
+        // Verify character exists
+        let character = self
             .character_repository
             .get(id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("Character not found: {}", id))?;
-
-        if let Some(pos) = character.wants.iter().position(|w| w.id == want_id) {
-            character.wants.remove(pos);
-
-            self.character_repository
-                .update(&character)
-                .await
-                .context("Failed to remove want from character")?;
-
-            debug!(
-                character_id = %id,
-                want_id = %want_id,
-                "Removed want from character: {}",
-                character.name
-            );
-        }
-
-        Ok(character)
-    }
-
-    #[instrument(skip(self, wants), fields(character_id = %id, want_count = wants.len()))]
-    async fn update_wants(&self, id: CharacterId, wants: Vec<Want>) -> Result<Character> {
-        let mut character = self
-            .character_repository
-            .get(id)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("Character not found: {}", id))?;
-
-        character.wants = wants;
 
         self.character_repository
-            .update(&character)
+            .delete_want(want_id)
             .await
-            .context("Failed to update character wants")?;
+            .context("Failed to remove want from character")?;
 
-        info!(character_id = %id, "Updated wants for character: {}", character.name);
-        Ok(character)
+        debug!(
+            character_id = %id,
+            want_id = %want_id,
+            "Removed want from character: {}",
+            character.name
+        );
+        Ok(())
+    }
+
+    #[instrument(skip(self), fields(character_id = %id))]
+    async fn get_wants(&self, id: CharacterId) -> Result<Vec<CharacterWant>> {
+        self.character_repository
+            .get_wants(id)
+            .await
+            .context("Failed to get wants for character")
+    }
+
+    #[instrument(skip(self, want))]
+    async fn update_want(&self, want: &Want) -> Result<()> {
+        self.character_repository
+            .update_want(want)
+            .await
+            .context("Failed to update want")
     }
 
     #[instrument(skip(self))]
@@ -574,6 +623,8 @@ mod tests {
 
     #[test]
     fn test_create_character_request_validation() {
+        let settings = AppSettings::default();
+
         // Empty name should fail
         let request = CreateCharacterRequest {
             world_id: WorldId::new(),
@@ -583,9 +634,9 @@ mod tests {
             sprite_asset: None,
             portrait_asset: None,
             stats: None,
-            wants: vec![],
+            initial_wants: vec![],
         };
-        assert!(CharacterServiceImpl::validate_create_request(&request).is_err());
+        assert!(CharacterServiceImpl::validate_create_request(&request, &settings).is_err());
 
         // Valid request should pass
         let request = CreateCharacterRequest {
@@ -596,13 +647,15 @@ mod tests {
             sprite_asset: None,
             portrait_asset: None,
             stats: None,
-            wants: vec![],
+            initial_wants: vec![],
         };
-        assert!(CharacterServiceImpl::validate_create_request(&request).is_ok());
+        assert!(CharacterServiceImpl::validate_create_request(&request, &settings).is_ok());
     }
 
     #[test]
     fn test_update_character_request_validation() {
+        let settings = AppSettings::default();
+
         // Empty name should fail
         let request = UpdateCharacterRequest {
             name: Some("".to_string()),
@@ -613,7 +666,7 @@ mod tests {
             is_alive: None,
             is_active: None,
         };
-        assert!(CharacterServiceImpl::validate_update_request(&request).is_err());
+        assert!(CharacterServiceImpl::validate_update_request(&request, &settings).is_err());
 
         // No updates is valid
         let request = UpdateCharacterRequest {
@@ -625,6 +678,6 @@ mod tests {
             is_alive: None,
             is_active: None,
         };
-        assert!(CharacterServiceImpl::validate_update_request(&request).is_ok());
+        assert!(CharacterServiceImpl::validate_update_request(&request, &settings).is_ok());
     }
 }

@@ -18,7 +18,7 @@ use crate::application::services::{
     PlayerCharacterService, SkillService,
 };
 use crate::domain::entities::OutcomeType;
-use crate::domain::value_objects::{ChallengeId, DiceRollInput, SessionId, PlayerCharacterId};
+use crate::domain::value_objects::{ChallengeId, DiceRollInput, SessionId, PlayerCharacterId, SkillId};
 use tracing::{debug, info};
 
 /// Dice input type for challenge rolls
@@ -93,6 +93,8 @@ fn error_message(code: &str, message: &str) -> Option<serde_json::Value> {
 /// This struct holds the common data needed by both `handle_roll` and `handle_roll_input`.
 struct ChallengePreamble {
     challenge: crate::domain::entities::Challenge,
+    /// Skill ID fetched from REQUIRES_SKILL edge (may be None if no skill is set)
+    skill_id: Option<crate::domain::value_objects::SkillId>,
     session_id: Option<SessionId>,
     player_name: String,
     character_modifier: i32,
@@ -246,6 +248,15 @@ where
             }
         };
 
+        // Fetch skill_id from REQUIRES_SKILL edge
+        let skill_id = match self.challenge_service.get_required_skill(challenge_uuid).await {
+            Ok(skill_id) => skill_id,
+            Err(e) => {
+                tracing::warn!("Failed to get required skill for challenge {}: {}", challenge_uuid, e);
+                None
+            }
+        };
+
         // Get session and player info via async session port
         let session_id = match self.sessions.get_client_session(client_id).await {
             Some(sid) => Some(sid),
@@ -266,29 +277,37 @@ where
         // Look up character's skill modifier from PlayerCharacterService
         let character_modifier = if let Some(session_id_val) = session_id {
             if let Some(pc_id) = self.get_client_player_character(client_id, session_id_val).await {
-                match self
-                    .player_character_service
-                    .get_skill_modifier(pc_id, challenge.skill_id.clone())
-                    .await
-                {
-                    Ok(modifier) => {
-                        debug!(
-                            pc_id = %pc_id,
-                            skill_id = %challenge.skill_id,
-                            modifier = modifier,
-                            "Found skill modifier for player character ({})", log_prefix
-                        );
-                        modifier
+                if let Some(ref sid) = skill_id {
+                    match self
+                        .player_character_service
+                        .get_skill_modifier(pc_id, sid.clone())
+                        .await
+                    {
+                        Ok(modifier) => {
+                            debug!(
+                                pc_id = %pc_id,
+                                skill_id = %sid,
+                                modifier = modifier,
+                                "Found skill modifier for player character ({})", log_prefix
+                            );
+                            modifier
+                        }
+                        Err(e) => {
+                            debug!(
+                                pc_id = %pc_id,
+                                skill_id = %sid,
+                                error = %e,
+                                "Failed to get skill modifier, defaulting to 0 ({})", log_prefix
+                            );
+                            0
+                        }
                     }
-                    Err(e) => {
-                        debug!(
-                            pc_id = %pc_id,
-                            skill_id = %challenge.skill_id,
-                            error = %e,
-                            "Failed to get skill modifier, defaulting to 0 ({})", log_prefix
-                        );
-                        0
-                    }
+                } else {
+                    debug!(
+                        pc_id = %pc_id,
+                        "No skill assigned to challenge, defaulting modifier to 0 ({})", log_prefix
+                    );
+                    0
                 }
             } else {
                 debug!(
@@ -314,6 +333,7 @@ where
 
         Ok(ChallengePreamble {
             challenge,
+            skill_id,
             session_id,
             player_name,
             character_modifier,
@@ -330,6 +350,7 @@ where
         &self,
         challenge_id_str: &str,
         challenge: &crate::domain::entities::Challenge,
+        skill_id: Option<SkillId>,
         outcome_type: OutcomeType,
         outcome: &crate::domain::entities::Outcome,
         session_id: Option<SessionId>,
@@ -345,11 +366,30 @@ where
         if let Some(sid) = session_id {
             if self.sessions.session_has_dm(sid).await {
                 if let Some(ref approval_service) = self.challenge_outcome_approval_service {
+                    // Look up skill name if we have a skill_id
+                    let skill_name = if let Some(ref sid) = skill_id {
+                        match self.skill_service.get_skill(sid.clone()).await {
+                            Ok(Some(skill)) => Some(skill.name),
+                            Ok(None) => {
+                                tracing::warn!("Skill {} not found for challenge {}", sid, challenge_id_str);
+                                None
+                            }
+                            Err(e) => {
+                                tracing::warn!("Failed to look up skill {} for challenge {}: {}", sid, challenge_id_str, e);
+                                None
+                            }
+                        }
+                    } else {
+                        None
+                    };
+
                     // Build PendingChallengeResolutionDto for approval queue
                     let resolution = PendingChallengeResolutionDto {
                         resolution_id: uuid::Uuid::new_v4().to_string(),
                         challenge_id: challenge_id_str.to_string(),
                         challenge_name: challenge.name.clone(),
+                        challenge_description: challenge.description.clone(),
+                        skill_name,
                         character_id: character_id.clone(),
                         character_name: player_name.clone(),
                         roll,
@@ -482,6 +522,7 @@ where
         self.resolve_challenge_internal(
             &challenge_id_str,
             &preamble.challenge,
+            preamble.skill_id,
             outcome_type,
             outcome,
             preamble.session_id,
@@ -544,6 +585,7 @@ where
         self.resolve_challenge_internal(
             &challenge_id_str,
             &preamble.challenge,
+            preamble.skill_id,
             outcome_type,
             outcome,
             preamble.session_id,
@@ -598,20 +640,60 @@ where
             }
         };
 
-        // Look up skill name from skill service
-        let skill_name = match self.skill_service.get_skill(challenge.skill_id).await {
-            Ok(Some(skill)) => skill.name,
-            Ok(None) => {
-                tracing::warn!("Skill {} not found for challenge", challenge.skill_id);
-                challenge.skill_id.to_string()
-            }
+        // Fetch skill_id from REQUIRES_SKILL edge
+        let skill_id = match self.challenge_service.get_required_skill(challenge_uuid).await {
+            Ok(skill_id) => skill_id,
             Err(e) => {
-                tracing::error!("Failed to look up skill {}: {}", challenge.skill_id, e);
-                challenge.skill_id.to_string()
+                tracing::warn!("Failed to get required skill for challenge {}: {}", challenge_uuid, e);
+                None
             }
         };
 
-        let character_modifier = 0;
+        // Look up skill name from skill service
+        let skill_name = if let Some(ref sid) = skill_id {
+            match self.skill_service.get_skill(sid.clone()).await {
+                Ok(Some(skill)) => skill.name,
+                Ok(None) => {
+                    tracing::warn!("Skill {} not found for challenge", sid);
+                    sid.to_string()
+                }
+                Err(e) => {
+                    tracing::error!("Failed to look up skill {}: {}", sid, e);
+                    sid.to_string()
+                }
+            }
+        } else {
+            "Unknown Skill".to_string()
+        };
+
+        // Look up skill modifier for target character
+        let character_modifier = if let Some(ref sid) = skill_id {
+            if let Ok(pc_id) = uuid::Uuid::parse_str(&target_character_id)
+                .map(PlayerCharacterId::from_uuid)
+            {
+                match self.player_character_service
+                    .get_skill_modifier(pc_id, sid.clone())
+                    .await
+                {
+                    Ok(modifier) => modifier,
+                    Err(e) => {
+                        tracing::warn!(
+                            "Failed to get skill modifier for PC {}: {}, using 0",
+                            target_character_id, e
+                        );
+                        0
+                    }
+                }
+            } else {
+                tracing::warn!(
+                    "Invalid target_character_id format: {}, using modifier 0",
+                    target_character_id
+                );
+                0
+            }
+        } else {
+            0
+        };
 
         // Get suggested dice based on difficulty type
         let (suggested_dice, rule_system_hint) = get_dice_suggestion_for_challenge(&challenge);
@@ -697,10 +779,51 @@ where
                                 }
                             };
 
+                        // Fetch skill_id from REQUIRES_SKILL edge
+                        let skill_id = match self.challenge_service.get_required_skill(challenge_uuid).await {
+                            Ok(skill_id) => skill_id,
+                            Err(e) => {
+                                tracing::warn!("Failed to get required skill for challenge {}: {}", challenge_uuid, e);
+                                None
+                            }
+                        };
+
                         let difficulty_display = modified_difficulty
                             .unwrap_or_else(|| challenge.difficulty.display());
 
-                        let character_modifier = 0;
+                        // Look up skill modifier for target character if available
+                        let character_modifier = if let Some(ref sid) = skill_id {
+                            if let Some(ref pc_id_str) = challenge_suggestion.target_pc_id {
+                                if let Ok(pc_id) = uuid::Uuid::parse_str(pc_id_str)
+                                    .map(PlayerCharacterId::from_uuid)
+                                {
+                                    match self.player_character_service
+                                        .get_skill_modifier(pc_id, sid.clone())
+                                        .await
+                                    {
+                                        Ok(modifier) => modifier,
+                                        Err(e) => {
+                                            tracing::warn!(
+                                                "Failed to get skill modifier for PC {}: {}, using 0",
+                                                pc_id_str, e
+                                            );
+                                            0
+                                        }
+                                    }
+                                } else {
+                                    tracing::warn!(
+                                        "Invalid target_pc_id format: {}, using modifier 0",
+                                        pc_id_str
+                                    );
+                                    0
+                                }
+                            } else {
+                                tracing::debug!("No target_pc_id in challenge suggestion, using modifier 0");
+                                0
+                            }
+                        } else {
+                            0
+                        };
 
                         // Get suggested dice based on difficulty type
                         let (suggested_dice, rule_system_hint) =

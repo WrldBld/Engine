@@ -2,6 +2,18 @@
 //!
 //! StoryEvents are automatically created when actions occur during gameplay,
 //! forming a complete timeline of the game session.
+//!
+//! # Graph Relationships (stored as Neo4j edges, not embedded fields)
+//!
+//! - `OCCURRED_IN_SESSION` → Session: The session where this event occurred
+//! - `OCCURRED_AT` → Location: Optional location where the event occurred
+//! - `OCCURRED_IN_SCENE` → Scene: Optional scene where the event occurred
+//! - `INVOLVES` → Character/PlayerCharacter: Characters involved in the event (with role)
+//! - `TRIGGERED_BY_NARRATIVE` → NarrativeEvent: Optional causative narrative event
+//! - `RECORDS_CHALLENGE` → Challenge: Optional challenge this event records
+//!
+//! Note: `event_type` (StoryEventType) remains as JSON because it contains complex
+//! discriminated union data that doesn't represent entity relationships.
 
 use chrono::{DateTime, Utc};
 
@@ -11,16 +23,25 @@ use crate::domain::value_objects::{
 };
 
 /// A story event - an immutable record of something that happened
+///
+/// # Graph Relationships
+///
+/// The following associations are stored as graph edges (not embedded fields):
+/// - Session: Use `OCCURRED_IN_SESSION` edge via repository methods
+/// - Location: Use `OCCURRED_AT` edge via repository methods
+/// - Scene: Use `OCCURRED_IN_SCENE` edge via repository methods
+/// - Involved characters: Use `INVOLVES` edges via repository methods
+/// - Triggering narrative event: Use `TRIGGERED_BY_NARRATIVE` edge via repository methods
+/// - Challenge recorded: Use `RECORDS_CHALLENGE` edge via repository methods
 #[derive(Debug, Clone)]
 pub struct StoryEvent {
     pub id: StoryEventId,
     pub world_id: WorldId,
-    pub session_id: SessionId,
-    /// Scene where event occurred (if applicable)
-    pub scene_id: Option<SceneId>,
-    /// Location where event occurred (if applicable)
-    pub location_id: Option<LocationId>,
+    // NOTE: session_id moved to OCCURRED_IN_SESSION edge
+    // NOTE: scene_id moved to OCCURRED_IN_SCENE edge
+    // NOTE: location_id moved to OCCURRED_AT edge
     /// The type and details of the event
+    /// (Kept as JSON - contains complex discriminated union data)
     pub event_type: StoryEventType,
     /// When this event occurred (real-world timestamp)
     pub timestamp: DateTime<Utc>,
@@ -28,14 +49,12 @@ pub struct StoryEvent {
     pub game_time: Option<String>,
     /// Narrative summary (auto-generated or DM-edited)
     pub summary: String,
-    /// Characters involved in this event
-    pub involved_characters: Vec<CharacterId>,
+    // NOTE: involved_characters moved to INVOLVES edges
     /// Whether this event is hidden from timeline UI (but still tracked)
     pub is_hidden: bool,
     /// Tags for filtering/searching
     pub tags: Vec<String>,
-    /// Optional link to causative narrative event
-    pub triggered_by: Option<NarrativeEventId>,
+    // NOTE: triggered_by moved to TRIGGERED_BY_NARRATIVE edge
 }
 
 /// Categories of story events that occurred during gameplay
@@ -289,33 +308,36 @@ pub enum DmMarkerType {
 }
 
 impl StoryEvent {
-    pub fn new(world_id: WorldId, session_id: SessionId, event_type: StoryEventType) -> Self {
+    /// Create a new story event
+    ///
+    /// NOTE: Session, location, scene, and character associations are now stored as
+    /// graph edges and must be created separately using the edge methods:
+    /// - `set_session()` for OCCURRED_IN_SESSION edge
+    /// - `set_location()` for OCCURRED_AT edge
+    /// - `set_scene()` for OCCURRED_IN_SCENE edge
+    /// - `add_involved_character()` for INVOLVES edges
+    /// - `set_triggered_by()` for TRIGGERED_BY_NARRATIVE edge
+    /// - `set_recorded_challenge()` for RECORDS_CHALLENGE edge
+    pub fn new(world_id: WorldId, event_type: StoryEventType) -> Self {
         Self {
             id: StoryEventId::new(),
             world_id,
-            session_id,
-            scene_id: None,
-            location_id: None,
+            // NOTE: session_id now stored as OCCURRED_IN_SESSION edge
+            // NOTE: scene_id now stored as OCCURRED_IN_SCENE edge
+            // NOTE: location_id now stored as OCCURRED_AT edge
             event_type,
             timestamp: Utc::now(),
             game_time: None,
             summary: String::new(),
-            involved_characters: Vec::new(),
+            // NOTE: involved_characters now stored as INVOLVES edges
             is_hidden: false,
             tags: Vec::new(),
-            triggered_by: None,
+            // NOTE: triggered_by now stored as TRIGGERED_BY_NARRATIVE edge
         }
     }
 
-    pub fn with_scene(mut self, scene_id: SceneId) -> Self {
-        self.scene_id = Some(scene_id);
-        self
-    }
-
-    pub fn with_location(mut self, location_id: LocationId) -> Self {
-        self.location_id = Some(location_id);
-        self
-    }
+    // NOTE: with_scene() removed - use repository edge method set_scene()
+    // NOTE: with_location() removed - use repository edge method set_location()
 
     pub fn with_game_time(mut self, game_time: impl Into<String>) -> Self {
         self.game_time = Some(game_time.into());
@@ -327,10 +349,7 @@ impl StoryEvent {
         self
     }
 
-    pub fn with_characters(mut self, characters: Vec<CharacterId>) -> Self {
-        self.involved_characters = characters;
-        self
-    }
+    // NOTE: with_characters() removed - use repository edge method add_involved_character()
 
     pub fn with_tag(mut self, tag: impl Into<String>) -> Self {
         self.tags.push(tag.into());
@@ -342,10 +361,7 @@ impl StoryEvent {
         self
     }
 
-    pub fn triggered_by(mut self, event_id: NarrativeEventId) -> Self {
-        self.triggered_by = Some(event_id);
-        self
-    }
+    // NOTE: triggered_by() removed - use repository edge method set_triggered_by()
 
     /// Generate an automatic summary based on event type
     pub fn auto_summarize(&mut self) {
@@ -448,5 +464,47 @@ impl StoryEvent {
             StoryEventType::SessionEnded { .. } => "Session End",
             StoryEventType::Custom { .. } => "Custom",
         }
+    }
+}
+
+// =============================================================================
+// Edge Support Structs
+// =============================================================================
+
+/// Represents a character involved in a story event (via INVOLVES edge)
+#[derive(Debug, Clone)]
+pub struct InvolvedCharacter {
+    /// The character ID
+    pub character_id: CharacterId,
+    /// Role in the event (e.g., "Speaker", "Target", "Witness", "Actor")
+    pub role: String,
+}
+
+impl InvolvedCharacter {
+    pub fn new(character_id: CharacterId, role: impl Into<String>) -> Self {
+        Self {
+            character_id,
+            role: role.into(),
+        }
+    }
+
+    /// Create an involved character with the "Actor" role
+    pub fn actor(character_id: CharacterId) -> Self {
+        Self::new(character_id, "Actor")
+    }
+
+    /// Create an involved character with the "Target" role
+    pub fn target(character_id: CharacterId) -> Self {
+        Self::new(character_id, "Target")
+    }
+
+    /// Create an involved character with the "Speaker" role
+    pub fn speaker(character_id: CharacterId) -> Self {
+        Self::new(character_id, "Speaker")
+    }
+
+    /// Create an involved character with the "Witness" role
+    pub fn witness(character_id: CharacterId) -> Self {
+        Self::new(character_id, "Witness")
     }
 }

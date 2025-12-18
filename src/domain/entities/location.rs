@@ -1,26 +1,43 @@
 //! Location entity - Physical or conceptual places in the world
+//!
+//! Locations form a hierarchy via CONTAINS_LOCATION edges in Neo4j.
+//! Connections between locations use CONNECTED_TO edges.
+//! Regions are separate nodes with HAS_REGION edges (see region.rs).
 
-use crate::domain::value_objects::{GridMapId, LocationId, WorldId};
+use crate::domain::value_objects::{LocationId, RegionId, WorldId};
+use super::region::MapBounds;
 
 /// A location in the world
 ///
-/// Locations form a hierarchy - a Town contains a Bar, the Bar contains rooms.
-/// The parent_id field establishes this containment relationship.
+/// Locations form a hierarchy via Neo4j edges:
+/// - Parent/child: `(parent)-[:CONTAINS_LOCATION]->(child)`
+/// - Navigation: `(from)-[:CONNECTED_TO]->(to)`
+/// - Regions: `(location)-[:HAS_REGION]->(region)`
+/// - Grid map: `(location)-[:HAS_TACTICAL_MAP]->(map)`
 #[derive(Debug, Clone)]
 pub struct Location {
     pub id: LocationId,
     pub world_id: WorldId,
-    /// Parent location (if this location is inside another)
-    pub parent_id: Option<LocationId>,
     pub name: String,
     pub description: String,
     pub location_type: LocationType,
-    /// Path to the default backdrop image asset
+    
+    // Visual assets
+    /// Path to the default backdrop image asset (used if entering without specific region)
     pub backdrop_asset: Option<String>,
-    /// Optional tactical grid map for this location
-    pub grid_map_id: Option<GridMapId>,
-    /// Backdrop regions for different areas of the map
-    pub backdrop_regions: Vec<BackdropRegion>,
+    /// Path to the top-down map image for navigation between regions
+    pub map_asset: Option<String>,
+    
+    // Position on parent location's map (if this location is nested)
+    /// Bounds defining where this location appears on its parent's map
+    pub parent_map_bounds: Option<MapBounds>,
+    
+    // Default entry point
+    /// Default region to place players when arriving without a specific region target
+    pub default_region_id: Option<RegionId>,
+    
+    /// Sensory/emotional description of the location's atmosphere
+    pub atmosphere: Option<String>,
 }
 
 impl Location {
@@ -28,13 +45,14 @@ impl Location {
         Self {
             id: LocationId::new(),
             world_id,
-            parent_id: None,
             name: name.into(),
             description: String::new(),
             location_type,
             backdrop_asset: None,
-            grid_map_id: None,
-            backdrop_regions: Vec::new(),
+            map_asset: None,
+            parent_map_bounds: None,
+            default_region_id: None,
+            atmosphere: None,
         }
     }
 
@@ -48,74 +66,34 @@ impl Location {
         self
     }
 
-    pub fn with_grid_map(mut self, grid_map_id: GridMapId) -> Self {
-        self.grid_map_id = Some(grid_map_id);
+    pub fn with_map(mut self, asset_path: impl Into<String>) -> Self {
+        self.map_asset = Some(asset_path.into());
         self
     }
 
-    pub fn with_parent(mut self, parent_id: LocationId) -> Self {
-        self.parent_id = Some(parent_id);
+    pub fn with_parent_map_bounds(mut self, bounds: MapBounds) -> Self {
+        self.parent_map_bounds = Some(bounds);
         self
     }
 
-    pub fn with_backdrop_region(mut self, region: BackdropRegion) -> Self {
-        self.backdrop_regions.push(region);
+    pub fn with_default_region(mut self, region_id: RegionId) -> Self {
+        self.default_region_id = Some(region_id);
         self
     }
-}
 
-/// A region within a location that has its own backdrop
-///
-/// Example: A town map might have regions for "Church", "Tavern", "Slums"
-/// each with a different backdrop image.
-#[derive(Debug, Clone)]
-pub struct BackdropRegion {
-    pub id: String,
-    pub name: String,
-    /// Rectangular region on the grid (x, y, width, height)
-    pub bounds: RegionBounds,
-    /// Backdrop image for this region
-    pub backdrop_asset: String,
-    /// Optional description shown when entering this region
-    pub description: Option<String>,
-}
+    pub fn with_atmosphere(mut self, atmosphere: impl Into<String>) -> Self {
+        self.atmosphere = Some(atmosphere.into());
+        self
+    }
 
-impl BackdropRegion {
-    pub fn new(
-        name: impl Into<String>,
-        bounds: RegionBounds,
-        backdrop_asset: impl Into<String>,
-    ) -> Self {
-        Self {
-            id: uuid::Uuid::new_v4().to_string(),
-            name: name.into(),
-            bounds,
-            backdrop_asset: backdrop_asset.into(),
-            description: None,
+    /// Check if a pixel position is within this location's parent map bounds
+    pub fn contains_point_on_parent_map(&self, x: u32, y: u32) -> bool {
+        if let Some(bounds) = &self.parent_map_bounds {
+            bounds.contains(x, y)
+        } else {
+            false
         }
     }
-
-    pub fn with_description(mut self, description: impl Into<String>) -> Self {
-        self.description = Some(description.into());
-        self
-    }
-
-    /// Check if a grid position is within this region
-    pub fn contains(&self, x: u32, y: u32) -> bool {
-        x >= self.bounds.x
-            && x < self.bounds.x + self.bounds.width
-            && y >= self.bounds.y
-            && y < self.bounds.y + self.bounds.height
-    }
-}
-
-/// Rectangular bounds for a region
-#[derive(Debug, Clone, Copy)]
-pub struct RegionBounds {
-    pub x: u32,
-    pub y: u32,
-    pub width: u32,
-    pub height: u32,
 }
 
 /// The type of location
@@ -130,59 +108,58 @@ pub enum LocationType {
 }
 
 /// A connection between two locations
+///
+/// Stored as a `CONNECTED_TO` edge in Neo4j with properties.
 #[derive(Debug, Clone)]
 pub struct LocationConnection {
     pub from_location: LocationId,
     pub to_location: LocationId,
-    /// Type of spatial relationship
-    pub connection_type: SpatialRelationship,
+    /// Type of connection (Door, Path, Stairs, Portal, etc.)
+    pub connection_type: String,
     /// Description of the path/transition
-    pub description: String,
-    /// Whether this connection is bidirectional
+    pub description: Option<String>,
+    /// Whether this connection works both ways
     pub bidirectional: bool,
-    /// Requirements to use this connection
-    pub requirements: Vec<ConnectionRequirement>,
-    /// Travel time in arbitrary units
-    pub travel_time: Option<u32>,
+    /// Travel time in game-time units (0 = instant)
+    pub travel_time: u32,
+    /// Whether this connection is currently locked
+    pub is_locked: bool,
+    /// Description of what's needed to unlock (if locked)
+    pub lock_description: Option<String>,
 }
 
 impl LocationConnection {
-    pub fn new(from: LocationId, to: LocationId) -> Self {
+    pub fn new(from: LocationId, to: LocationId, connection_type: impl Into<String>) -> Self {
         Self {
             from_location: from,
             to_location: to,
-            connection_type: SpatialRelationship::ConnectsTo,
-            description: String::new(),
+            connection_type: connection_type.into(),
+            description: None,
             bidirectional: true,
-            requirements: Vec::new(),
-            travel_time: None,
+            travel_time: 0,
+            is_locked: false,
+            lock_description: None,
         }
     }
 
-    /// Create an "enters" connection (going inside another location)
-    pub fn enters(from: LocationId, to: LocationId) -> Self {
-        Self {
-            from_location: from,
-            to_location: to,
-            connection_type: SpatialRelationship::Enters,
-            description: String::new(),
-            bidirectional: false, // Entry is one-way, exit is the reverse
-            requirements: Vec::new(),
-            travel_time: None,
-        }
+    /// Create a door connection
+    pub fn door(from: LocationId, to: LocationId) -> Self {
+        Self::new(from, to, "Door")
     }
 
-    /// Create an "exits" connection (leaving a containing location)
-    pub fn exits(from: LocationId, to: LocationId) -> Self {
-        Self {
-            from_location: from,
-            to_location: to,
-            connection_type: SpatialRelationship::Exits,
-            description: String::new(),
-            bidirectional: false,
-            requirements: Vec::new(),
-            travel_time: None,
-        }
+    /// Create a path/road connection
+    pub fn path(from: LocationId, to: LocationId) -> Self {
+        Self::new(from, to, "Path")
+    }
+
+    /// Create a stairs connection
+    pub fn stairs(from: LocationId, to: LocationId) -> Self {
+        Self::new(from, to, "Stairs")
+    }
+
+    /// Create a portal/magical connection
+    pub fn portal(from: LocationId, to: LocationId) -> Self {
+        Self::new(from, to, "Portal")
     }
 
     pub fn one_way(mut self) -> Self {
@@ -191,48 +168,18 @@ impl LocationConnection {
     }
 
     pub fn with_description(mut self, description: impl Into<String>) -> Self {
-        self.description = description.into();
+        self.description = Some(description.into());
         self
     }
 
-    pub fn with_requirement(mut self, requirement: ConnectionRequirement) -> Self {
-        self.requirements.push(requirement);
+    pub fn with_travel_time(mut self, time: u32) -> Self {
+        self.travel_time = time;
         self
     }
 
-    pub fn with_connection_type(mut self, connection_type: SpatialRelationship) -> Self {
-        self.connection_type = connection_type;
+    pub fn locked(mut self, description: impl Into<String>) -> Self {
+        self.is_locked = true;
+        self.lock_description = Some(description.into());
         self
     }
-}
-
-/// Spatial relationship between locations
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub enum SpatialRelationship {
-    /// Standard connection (door, path, road)
-    #[default]
-    ConnectsTo,
-    /// Entering a location (going inside)
-    /// Example: Town -> Bar (entering the bar)
-    Enters,
-    /// Exiting a location (going outside)
-    /// Example: Bar -> Town (leaving the bar)
-    Exits,
-    /// Leads to (travel/transition)
-    LeadsTo,
-    /// Adjacent locations that share a border
-    AdjacentTo,
-}
-
-/// A requirement to use a location connection
-#[derive(Debug, Clone)]
-pub enum ConnectionRequirement {
-    /// Must have a specific item
-    HasItem(crate::domain::value_objects::ItemId),
-    /// Must have completed a scene
-    CompletedScene(crate::domain::value_objects::SceneId),
-    /// Must pass a skill check
-    SkillCheck { stat: String, difficulty: i32 },
-    /// Custom requirement
-    Custom(String),
 }

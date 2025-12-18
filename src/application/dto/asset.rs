@@ -52,6 +52,8 @@ impl From<GalleryAsset> for GalleryAssetResponseDto {
 
 #[derive(Debug, Deserialize)]
 pub struct GenerateAssetRequestDto {
+    /// World this asset belongs to
+    pub world_id: String,
     pub entity_type: String,
     pub entity_id: String,
     pub asset_type: String,
@@ -72,6 +74,8 @@ fn default_count() -> u8 {
 #[derive(Debug, Serialize)]
 pub struct GenerationBatchResponseDto {
     pub id: String,
+    /// World this batch belongs to
+    pub world_id: String,
     pub entity_type: String,
     pub entity_id: String,
     pub asset_type: String,
@@ -97,6 +101,7 @@ impl From<GenerationBatch> for GenerationBatchResponseDto {
 
         Self {
             id: b.id.to_string(),
+            world_id: b.world_id.to_string(),
             entity_type: b.entity_type.to_string(),
             entity_id: b.entity_id,
             asset_type: b.asset_type.to_string(),

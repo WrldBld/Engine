@@ -11,6 +11,8 @@ mod event_chain_repository;
 mod interaction_repository;
 mod location_repository;
 mod narrative_event_repository;
+mod observation_repository;
+mod region_repository;
 mod player_character_repository;
 mod relationship_repository;
 mod scene_repository;
@@ -24,11 +26,17 @@ mod world_repository;
 pub use asset_repository::Neo4jAssetRepository;
 pub use challenge_repository::Neo4jChallengeRepository;
 pub use character_repository::Neo4jCharacterRepository;
+// Re-export region types from domain layer
+pub use crate::domain::value_objects::{
+    RegionFrequency, RegionRelationship, RegionRelationshipType, RegionShift,
+};
 pub use connection::Neo4jConnection;
 pub use event_chain_repository::Neo4jEventChainRepository;
 pub use interaction_repository::Neo4jInteractionRepository;
 pub use location_repository::Neo4jLocationRepository;
 pub use narrative_event_repository::Neo4jNarrativeEventRepository;
+pub use observation_repository::Neo4jObservationRepository;
+pub use region_repository::Neo4jRegionRepository;
 pub use player_character_repository::Neo4jPlayerCharacterRepository;
 pub use relationship_repository::Neo4jRelationshipRepository;
 pub use scene_repository::Neo4jSceneRepository;
@@ -112,5 +120,13 @@ impl Neo4jRepository {
 
     pub fn player_characters(&self) -> Neo4jPlayerCharacterRepository {
         Neo4jPlayerCharacterRepository::new(self.connection.clone())
+    }
+
+    pub fn regions(&self) -> Neo4jRegionRepository {
+        Neo4jRegionRepository::new(self.connection.clone())
+    }
+
+    pub fn observations(&self) -> Neo4jObservationRepository {
+        Neo4jObservationRepository::new(self.connection.clone())
     }
 }

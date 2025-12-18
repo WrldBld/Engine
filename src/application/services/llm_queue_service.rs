@@ -193,17 +193,30 @@ impl<Q: ProcessingQueuePort<LLMRequestItem> + 'static, L: LlmPort + Clone + 'sta
                                     // Look up challenge details
                                     match challenge_repo_clone.get(challenge_id).await {
                                         Ok(Some(challenge)) => {
-                                            // Look up skill name
-                                            let skill_name = match skill_repo_clone.get(challenge.skill_id).await {
-                                                Ok(Some(skill)) => skill.name,
-                                                Ok(None) => {
-                                                    tracing::warn!("Skill {} not found for challenge {}", challenge.skill_id, cs.challenge_id);
-                                                    challenge.skill_id.to_string()
-                                                }
+                                            // Fetch skill_id from REQUIRES_SKILL edge
+                                            let skill_id = match challenge_repo_clone.get_required_skill(challenge_id).await {
+                                                Ok(sid) => sid,
                                                 Err(e) => {
-                                                    tracing::error!("Failed to look up skill {}: {}", challenge.skill_id, e);
-                                                    challenge.skill_id.to_string()
+                                                    tracing::warn!("Failed to get required skill for challenge {}: {}", challenge_id, e);
+                                                    None
                                                 }
+                                            };
+
+                                            // Look up skill name
+                                            let skill_name = if let Some(sid) = skill_id {
+                                                match skill_repo_clone.get(sid).await {
+                                                    Ok(Some(skill)) => skill.name,
+                                                    Ok(None) => {
+                                                        tracing::warn!("Skill {} not found for challenge {}", sid, cs.challenge_id);
+                                                        sid.to_string()
+                                                    }
+                                                    Err(e) => {
+                                                        tracing::error!("Failed to look up skill {}: {}", sid, e);
+                                                        sid.to_string()
+                                                    }
+                                                }
+                                            } else {
+                                                "Unknown Skill".to_string()
                                             };
 
                                             Some(ChallengeSuggestionInfo {
@@ -213,6 +226,7 @@ impl<Q: ProcessingQueuePort<LLMRequestItem> + 'static, L: LlmPort + Clone + 'sta
                                                 difficulty_display: challenge.difficulty.display(),
                                                 confidence: format!("{:?}", cs.confidence),
                                                 reasoning: cs.reasoning,
+                                                target_pc_id: request.pc_id.map(|id| id.to_string()),
                                             })
                                         }
                                         Ok(None) => {
@@ -224,6 +238,7 @@ impl<Q: ProcessingQueuePort<LLMRequestItem> + 'static, L: LlmPort + Clone + 'sta
                                                 difficulty_display: String::new(),
                                                 confidence: format!("{:?}", cs.confidence),
                                                 reasoning: cs.reasoning.clone(),
+                                                target_pc_id: request.pc_id.map(|id| id.to_string()),
                                             })
                                         }
                                         Err(e) => {
@@ -235,6 +250,7 @@ impl<Q: ProcessingQueuePort<LLMRequestItem> + 'static, L: LlmPort + Clone + 'sta
                                                 difficulty_display: String::new(),
                                                 confidence: format!("{:?}", cs.confidence),
                                                 reasoning: cs.reasoning.clone(),
+                                                target_pc_id: request.pc_id.map(|id| id.to_string()),
                                             })
                                         }
                                     }
@@ -248,6 +264,7 @@ impl<Q: ProcessingQueuePort<LLMRequestItem> + 'static, L: LlmPort + Clone + 'sta
                                                 difficulty_display: String::new(),
                                                 confidence: format!("{:?}", cs.confidence),
                                                 reasoning: cs.reasoning,
+                                                target_pc_id: request.pc_id.map(|id| id.to_string()),
                                             })
                                         }
                                     }

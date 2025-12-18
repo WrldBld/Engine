@@ -3,6 +3,12 @@
 //! This service provides convenient methods for creating StoryEvents when
 //! gameplay actions occur, such as dialogue exchanges, challenge results,
 //! scene transitions, and more.
+//!
+//! # Graph-First Architecture
+//!
+//! StoryEvent relationships (session, location, scene, involved characters, triggered_by,
+//! recorded_challenge) are stored as graph edges, not embedded fields. This service
+//! handles creating the event node and all related edges in a single operation.
 
 use anyhow::Result;
 use std::sync::Arc;
@@ -10,7 +16,7 @@ use std::sync::Arc;
 use crate::application::dto::AppEvent;
 use crate::application::ports::outbound::{EventBusPort, StoryEventRepositoryPort};
 use crate::domain::entities::{
-    ChallengeEventOutcome, DmMarkerType, InfoImportance, InfoType,
+    ChallengeEventOutcome, DmMarkerType, InfoImportance, InfoType, InvolvedCharacter,
     ItemSource, MarkerImportance, StoryEvent, StoryEventType,
 };
 use crate::domain::value_objects::{
@@ -68,22 +74,28 @@ impl StoryEventService {
             tone,
         };
 
-        let mut event = StoryEvent::new(world_id, session_id, event_type)
-            .with_characters(involved_characters)
+        let mut event = StoryEvent::new(world_id, event_type)
             .with_summary(format!("Spoke with {}", npc_name));
 
-        if let Some(sid) = scene_id {
-            event = event.with_scene(sid);
-        }
-        if let Some(lid) = location_id {
-            event = event.with_location(lid);
-        }
         if let Some(gt) = game_time {
             event = event.with_game_time(gt);
         }
 
         let event_id = event.id;
         self.repository.create(&event).await?;
+
+        // Create edges for relationships
+        self.repository.set_session(event_id, session_id).await?;
+        if let Some(sid) = scene_id {
+            self.repository.set_scene(event_id, sid).await?;
+        }
+        if let Some(lid) = location_id {
+            self.repository.set_location(event_id, lid).await?;
+        }
+        for char_id in involved_characters {
+            self.repository.add_involved_character(event_id, InvolvedCharacter::actor(char_id)).await?;
+        }
+
         self.publish_event_created(&event).await;
 
         tracing::debug!("Recorded dialogue exchange event: {}", event_id);
@@ -126,22 +138,29 @@ impl StoryEventService {
             ChallengeEventOutcome::CriticalFailure => "Critical Failure",
         };
 
-        let mut event = StoryEvent::new(world_id, session_id, event_type)
-            .with_characters(vec![character_id])
+        let mut event = StoryEvent::new(world_id, event_type)
             .with_summary(format!("{}: {}", challenge_name, outcome_text));
 
-        if let Some(sid) = scene_id {
-            event = event.with_scene(sid);
-        }
-        if let Some(lid) = location_id {
-            event = event.with_location(lid);
-        }
         if let Some(gt) = game_time {
             event = event.with_game_time(gt);
         }
 
         let event_id = event.id;
         self.repository.create(&event).await?;
+
+        // Create edges for relationships
+        self.repository.set_session(event_id, session_id).await?;
+        if let Some(sid) = scene_id {
+            self.repository.set_scene(event_id, sid).await?;
+        }
+        if let Some(lid) = location_id {
+            self.repository.set_location(event_id, lid).await?;
+        }
+        self.repository.add_involved_character(event_id, InvolvedCharacter::actor(character_id)).await?;
+        if let Some(cid) = challenge_id {
+            self.repository.set_recorded_challenge(event_id, cid).await?;
+        }
+
         self.publish_event_created(&event).await;
 
         tracing::debug!("Recorded challenge event: {}", event_id);
@@ -169,19 +188,23 @@ impl StoryEventService {
             trigger_reason,
         };
 
-        let mut event = StoryEvent::new(world_id, session_id, event_type)
-            .with_scene(to_scene)
+        let mut event = StoryEvent::new(world_id, event_type)
             .with_summary(format!("Entered: {}", to_scene_name));
 
-        if let Some(lid) = location_id {
-            event = event.with_location(lid);
-        }
         if let Some(gt) = game_time {
             event = event.with_game_time(gt);
         }
 
         let event_id = event.id;
         self.repository.create(&event).await?;
+
+        // Create edges for relationships
+        self.repository.set_session(event_id, session_id).await?;
+        self.repository.set_scene(event_id, to_scene).await?;
+        if let Some(lid) = location_id {
+            self.repository.set_location(event_id, lid).await?;
+        }
+
         self.publish_event_created(&event).await;
 
         tracing::debug!("Recorded scene transition event: {}", event_id);
@@ -210,15 +233,9 @@ impl StoryEventService {
             marker_type,
         };
 
-        let mut event = StoryEvent::new(world_id, session_id, event_type)
+        let mut event = StoryEvent::new(world_id, event_type)
             .with_summary(title);
 
-        if let Some(sid) = scene_id {
-            event = event.with_scene(sid);
-        }
-        if let Some(lid) = location_id {
-            event = event.with_location(lid);
-        }
         if let Some(gt) = game_time {
             event = event.with_game_time(gt);
         }
@@ -231,6 +248,16 @@ impl StoryEventService {
 
         let event_id = event.id;
         self.repository.create(&event).await?;
+
+        // Create edges for relationships
+        self.repository.set_session(event_id, session_id).await?;
+        if let Some(sid) = scene_id {
+            self.repository.set_scene(event_id, sid).await?;
+        }
+        if let Some(lid) = location_id {
+            self.repository.set_location(event_id, lid).await?;
+        }
+
         self.publish_event_created(&event).await;
 
         tracing::debug!("Recorded DM marker event: {}", event_id);
@@ -262,22 +289,28 @@ impl StoryEventService {
             persist_to_journal,
         };
 
-        let mut event = StoryEvent::new(world_id, session_id, event_type)
-            .with_characters(involved_characters)
+        let mut event = StoryEvent::new(world_id, event_type)
             .with_summary(format!("Discovered: {}", title));
 
-        if let Some(sid) = scene_id {
-            event = event.with_scene(sid);
-        }
-        if let Some(lid) = location_id {
-            event = event.with_location(lid);
-        }
         if let Some(gt) = game_time {
             event = event.with_game_time(gt);
         }
 
         let event_id = event.id;
         self.repository.create(&event).await?;
+
+        // Create edges for relationships
+        self.repository.set_session(event_id, session_id).await?;
+        if let Some(sid) = scene_id {
+            self.repository.set_scene(event_id, sid).await?;
+        }
+        if let Some(lid) = location_id {
+            self.repository.set_location(event_id, lid).await?;
+        }
+        for char_id in involved_characters {
+            self.repository.add_involved_character(event_id, InvolvedCharacter::witness(char_id)).await?;
+        }
+
         self.publish_event_created(&event).await;
 
         tracing::debug!("Recorded information revealed event: {}", event_id);
@@ -308,19 +341,24 @@ impl StoryEventService {
             reason: reason.clone(),
         };
 
-        let mut event = StoryEvent::new(world_id, session_id, event_type)
-            .with_characters(vec![from_character, to_character])
+        let mut event = StoryEvent::new(world_id, event_type)
             .with_summary(reason);
 
-        if let Some(sid) = scene_id {
-            event = event.with_scene(sid);
-        }
         if let Some(gt) = game_time {
             event = event.with_game_time(gt);
         }
 
         let event_id = event.id;
         self.repository.create(&event).await?;
+
+        // Create edges for relationships
+        self.repository.set_session(event_id, session_id).await?;
+        if let Some(sid) = scene_id {
+            self.repository.set_scene(event_id, sid).await?;
+        }
+        self.repository.add_involved_character(event_id, InvolvedCharacter::actor(from_character)).await?;
+        self.repository.add_involved_character(event_id, InvolvedCharacter::target(to_character)).await?;
+
         self.publish_event_created(&event).await;
 
         tracing::debug!("Recorded relationship change event: {}", event_id);
@@ -349,22 +387,26 @@ impl StoryEventService {
             quantity,
         };
 
-        let mut event = StoryEvent::new(world_id, session_id, event_type)
-            .with_characters(vec![character_id])
+        let mut event = StoryEvent::new(world_id, event_type)
             .with_summary(format!("Acquired {}", item_name));
 
-        if let Some(sid) = scene_id {
-            event = event.with_scene(sid);
-        }
-        if let Some(lid) = location_id {
-            event = event.with_location(lid);
-        }
         if let Some(gt) = game_time {
             event = event.with_game_time(gt);
         }
 
         let event_id = event.id;
         self.repository.create(&event).await?;
+
+        // Create edges for relationships
+        self.repository.set_session(event_id, session_id).await?;
+        if let Some(sid) = scene_id {
+            self.repository.set_scene(event_id, sid).await?;
+        }
+        if let Some(lid) = location_id {
+            self.repository.set_location(event_id, lid).await?;
+        }
+        self.repository.add_involved_character(event_id, InvolvedCharacter::actor(character_id)).await?;
+
         self.publish_event_created(&event).await;
 
         tracing::debug!("Recorded item acquired event: {}", event_id);
@@ -392,23 +434,29 @@ impl StoryEventService {
             effects_applied,
         };
 
-        let mut event = StoryEvent::new(world_id, session_id, event_type)
-            .triggered_by(narrative_event_id)
-            .with_characters(involved_characters)
+        let mut event = StoryEvent::new(world_id, event_type)
             .with_summary(format!("Event: {}", narrative_event_name));
 
-        if let Some(sid) = scene_id {
-            event = event.with_scene(sid);
-        }
-        if let Some(lid) = location_id {
-            event = event.with_location(lid);
-        }
         if let Some(gt) = game_time {
             event = event.with_game_time(gt);
         }
 
         let event_id = event.id;
         self.repository.create(&event).await?;
+
+        // Create edges for relationships
+        self.repository.set_session(event_id, session_id).await?;
+        self.repository.set_triggered_by(event_id, narrative_event_id).await?;
+        if let Some(sid) = scene_id {
+            self.repository.set_scene(event_id, sid).await?;
+        }
+        if let Some(lid) = location_id {
+            self.repository.set_location(event_id, lid).await?;
+        }
+        for char_id in involved_characters {
+            self.repository.add_involved_character(event_id, InvolvedCharacter::actor(char_id)).await?;
+        }
+
         self.publish_event_created(&event).await;
 
         tracing::debug!("Recorded narrative event triggered: {}", event_id);
@@ -430,11 +478,15 @@ impl StoryEventService {
             players_present,
         };
 
-        let event = StoryEvent::new(world_id, session_id, event_type)
+        let event = StoryEvent::new(world_id, event_type)
             .with_summary(format!("Session {} started", session_number));
 
         let event_id = event.id;
         self.repository.create(&event).await?;
+
+        // Create edge for session relationship
+        self.repository.set_session(event_id, session_id).await?;
+
         self.publish_event_created(&event).await;
 
         tracing::debug!("Recorded session started event: {}", event_id);
@@ -454,10 +506,14 @@ impl StoryEventService {
             summary: summary.clone(),
         };
 
-        let event = StoryEvent::new(world_id, session_id, event_type).with_summary(summary);
+        let event = StoryEvent::new(world_id, event_type).with_summary(summary);
 
         let event_id = event.id;
         self.repository.create(&event).await?;
+
+        // Create edge for session relationship
+        self.repository.set_session(event_id, session_id).await?;
+
         self.publish_event_created(&event).await;
 
         tracing::debug!("Recorded session ended event: {}", event_id);

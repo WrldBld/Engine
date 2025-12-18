@@ -11,7 +11,7 @@ mod game_session;
 
 // Re-export all public types
 pub use errors::SessionError;
-pub use game_session::{GameSession, PendingApproval, SessionParticipant, WorldSnapshot};
+pub use game_session::{GameSession, PendingApproval, SessionParticipant};
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -19,6 +19,7 @@ use std::sync::Arc;
 use chrono::Utc;
 use tokio::sync::mpsc;
 
+use crate::application::dto::WorldSnapshot;
 use crate::application::ports::outbound::{
     BroadcastMessage, CharacterContextInfo, PendingApprovalInfo,
     SessionManagementError, SessionManagementPort, SessionWorldContext,
@@ -512,6 +513,12 @@ impl SessionManagementPort for SessionManager {
             .collect();
 
         // Build character context map
+        // NOTE: Wants are stored as graph edges and require async DB queries to fetch.
+        // The primary LLM prompt builder (build_prompt_from_action) fetches wants directly.
+        // This context is used for scene presence info where wants are less critical.
+        // To add wants here, either:
+        // 1. Pre-populate wants in WorldSnapshot during session creation, or
+        // 2. Add CharacterRepositoryPort dependency to SessionManager
         let mut characters = std::collections::HashMap::new();
         for character in &snapshot.characters {
             characters.insert(
@@ -519,11 +526,7 @@ impl SessionManagementPort for SessionManager {
                 CharacterContextInfo {
                     name: character.name.clone(),
                     archetype: format!("{:?}", character.current_archetype),
-                    wants: character
-                        .wants
-                        .iter()
-                        .map(|w| format!("{:?}", w))
-                        .collect(),
+                    wants: Vec::new(), // See note above
                 },
             );
         }

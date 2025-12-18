@@ -14,8 +14,8 @@ use crate::application::dto::{
     GenerationBatchResponseDto, SelectFromBatchRequestDto, UpdateAssetLabelRequestDto,
     UploadAssetRequestDto,
 };
-use crate::domain::entities::{BatchStatus, EntityType, GenerationBatch};
-use crate::domain::value_objects::{AssetId, BatchId};
+use crate::domain::entities::{BatchStatus, EntityType, GenerationBatch, GenerationRequest};
+use crate::domain::value_objects::{AssetId, BatchId, WorldId};
 use crate::infrastructure::state::AppState;
 // NOTE: asset request/response DTOs live in `application/dto/asset.rs`.
 
@@ -323,6 +323,11 @@ pub async fn queue_generation(
     State(state): State<Arc<AppState>>,
     Json(req): Json<GenerateAssetRequestDto>,
 ) -> Result<(StatusCode, Json<GenerationBatchResponseDto>), (StatusCode, String)> {
+    let world_uuid = Uuid::parse_str(&req.world_id).map_err(|_| {
+        (StatusCode::BAD_REQUEST, "Invalid world_id".to_string())
+    })?;
+    let world_id = WorldId::from_uuid(world_uuid);
+
     let entity_type = parse_entity_type(&req.entity_type).ok_or_else(|| {
         (
             StatusCode::BAD_REQUEST,
@@ -334,6 +339,7 @@ pub async fn queue_generation(
         .map_err(|msg| (StatusCode::BAD_REQUEST, msg))?;
 
     let mut batch = GenerationBatch::new(
+        world_id,
         entity_type,
         &req.entity_id,
         asset_type,
@@ -412,13 +418,18 @@ pub async fn queue_generation(
     ))
 }
 
-/// List the generation queue
+/// List the generation queue for a specific world
 pub async fn list_queue(
     State(state): State<Arc<AppState>>,
+    Path(world_id): Path<String>,
 ) -> Result<Json<Vec<GenerationBatchResponseDto>>, (StatusCode, String)> {
+    let world_uuid = Uuid::parse_str(&world_id)
+        .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid world_id".to_string()))?;
+    let world_id = WorldId::from_uuid(world_uuid);
+
     let batches = state
         .assets.asset_service
-        .list_active_batches()
+        .list_active_batches_by_world(world_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -613,8 +624,8 @@ pub async fn retry_batch(
     }
 
     // Create new batch with same parameters
-    use crate::domain::entities::GenerationRequest;
     let retry_request = GenerationRequest {
+        world_id: original_batch.world_id,
         entity_type: original_batch.entity_type,
         entity_id: original_batch.entity_id,
         asset_type: original_batch.asset_type,

@@ -30,10 +30,10 @@ pub use llm_port::{
 pub use repository_port::{
     AssetRepositoryPort, ChallengeRepositoryPort, CharacterNode, CharacterRepositoryPort,
     EventChainRepositoryPort, InteractionRepositoryPort, LocationRepositoryPort,
-    NarrativeEventRepositoryPort, PlayerCharacterRepositoryPort, RelationshipEdge,
-    RelationshipRepositoryPort, SceneRepositoryPort, SheetTemplateRepositoryPort,
-    SkillRepositoryPort, SocialNetwork, StoryEventRepositoryPort, WorkflowRepositoryPort,
-    WorldRepositoryPort,
+    NarrativeEventRepositoryPort, PlayerCharacterRepositoryPort, RegionRepositoryPort,
+    RelationshipEdge, RelationshipRepositoryPort, SceneRepositoryPort, SheetTemplateRepositoryPort,
+    SkillRepositoryPort, SocialNetwork, StoryEventRepositoryPort, WantRepositoryPort,
+    WorkflowRepositoryPort, WorldRepositoryPort,
 };
 
 pub use session_management_port::{

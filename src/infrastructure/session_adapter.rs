@@ -8,13 +8,13 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use tokio::sync::RwLock;
 
+use crate::application::dto::WorldSnapshot;
 use crate::application::ports::outbound::{
     AsyncSessionError, AsyncSessionPort, SessionJoinInfo, SessionParticipantInfo,
     SessionParticipantRole, SessionWorldData,
 };
-use crate::domain::value_objects::{SessionId, WorldId};
-use crate::domain::value_objects::ProposedToolInfo;
-use crate::infrastructure::session::{SessionManager, WorldSnapshot, ClientId, SessionError, PendingApproval};
+use crate::domain::value_objects::{ProposedToolInfo, SessionId, WorldId};
+use crate::infrastructure::session::{ClientId, PendingApproval, SessionError, SessionManager};
 use crate::infrastructure::websocket::messages::{ParticipantRole, ServerMessage};
 
 /// Adapter that wraps SessionManager and implements AsyncSessionPort
@@ -113,10 +113,12 @@ impl AsyncSessionPort for SessionManagerAdapter {
         let session_id = sessions.get_client_session(client_id_parsed)?;
         let session = sessions.get_session(session_id)?;
         let participant = session.participants.get(&client_id_parsed)?;
+        let character_name = session.get_character_name_for_user(&participant.user_id);
         Some(SessionParticipantInfo {
             client_id: client_id.to_string(),
             user_id: participant.user_id.clone(),
             role: from_infra_role(participant.role),
+            character_name,
         })
     }
 
@@ -251,6 +253,7 @@ impl AsyncSessionPort for SessionManagerAdapter {
                         client_id: p.client_id.to_string(),
                         user_id: p.user_id.clone(),
                         role: from_infra_role(p.role),
+                        character_name: session.get_character_name_for_user(&p.user_id),
                     })
                     .collect()
             })
@@ -298,12 +301,15 @@ impl AsyncSessionPort for SessionManagerAdapter {
         let client_id_parsed = parse_client_id(client_id)?;
         let mut sessions = self.inner.write().await;
         let (session_id, participant) = sessions.leave_session(client_id_parsed)?;
+        // Note: character_name is None here because leave_session removes the participant
+        // and we no longer have access to the session's character data for this user
         Some((
             session_id,
             SessionParticipantInfo {
                 client_id: client_id.to_string(),
                 user_id: participant.user_id,
                 role: from_infra_role(participant.role),
+                character_name: None,
             },
         ))
     }
@@ -340,10 +346,12 @@ impl AsyncSessionPort for SessionManagerAdapter {
         let sessions = self.inner.read().await;
         let session = sessions.get_session(session_id)?;
         let dm = session.get_dm()?;
+        // DM typically doesn't have a character (they're the game master)
         Some(SessionParticipantInfo {
             client_id: dm.client_id.to_string(),
             user_id: dm.user_id.clone(),
             role: SessionParticipantRole::DungeonMaster,
+            character_name: None,
         })
     }
 

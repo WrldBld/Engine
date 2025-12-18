@@ -20,6 +20,7 @@ pub mod generation_queue_projection_service;
 pub mod interaction_service;
 pub mod llm_queue_service;
 pub mod llm;
+pub mod llm_context_service;
 pub mod location_service;
 
 // Re-export LLM service types for backward compatibility
@@ -38,6 +39,9 @@ pub mod skill_service;
 pub mod story_event_service;
 pub mod suggestion_service;
 pub mod tool_execution_service;
+pub mod trigger_evaluation_service;
+pub mod event_effect_executor;
+pub mod presence_service;
 pub mod workflow_config_service;
 pub mod workflow_service;
 pub mod world_service;
@@ -152,5 +156,26 @@ pub use challenge_outcome_approval_service::{
 
 // Re-export outcome suggestion service (P3.3)
 pub use outcome_suggestion_service::{OutcomeSuggestionService, SuggestionError};
+
+// Re-export LLM context service (Phase 1)
+pub use llm_context_service::{
+    LLMContextService, LLMContextError,
+    SummarizationPlanner, SummarizationRequest, SummarizationResult, SummarizationPrompts,
+};
+
+// Re-export trigger evaluation service (Phase 2)
+pub use trigger_evaluation_service::{
+    TriggerEvaluationService, TriggerEvaluationError, TriggerEvaluationResult,
+    TriggeredEventCandidate, TriggerSource, GameStateSnapshot, ImmediateContext,
+    CompletedChallenge, CompletedNarrativeEvent,
+};
+
+// Re-export event effect executor (Phase 2)
+pub use event_effect_executor::{
+    EventEffectExecutor, EffectExecutionError, EffectExecutionResult, OutcomeExecutionResult,
+};
+
+// Re-export presence service (Phase 23C)
+pub use presence_service::{NpcPresenceResult, PresenceService, PresenceServiceConfig};
 
 // Note: PlayerActionService and ApprovalService were removed - functionality moved to queue services

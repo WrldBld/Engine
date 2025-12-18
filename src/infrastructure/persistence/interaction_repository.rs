@@ -405,4 +405,170 @@ impl InteractionRepositoryPort for Neo4jInteractionRepository {
     async fn delete(&self, id: InteractionId) -> Result<()> {
         Neo4jInteractionRepository::delete(self, id).await
     }
+
+    // Target edge methods - implemented as stubs for now
+    // TODO: Implement full edge-based targeting in Phase 0.H
+
+    async fn set_target_character(
+        &self,
+        interaction_id: InteractionId,
+        character_id: CharacterId,
+    ) -> Result<()> {
+        // Remove any existing target first
+        self.remove_target(interaction_id).await?;
+
+        let q = query(
+            "MATCH (i:Interaction {id: $interaction_id}), (c:Character {id: $character_id})
+            CREATE (i)-[:TARGETS_CHARACTER]->(c)",
+        )
+        .param("interaction_id", interaction_id.to_string())
+        .param("character_id", character_id.to_string());
+
+        self.connection.graph().run(q).await?;
+        Ok(())
+    }
+
+    async fn set_target_item(
+        &self,
+        interaction_id: InteractionId,
+        item_id: ItemId,
+    ) -> Result<()> {
+        self.remove_target(interaction_id).await?;
+
+        let q = query(
+            "MATCH (i:Interaction {id: $interaction_id}), (t:Item {id: $item_id})
+            CREATE (i)-[:TARGETS_ITEM]->(t)",
+        )
+        .param("interaction_id", interaction_id.to_string())
+        .param("item_id", item_id.to_string());
+
+        self.connection.graph().run(q).await?;
+        Ok(())
+    }
+
+    async fn set_target_region(
+        &self,
+        interaction_id: InteractionId,
+        region_id: crate::domain::value_objects::RegionId,
+    ) -> Result<()> {
+        self.remove_target(interaction_id).await?;
+
+        let q = query(
+            "MATCH (i:Interaction {id: $interaction_id}), (r:Region {id: $region_id})
+            CREATE (i)-[:TARGETS_REGION]->(r)",
+        )
+        .param("interaction_id", interaction_id.to_string())
+        .param("region_id", region_id.to_string());
+
+        self.connection.graph().run(q).await?;
+        Ok(())
+    }
+
+    async fn remove_target(&self, interaction_id: InteractionId) -> Result<()> {
+        let q = query(
+            "MATCH (i:Interaction {id: $id})-[r]->()
+            WHERE type(r) IN ['TARGETS_CHARACTER', 'TARGETS_ITEM', 'TARGETS_REGION']
+            DELETE r",
+        )
+        .param("id", interaction_id.to_string());
+
+        self.connection.graph().run(q).await?;
+        Ok(())
+    }
+
+    async fn get_target(
+        &self,
+        interaction_id: InteractionId,
+    ) -> Result<Option<(crate::domain::entities::InteractionTargetType, String)>> {
+        let q = query(
+            "MATCH (i:Interaction {id: $id})-[r]->(t)
+            WHERE type(r) IN ['TARGETS_CHARACTER', 'TARGETS_ITEM', 'TARGETS_REGION']
+            RETURN type(r) as edge_type, t.id as target_id",
+        )
+        .param("id", interaction_id.to_string());
+
+        let mut result = self.connection.graph().execute(q).await?;
+
+        if let Some(row) = result.next().await? {
+            let edge_type: String = row.get("edge_type")?;
+            let target_id: String = row.get("target_id")?;
+
+            let target_type = match edge_type.as_str() {
+                "TARGETS_CHARACTER" => crate::domain::entities::InteractionTargetType::Character,
+                "TARGETS_ITEM" => crate::domain::entities::InteractionTargetType::Item,
+                "TARGETS_REGION" => crate::domain::entities::InteractionTargetType::Region,
+                _ => return Ok(None),
+            };
+
+            Ok(Some((target_type, target_id)))
+        } else {
+            Ok(None)
+        }
+    }
+
+    async fn add_required_item(
+        &self,
+        interaction_id: InteractionId,
+        item_id: ItemId,
+        requirement: &crate::domain::entities::InteractionRequirement,
+    ) -> Result<()> {
+        let q = query(
+            "MATCH (i:Interaction {id: $interaction_id}), (t:Item {id: $item_id})
+            CREATE (i)-[:REQUIRES_ITEM {consumed: $consumed}]->(t)",
+        )
+        .param("interaction_id", interaction_id.to_string())
+        .param("item_id", item_id.to_string())
+        .param("consumed", requirement.consumed);
+
+        self.connection.graph().run(q).await?;
+        Ok(())
+    }
+
+    async fn remove_required_item(
+        &self,
+        interaction_id: InteractionId,
+        item_id: ItemId,
+    ) -> Result<()> {
+        let q = query(
+            "MATCH (i:Interaction {id: $interaction_id})-[r:REQUIRES_ITEM]->(t:Item {id: $item_id})
+            DELETE r",
+        )
+        .param("interaction_id", interaction_id.to_string())
+        .param("item_id", item_id.to_string());
+
+        self.connection.graph().run(q).await?;
+        Ok(())
+    }
+
+    async fn add_required_character(
+        &self,
+        interaction_id: InteractionId,
+        character_id: CharacterId,
+    ) -> Result<()> {
+        let q = query(
+            "MATCH (i:Interaction {id: $interaction_id}), (c:Character {id: $character_id})
+            CREATE (i)-[:REQUIRES_CHARACTER_PRESENT]->(c)",
+        )
+        .param("interaction_id", interaction_id.to_string())
+        .param("character_id", character_id.to_string());
+
+        self.connection.graph().run(q).await?;
+        Ok(())
+    }
+
+    async fn remove_required_character(
+        &self,
+        interaction_id: InteractionId,
+        character_id: CharacterId,
+    ) -> Result<()> {
+        let q = query(
+            "MATCH (i:Interaction {id: $interaction_id})-[r:REQUIRES_CHARACTER_PRESENT]->(c:Character {id: $character_id})
+            DELETE r",
+        )
+        .param("interaction_id", interaction_id.to_string())
+        .param("character_id", character_id.to_string());
+
+        self.connection.graph().run(q).await?;
+        Ok(())
+    }
 }

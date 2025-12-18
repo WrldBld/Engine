@@ -9,7 +9,9 @@ mod export_routes;
 mod interaction_routes;
 mod location_routes;
 mod narrative_event_routes;
+mod observation_routes;
 mod player_character_routes;
+mod region_routes;
 mod session_routes;
 mod queue_routes;
 mod rule_system_routes;
@@ -64,6 +66,19 @@ pub fn create_routes() -> Router<Arc<AppState>> {
             "/api/characters/{id}/archetype",
             put(character_routes::change_archetype),
         )
+        // Character-Region relationship routes (Phase 23C)
+        .route(
+            "/api/characters/{id}/region-relationships",
+            get(character_routes::list_region_relationships),
+        )
+        .route(
+            "/api/characters/{id}/region-relationships",
+            post(character_routes::add_region_relationship),
+        )
+        .route(
+            "/api/characters/{character_id}/region-relationships/{region_id}/{rel_type}",
+            delete(character_routes::remove_region_relationship),
+        )
         // Location routes
         .route(
             "/api/worlds/{world_id}/locations",
@@ -90,6 +105,69 @@ pub fn create_routes() -> Router<Arc<AppState>> {
         .route(
             "/api/worlds/{world_id}/locations/available-for-starting",
             get(location_routes::list_available_starting_locations),
+        )
+        // Region routes
+        .route(
+            "/api/locations/{location_id}/regions",
+            get(region_routes::list_regions),
+        )
+        .route(
+            "/api/locations/{location_id}/regions",
+            post(region_routes::create_region),
+        )
+        .route(
+            "/api/regions/{region_id}",
+            get(region_routes::get_region),
+        )
+        .route(
+            "/api/regions/{region_id}",
+            patch(region_routes::update_region),
+        )
+        .route(
+            "/api/regions/{region_id}",
+            delete(region_routes::delete_region),
+        )
+        .route(
+            "/api/worlds/{world_id}/spawn-points",
+            get(region_routes::list_spawn_points),
+        )
+        .route(
+            "/api/regions/{region_id}/connections",
+            get(region_routes::list_region_connections),
+        )
+        .route(
+            "/api/regions/{region_id}/connections",
+            post(region_routes::create_region_connection),
+        )
+        .route(
+            "/api/regions/{from_region_id}/connections/{to_region_id}",
+            delete(region_routes::delete_region_connection),
+        )
+        .route(
+            "/api/regions/{from_region_id}/connections/{to_region_id}/unlock",
+            post(region_routes::unlock_region_connection),
+        )
+        .route(
+            "/api/regions/{region_id}/exits",
+            get(region_routes::list_region_exits),
+        )
+        .route(
+            "/api/regions/{region_id}/exits",
+            post(region_routes::create_region_exit),
+        )
+        .route(
+            "/api/regions/{region_id}/exits/{location_id}",
+            delete(region_routes::delete_region_exit),
+        )
+        // NPC-Region relationship routes (Phase 23C)
+        .route(
+            "/api/regions/{region_id}/npcs",
+            get(region_routes::list_region_npcs),
+        )
+        // Derived scene route (Phase 23C)
+        .route(
+            "/api/regions/{region_id}/scene",
+            post(region_routes::get_derived_scene),
         )
         // Scene routes
         .route(
@@ -136,6 +214,15 @@ pub fn create_routes() -> Router<Arc<AppState>> {
             "/api/worlds/{world_id}/sessions",
             post(session_routes::create_or_get_dm_session),
         )
+        // Game Time routes (Phase 23F)
+        .route(
+            "/api/sessions/{session_id}/game-time",
+            get(session_routes::get_game_time),
+        )
+        .route(
+            "/api/sessions/{session_id}/game-time/advance",
+            post(session_routes::advance_game_time),
+        )
         // Player Character routes
         .route(
             "/api/sessions/{session_id}/player-characters",
@@ -148,6 +235,23 @@ pub fn create_routes() -> Router<Arc<AppState>> {
         .route(
             "/api/sessions/{session_id}/player-characters/me",
             get(player_character_routes::get_my_player_character),
+        )
+        // PC Selection routes (Phase 23B.6)
+        .route(
+            "/api/sessions/{session_id}/available-pcs",
+            get(player_character_routes::list_available_pcs),
+        )
+        .route(
+            "/api/sessions/{session_id}/select-pc",
+            post(player_character_routes::select_pc),
+        )
+        .route(
+            "/api/users/{user_id}/pcs",
+            get(player_character_routes::list_user_pcs),
+        )
+        .route(
+            "/api/worlds/{world_id}/import-pc",
+            post(player_character_routes::import_pc),
         )
         .route(
             "/api/player-characters/{pc_id}",
@@ -164,6 +268,23 @@ pub fn create_routes() -> Router<Arc<AppState>> {
         .route(
             "/api/player-characters/{pc_id}/location",
             put(player_character_routes::update_player_character_location),
+        )
+        // Observation routes (Phase 23D)
+        .route(
+            "/api/player-characters/{pc_id}/observations",
+            get(observation_routes::list_observations),
+        )
+        .route(
+            "/api/player-characters/{pc_id}/observations",
+            post(observation_routes::create_observation),
+        )
+        .route(
+            "/api/player-characters/{pc_id}/observations/{npc_id}",
+            get(observation_routes::get_observation),
+        )
+        .route(
+            "/api/player-characters/{pc_id}/observations/{npc_id}",
+            delete(observation_routes::delete_observation),
         )
         // Interaction routes
         .route(
@@ -252,7 +373,7 @@ pub fn create_routes() -> Router<Arc<AppState>> {
         )
         // Generation Queue routes
         .route("/api/assets/generate", post(asset_routes::queue_generation))
-        .route("/api/assets/queue", get(asset_routes::list_queue))
+        .route("/api/worlds/{world_id}/assets/queue", get(asset_routes::list_queue))
         .route("/api/assets/ready", get(asset_routes::list_ready_batches))
         .route("/api/assets/batch/{batch_id}", get(asset_routes::get_batch))
         .route(

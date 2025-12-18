@@ -1,22 +1,36 @@
 //! Interaction template entity
 //!
 //! Defines available interactions within a scene that players can perform.
+//!
+//! # Graph-First Design (Phase 0.D)
+//!
+//! Interaction targets are stored as Neo4j edges, NOT embedded fields:
+//! - `(InteractionTemplate)-[:TARGETS_CHARACTER]->(Character)`
+//! - `(InteractionTemplate)-[:TARGETS_ITEM]->(Item)`
+//! - `(InteractionTemplate)-[:TARGETS_REGION]->(Region)`
+//!
+//! Conditions remain as JSON (acceptable per ADR - complex nested non-relational)
 
 use crate::domain::value_objects::{CharacterId, InteractionId, ItemId, SceneId};
 
 /// A template defining an available interaction within a scene
+///
+/// NOTE: `target` is kept for backward compatibility during Phase 0.D migration.
+/// New code should use TARGETS_* edges via the repository:
+/// - TARGETS_CHARACTER, TARGETS_ITEM, TARGETS_REGION edges
 #[derive(Debug, Clone)]
 pub struct InteractionTemplate {
     pub id: InteractionId,
     pub scene_id: SceneId,
     pub name: String,
     pub interaction_type: InteractionType,
+    /// DEPRECATED: Use TARGETS_* edge via repository
     pub target: InteractionTarget,
     /// Hints for the LLM on how to handle this interaction
     pub prompt_hints: String,
     /// What tools the LLM is allowed to call for this interaction
     pub allowed_tools: Vec<String>,
-    /// Conditions that must be met to show this interaction
+    /// Conditions that must be met to show this interaction (stored as JSON)
     pub conditions: Vec<InteractionCondition>,
     /// Whether this interaction is currently available
     pub is_available: bool,
@@ -92,7 +106,25 @@ pub enum InteractionType {
     Custom(String),
 }
 
+/// Type of target for an interaction (used for edge queries)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InteractionTargetType {
+    /// Target a specific character
+    Character,
+    /// Target a specific item
+    Item,
+    /// Target a backdrop region
+    Region,
+    /// Target something in the environment (description stored on interaction)
+    Environment,
+    /// No specific target (general action)
+    None,
+}
+
 /// What the interaction targets
+/// 
+/// NOTE: This is kept for backward compatibility during Phase 0.D migration.
+/// New code should use TARGETS_* edges via the repository.
 #[derive(Debug, Clone)]
 pub enum InteractionTarget {
     /// Target a specific character
@@ -123,4 +155,17 @@ pub enum InteractionCondition {
     FlagNotSet(String),
     /// Custom condition (evaluated by game logic)
     Custom(String),
+}
+
+/// Data for interaction requirement edges
+#[derive(Debug, Clone)]
+pub struct InteractionRequirement {
+    /// Whether the required item is consumed when the interaction is used
+    pub consumed: bool,
+}
+
+impl Default for InteractionRequirement {
+    fn default() -> Self {
+        Self { consumed: false }
+    }
 }

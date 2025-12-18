@@ -3,7 +3,7 @@
 use chrono::{DateTime, Utc};
 
 use super::gallery_asset::{AssetType, EntityType};
-use crate::domain::value_objects::{AssetId, BatchId};
+use crate::domain::value_objects::{AssetId, BatchId, WorldId};
 
 /// Status of a generation batch
 #[derive(Debug, Clone, PartialEq)]
@@ -57,6 +57,8 @@ impl std::fmt::Display for BatchStatus {
 #[derive(Debug, Clone)]
 pub struct GenerationBatch {
     pub id: BatchId,
+    /// World this batch belongs to
+    pub world_id: WorldId,
     /// Type of entity this batch is for
     pub entity_type: EntityType,
     /// ID of the entity (Character, Location, or Item)
@@ -86,6 +88,7 @@ pub struct GenerationBatch {
 impl GenerationBatch {
     /// Create a new generation batch request
     pub fn new(
+        world_id: WorldId,
         entity_type: EntityType,
         entity_id: impl Into<String>,
         asset_type: AssetType,
@@ -95,6 +98,7 @@ impl GenerationBatch {
     ) -> Self {
         Self {
             id: BatchId::new(),
+            world_id,
             entity_type,
             entity_id: entity_id.into(),
             asset_type,
@@ -165,6 +169,7 @@ impl GenerationBatch {
 /// Request to create a new generation batch
 #[derive(Debug, Clone)]
 pub struct GenerationRequest {
+    pub world_id: WorldId,
     pub entity_type: EntityType,
     pub entity_id: String,
     pub asset_type: AssetType,
@@ -178,6 +183,7 @@ pub struct GenerationRequest {
 impl GenerationRequest {
     pub fn into_batch(self) -> GenerationBatch {
         let mut batch = GenerationBatch::new(
+            self.world_id,
             self.entity_type,
             self.entity_id,
             self.asset_type,

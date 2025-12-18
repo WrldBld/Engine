@@ -10,7 +10,7 @@ use tracing::{debug, info, instrument};
 
 use crate::application::ports::outbound::AssetRepositoryPort;
 use crate::domain::entities::{BatchStatus, EntityType, GalleryAsset, GenerationBatch};
-use crate::domain::value_objects::{AssetId, BatchId};
+use crate::domain::value_objects::{AssetId, BatchId, WorldId};
 
 /// Request to create a new asset
 #[derive(Debug, Clone)]
@@ -59,8 +59,8 @@ pub trait AssetService: Send + Sync {
     /// Get a batch by ID
     async fn get_batch(&self, batch_id: BatchId) -> Result<Option<GenerationBatch>>;
 
-    /// List all active batches (queued or generating)
-    async fn list_active_batches(&self) -> Result<Vec<GenerationBatch>>;
+    /// List all active batches (queued or generating) for a specific world
+    async fn list_active_batches_by_world(&self, world_id: WorldId) -> Result<Vec<GenerationBatch>>;
 
     /// List batches ready for selection
     async fn list_ready_batches(&self) -> Result<Vec<GenerationBatch>>;
@@ -240,10 +240,10 @@ impl AssetService for AssetServiceImpl {
     }
 
     #[instrument(skip(self))]
-    async fn list_active_batches(&self) -> Result<Vec<GenerationBatch>> {
-        debug!("Listing active batches");
+    async fn list_active_batches_by_world(&self, world_id: WorldId) -> Result<Vec<GenerationBatch>> {
+        debug!(%world_id, "Listing active batches for world");
         self.repository
-            .list_active_batches()
+            .list_active_batches_by_world(world_id)
             .await
             .context("Failed to list active batches from repository")
     }

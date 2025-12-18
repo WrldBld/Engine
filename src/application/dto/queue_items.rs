@@ -15,6 +15,9 @@ use crate::domain::value_objects::{
 pub struct PlayerActionItem {
     pub session_id: SessionId,
     pub player_id: String,
+    /// The player character ID performing this action (for challenge targeting)
+    #[serde(default)]
+    pub pc_id: Option<crate::domain::value_objects::PlayerCharacterId>,
     pub action_type: String,
     pub target: Option<String>,
     pub dialogue: Option<String>,
@@ -54,6 +57,9 @@ pub enum DMAction {
 pub struct LLMRequestItem {
     pub request_type: LLMRequestType,
     pub session_id: Option<SessionId>,
+    /// The player character ID associated with this request (for challenge targeting)
+    #[serde(default)]
+    pub pc_id: Option<crate::domain::value_objects::PlayerCharacterId>,
     #[serde(default)]
     pub prompt: Option<GamePromptRequest>, // None for suggestions
     #[serde(default)]
@@ -109,6 +115,9 @@ pub struct ChallengeSuggestionInfo {
     pub difficulty_display: String,
     pub confidence: String,
     pub reasoning: String,
+    /// Target player character ID for skill modifier lookup
+    #[serde(default)]
+    pub target_pc_id: Option<String>,
 }
 
 /// Enhanced challenge suggestion with detailed outcomes and tool receipts
@@ -205,6 +214,12 @@ pub struct ChallengeOutcomeApprovalItem {
     pub challenge_id: String,
     /// Name of the challenge
     pub challenge_name: String,
+    /// Description of the challenge (for LLM context)
+    #[serde(default)]
+    pub challenge_description: String,
+    /// Name of the skill required for this challenge (for LLM context)
+    #[serde(default)]
+    pub skill_name: Option<String>,
     /// ID of the character who rolled
     pub character_id: String,
     /// Name of the character who rolled

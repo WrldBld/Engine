@@ -11,8 +11,9 @@ use tracing::{debug, info, instrument};
 use crate::application::ports::outbound::{
     ExportOptions, PlayerWorldSnapshot, WorldExporterPort, WorldRepositoryPort,
 };
+use crate::application::services::SettingsService;
 use crate::domain::entities::{Act, MonomythStage, World};
-use crate::domain::value_objects::{RuleSystemConfig, WorldId};
+use crate::domain::value_objects::{AppSettings, RuleSystemConfig, WorldId};
 
 /// Request to create a new world
 #[derive(Debug, Clone)]
@@ -89,6 +90,7 @@ pub trait WorldService: Send + Sync {
 pub struct WorldServiceImpl {
     repository: Arc<dyn WorldRepositoryPort>,
     exporter: Arc<dyn WorldExporterPort>,
+    settings_service: Arc<SettingsService>,
 }
 
 impl WorldServiceImpl {
@@ -96,40 +98,42 @@ impl WorldServiceImpl {
     pub fn new(
         repository: Arc<dyn WorldRepositoryPort>,
         exporter: Arc<dyn WorldExporterPort>,
+        settings_service: Arc<SettingsService>,
     ) -> Self {
         Self {
             repository,
             exporter,
+            settings_service,
         }
     }
 
-    /// Validate a world creation request
-    fn validate_create_request(request: &CreateWorldRequest) -> Result<()> {
+    /// Validate a world creation request using settings
+    fn validate_create_request(request: &CreateWorldRequest, settings: &AppSettings) -> Result<()> {
         if request.name.trim().is_empty() {
             anyhow::bail!("World name cannot be empty");
         }
-        if request.name.len() > 255 {
-            anyhow::bail!("World name cannot exceed 255 characters");
+        if request.name.len() > settings.max_name_length {
+            anyhow::bail!("World name cannot exceed {} characters", settings.max_name_length);
         }
-        if request.description.len() > 10000 {
-            anyhow::bail!("World description cannot exceed 10000 characters");
+        if request.description.len() > settings.max_description_length {
+            anyhow::bail!("World description cannot exceed {} characters", settings.max_description_length);
         }
         Ok(())
     }
 
-    /// Validate a world update request
-    fn validate_update_request(request: &UpdateWorldRequest) -> Result<()> {
+    /// Validate a world update request using settings
+    fn validate_update_request(request: &UpdateWorldRequest, settings: &AppSettings) -> Result<()> {
         if let Some(ref name) = request.name {
             if name.trim().is_empty() {
                 anyhow::bail!("World name cannot be empty");
             }
-            if name.len() > 255 {
-                anyhow::bail!("World name cannot exceed 255 characters");
+            if name.len() > settings.max_name_length {
+                anyhow::bail!("World name cannot exceed {} characters", settings.max_name_length);
             }
         }
         if let Some(ref description) = request.description {
-            if description.len() > 10000 {
-                anyhow::bail!("World description cannot exceed 10000 characters");
+            if description.len() > settings.max_description_length {
+                anyhow::bail!("World description cannot exceed {} characters", settings.max_description_length);
             }
         }
         Ok(())
@@ -140,7 +144,9 @@ impl WorldServiceImpl {
 impl WorldService for WorldServiceImpl {
     #[instrument(skip(self), fields(name = %request.name))]
     async fn create_world(&self, request: CreateWorldRequest) -> Result<World> {
-        Self::validate_create_request(&request)?;
+        // For world creation, use global settings (no world_id yet)
+        let settings = self.settings_service.get().await;
+        Self::validate_create_request(&request, &settings)?;
 
         let mut world = World::new(&request.name, &request.description);
 
@@ -195,7 +201,9 @@ impl WorldService for WorldServiceImpl {
 
     #[instrument(skip(self), fields(world_id = %id))]
     async fn update_world(&self, id: WorldId, request: UpdateWorldRequest) -> Result<World> {
-        Self::validate_update_request(&request)?;
+        // Get per-world settings for validation
+        let settings = self.settings_service.get_for_world(id).await;
+        Self::validate_update_request(&request, &settings)?;
 
         let mut world = self
             .repository
@@ -315,13 +323,15 @@ mod tests {
 
     #[test]
     fn test_create_world_request_validation() {
+        let settings = AppSettings::default();
+
         // Empty name should fail
         let request = CreateWorldRequest {
             name: "".to_string(),
             description: "Test description".to_string(),
             rule_system: None,
         };
-        assert!(WorldServiceImpl::validate_create_request(&request).is_err());
+        assert!(WorldServiceImpl::validate_create_request(&request, &settings).is_err());
 
         // Valid request should pass
         let request = CreateWorldRequest {
@@ -329,26 +339,28 @@ mod tests {
             description: "A test world".to_string(),
             rule_system: None,
         };
-        assert!(WorldServiceImpl::validate_create_request(&request).is_ok());
+        assert!(WorldServiceImpl::validate_create_request(&request, &settings).is_ok());
 
-        // Too long name should fail
+        // Too long name should fail (256 > 255 default max)
         let request = CreateWorldRequest {
             name: "x".repeat(256),
             description: "Test".to_string(),
             rule_system: None,
         };
-        assert!(WorldServiceImpl::validate_create_request(&request).is_err());
+        assert!(WorldServiceImpl::validate_create_request(&request, &settings).is_err());
     }
 
     #[test]
     fn test_update_world_request_validation() {
+        let settings = AppSettings::default();
+
         // Empty name should fail
         let request = UpdateWorldRequest {
             name: Some("".to_string()),
             description: None,
             rule_system: None,
         };
-        assert!(WorldServiceImpl::validate_update_request(&request).is_err());
+        assert!(WorldServiceImpl::validate_update_request(&request, &settings).is_err());
 
         // No updates is valid
         let request = UpdateWorldRequest {
@@ -356,6 +368,6 @@ mod tests {
             description: None,
             rule_system: None,
         };
-        assert!(WorldServiceImpl::validate_update_request(&request).is_ok());
+        assert!(WorldServiceImpl::validate_update_request(&request, &settings).is_ok());
     }
 }

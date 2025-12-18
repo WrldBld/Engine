@@ -12,6 +12,7 @@ use std::collections::{HashMap, HashSet};
 use crate::application::dto::{AppEvent, GenerationBatchResponseDto};
 use crate::application::ports::outbound::{AppEventRepositoryPort, GenerationReadKind, GenerationReadStatePort};
 use crate::application::services::asset_service::{AssetService, AssetServiceImpl};
+use crate::domain::value_objects::WorldId;
 
 /// Snapshot DTO for suggestion tasks, mirrored from `infrastructure::http::queue_routes`.
 #[derive(Debug, serde::Serialize)]
@@ -68,14 +69,16 @@ impl GenerationQueueProjectionService {
     pub async fn project_queue(
         &self,
         user_id: Option<&str>,
-        world_key: &str,
+        world_id: WorldId,
     ) -> anyhow::Result<GenerationQueueSnapshot> {
+        let world_key = world_id.to_string();
+        
         // 1. Compute read markers for this user/world
         let mut read_batches: HashSet<String> = HashSet::new();
         let mut read_suggestions: HashSet<String> = HashSet::new();
 
         if let Some(uid) = user_id {
-            if let Ok(markers) = self.read_state.list_read_for_user_world(uid, world_key).await {
+            if let Ok(markers) = self.read_state.list_read_for_user_world(uid, &world_key).await {
                 for (item_id, kind) in markers {
                     match kind {
                         GenerationReadKind::Batch => {
@@ -89,8 +92,8 @@ impl GenerationQueueProjectionService {
             }
         }
 
-        // 2. Image batches from AssetService
-        let batches = AssetService::list_active_batches(&self.asset_service)
+        // 2. Image batches from AssetService - filtered by world_id
+        let batches = AssetService::list_active_batches_by_world(&self.asset_service, world_id)
             .await
             .unwrap_or_default()
             .into_iter()

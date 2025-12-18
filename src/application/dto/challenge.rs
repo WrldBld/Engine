@@ -424,14 +424,17 @@ impl From<TriggerType> for TriggerTypeRequestDto {
 pub struct ChallengeResponseDto {
     pub id: String,
     pub world_id: String,
+    /// Scene this challenge is tied to (from TIED_TO_SCENE edge)
     pub scene_id: Option<String>,
     pub name: String,
     pub description: String,
     pub challenge_type: ChallengeTypeDto,
-    pub skill_id: String,
+    /// Skill required for this challenge (from REQUIRES_SKILL edge)
+    pub skill_id: Option<String>,
     pub difficulty: DifficultyRequestDto,
     pub outcomes: OutcomesRequestDto,
     pub trigger_conditions: Vec<TriggerConditionRequestDto>,
+    /// Prerequisite challenges (from REQUIRES_COMPLETION_OF edges)
     pub prerequisite_challenges: Vec<String>,
     pub active: bool,
     pub order: u32,
@@ -439,28 +442,51 @@ pub struct ChallengeResponseDto {
     pub tags: Vec<String>,
 }
 
-impl From<Challenge> for ChallengeResponseDto {
-    fn from(c: Challenge) -> Self {
+impl ChallengeResponseDto {
+    /// Create a response DTO from a Challenge and its edge data
+    pub fn from_challenge_with_edges(
+        challenge: Challenge,
+        skill_id: Option<String>,
+        scene_id: Option<String>,
+        prerequisite_ids: Vec<String>,
+    ) -> Self {
         Self {
-            id: c.id.to_string(),
-            world_id: c.world_id.to_string(),
-            scene_id: c.scene_id.map(|s| s.to_string()),
-            name: c.name,
-            description: c.description,
-            challenge_type: c.challenge_type.into(),
-            skill_id: c.skill_id.to_string(),
-            difficulty: c.difficulty.into(),
-            outcomes: c.outcomes.into(),
-            trigger_conditions: c.trigger_conditions.into_iter().map(Into::into).collect(),
-            prerequisite_challenges: c
-                .prerequisite_challenges
-                .iter()
-                .map(|id| id.to_string())
-                .collect(),
-            active: c.active,
-            order: c.order,
-            is_favorite: c.is_favorite,
-            tags: c.tags,
+            id: challenge.id.to_string(),
+            world_id: challenge.world_id.to_string(),
+            scene_id,
+            name: challenge.name,
+            description: challenge.description,
+            challenge_type: challenge.challenge_type.into(),
+            skill_id,
+            difficulty: challenge.difficulty.into(),
+            outcomes: challenge.outcomes.into(),
+            trigger_conditions: challenge.trigger_conditions.into_iter().map(Into::into).collect(),
+            prerequisite_challenges: prerequisite_ids,
+            active: challenge.active,
+            order: challenge.order,
+            is_favorite: challenge.is_favorite,
+            tags: challenge.tags,
+        }
+    }
+
+    /// Create a minimal response without edge data (for list views where edge data isn't needed)
+    pub fn from_challenge_minimal(challenge: Challenge) -> Self {
+        Self {
+            id: challenge.id.to_string(),
+            world_id: challenge.world_id.to_string(),
+            scene_id: None,
+            name: challenge.name,
+            description: challenge.description,
+            challenge_type: challenge.challenge_type.into(),
+            skill_id: None,
+            difficulty: challenge.difficulty.into(),
+            outcomes: challenge.outcomes.into(),
+            trigger_conditions: challenge.trigger_conditions.into_iter().map(Into::into).collect(),
+            prerequisite_challenges: Vec::new(),
+            active: challenge.active,
+            order: challenge.order,
+            is_favorite: challenge.is_favorite,
+            tags: challenge.tags,
         }
     }
 }
@@ -500,6 +526,12 @@ pub struct PendingChallengeResolutionDto {
     pub challenge_id: String,
     /// Name of the challenge
     pub challenge_name: String,
+    /// Description of the challenge (for LLM context)
+    #[serde(default)]
+    pub challenge_description: String,
+    /// Name of the skill required for this challenge (for LLM context)
+    #[serde(default)]
+    pub skill_name: Option<String>,
     /// ID of the character who rolled
     pub character_id: String,
     /// Name of the character who rolled
@@ -750,5 +782,86 @@ impl OutcomeSuggestionReadyNotification {
             suggestions,
         }
     }
+}
+
+// ============================================================================
+// Outcome Branch DTOs (Phase 22C)
+// ============================================================================
+
+/// A single outcome branch option for DM selection
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OutcomeBranchDto {
+    /// Unique identifier for this branch (for selection)
+    pub id: String,
+    /// Short title/summary of this outcome
+    pub title: String,
+    /// Full narrative description
+    pub description: String,
+    /// Optional mechanical effects or triggers
+    #[serde(default)]
+    pub effects: Vec<String>,
+}
+
+impl OutcomeBranchDto {
+    pub fn new(id: impl Into<String>, title: impl Into<String>, description: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            title: title.into(),
+            description: description.into(),
+            effects: Vec::new(),
+        }
+    }
+
+    pub fn with_effects(mut self, effects: Vec<String>) -> Self {
+        self.effects = effects;
+        self
+    }
+}
+
+/// Notification that outcome branches are ready for DM selection
+#[derive(Debug, Clone, Serialize)]
+pub struct OutcomeBranchesReadyNotification {
+    #[serde(rename = "type")]
+    pub message_type: &'static str,
+    /// Resolution ID this applies to
+    pub resolution_id: String,
+    /// The outcome tier these branches are for (e.g., "Success", "Critical Failure")
+    pub outcome_type: String,
+    /// Available outcome branches to choose from
+    pub branches: Vec<OutcomeBranchDto>,
+}
+
+impl OutcomeBranchesReadyNotification {
+    pub fn new(resolution_id: String, outcome_type: String, branches: Vec<OutcomeBranchDto>) -> Self {
+        Self {
+            message_type: "OutcomeBranchesReady",
+            resolution_id,
+            outcome_type,
+            branches,
+        }
+    }
+}
+
+/// DM's selection of an outcome branch
+#[derive(Debug, Clone, Deserialize)]
+pub struct OutcomeBranchSelectionRequest {
+    /// Resolution ID
+    pub resolution_id: String,
+    /// ID of the selected branch
+    pub branch_id: String,
+    /// Optional modifications to the branch description
+    #[serde(default)]
+    pub modified_description: Option<String>,
+}
+
+/// Response containing LLM-generated outcome branches
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OutcomeBranchResponse {
+    /// Resolution ID this applies to
+    pub resolution_id: String,
+    /// Outcome tier
+    pub outcome_type: String,
+    /// Generated branches
+    pub branches: Vec<OutcomeBranchDto>,
 }
 

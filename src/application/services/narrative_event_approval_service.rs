@@ -30,7 +30,7 @@ struct ErrorMessage {
 
 /// Service responsible for narrative suggestion approval flows.
 ///
-/// # TODO: Architecture Violation
+/// # Architecture Note (Resolved)
 ///
 /// This service previously depended on `SessionManager` (a concrete infrastructure type)
 /// rather than the async session port trait. It now uses `AsyncSessionPort`, restoring a

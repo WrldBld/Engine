@@ -62,7 +62,7 @@ pub async fn load_world_snapshot(
             description: l.description,
             location_type: format!("{:?}", l.location_type),
             backdrop_asset: l.backdrop_asset,
-            parent_id: l.parent_id.map(|id| id.to_string()),
+            atmosphere: l.atmosphere,
         })
         .collect();
 
@@ -266,7 +266,7 @@ mod tests {
                 description: "The central plaza".to_string(),
                 location_type: "Exterior".to_string(),
                 backdrop_asset: Some("town_square.png".to_string()),
-                parent_id: None,
+                atmosphere: Some("Bustling marketplace atmosphere".to_string()),
             }],
             characters: vec![CharacterData {
                 id: "char-1".to_string(),

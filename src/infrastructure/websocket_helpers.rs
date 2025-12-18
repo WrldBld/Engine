@@ -4,10 +4,10 @@
 //! in the WebSocket handler and background workers.
 
 use crate::application::dto::PlayerActionItem;
-use crate::application::ports::outbound::QueueError;
+use crate::application::ports::outbound::{CharacterRepositoryPort, QueueError};
 use crate::application::services::{
     ChallengeService, ChallengeServiceImpl, NarrativeEventService, NarrativeEventServiceImpl,
-    SkillService, SkillServiceImpl,
+    SettingsService, SkillService, SkillServiceImpl,
 };
 use crate::domain::value_objects::{
     ActiveChallengeContext, ActiveNarrativeEventContext, CharacterContext, ConversationTurn,
@@ -23,6 +23,8 @@ pub async fn build_prompt_from_action(
     challenge_service: &Arc<ChallengeServiceImpl>,
     skill_service: &Arc<SkillServiceImpl>,
     narrative_event_service: &Arc<NarrativeEventServiceImpl>,
+    character_repo: &Arc<dyn CharacterRepositoryPort>,
+    settings_service: &Arc<SettingsService>,
     action: &PlayerActionItem,
 ) -> Result<GamePromptRequest, QueueError> {
     // Get session context
@@ -101,34 +103,57 @@ pub async fn build_prompt_from_action(
             .collect(),
     };
 
-    // Build character context
+    // Build character context with wants fetched from graph
+    let character_wants = match character_repo.get_wants(responding_character.id).await {
+        Ok(wants) => wants
+            .into_iter()
+            .map(|cw| {
+                // Format want for LLM context: include description and optionally intensity
+                if cw.want.intensity > 0.7 {
+                    format!("{} (strong)", cw.want.description)
+                } else if cw.want.intensity < 0.3 {
+                    format!("{} (mild)", cw.want.description)
+                } else {
+                    cw.want.description
+                }
+            })
+            .collect(),
+        Err(e) => {
+            tracing::warn!(
+                "Failed to fetch wants for character {}: {}",
+                responding_character.id,
+                e
+            );
+            Vec::new()
+        }
+    };
+
     let character_context = CharacterContext {
         name: responding_character.name.clone(),
         archetype: format!("{:?}", responding_character.current_archetype),
         current_mood: None, // Character mood tracking not yet implemented
-        wants: responding_character
-            .wants
-            .iter()
-            .map(|w| format!("{:?}", w))
-            .collect(),
+        wants: character_wants,
         relationship_to_player: None, // Relationship tracking not yet implemented
     };
 
     // Get directorial notes
     let directorial_notes = current_scene.directorial_notes.clone();
 
-    // Get conversation history from session
+    // Extract world_id from the session's world snapshot
+    let world_id = world_snapshot.world.id;
+
+    // Get per-world settings for conversation history limit
+    let settings = settings_service.get_for_world(world_id).await;
+
+    // Get conversation history from session using configurable limit
     let conversation_history = session
-        .get_recent_history(20) // Get last 20 turns for context
+        .get_recent_history(settings.conversation_history_turns)
         .iter()
         .map(|turn| ConversationTurn {
             speaker: turn.speaker.clone(),
             text: turn.content.clone(),
         })
         .collect();
-
-    // Extract world_id from the session's world snapshot
-    let world_id = world_snapshot.world.id;
 
     // Query active challenges and convert to ActiveChallengeContext
     let active_challenges: Vec<ActiveChallengeContext> = match challenge_service
@@ -138,17 +163,32 @@ pub async fn build_prompt_from_action(
         Ok(challenges) => {
             let mut contexts = Vec::new();
             for c in challenges {
-                // Look up skill name
-                let skill_name = match skill_service.get_skill(c.skill_id).await {
-                    Ok(Some(skill)) => skill.name,
-                    Ok(None) => {
-                        tracing::warn!("Skill {} not found for challenge {}", c.skill_id, c.id);
-                        c.skill_id.to_string()
-                    }
+                let challenge_id = c.id;
+                
+                // Fetch skill_id from REQUIRES_SKILL edge
+                let skill_id = match challenge_service.get_required_skill(challenge_id).await {
+                    Ok(sid) => sid,
                     Err(e) => {
-                        tracing::error!("Failed to look up skill {}: {}", c.skill_id, e);
-                        c.skill_id.to_string()
+                        tracing::warn!("Failed to get required skill for challenge {}: {}", challenge_id, e);
+                        None
                     }
+                };
+
+                // Look up skill name
+                let skill_name = if let Some(sid) = skill_id {
+                    match skill_service.get_skill(sid).await {
+                        Ok(Some(skill)) => skill.name,
+                        Ok(None) => {
+                            tracing::warn!("Skill {} not found for challenge {}", sid, challenge_id);
+                            sid.to_string()
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to look up skill {}: {}", sid, e);
+                            sid.to_string()
+                        }
+                    }
+                } else {
+                    "Unknown Skill".to_string()
                 };
 
                 contexts.push(ActiveChallengeContext {
@@ -173,6 +213,9 @@ pub async fn build_prompt_from_action(
     };
 
     // Query active narrative events and convert to ActiveNarrativeEventContext
+    // NOTE: featured_npcs are now stored as FEATURES_NPC edges and would require
+    // additional queries to fetch. For LLM context performance, we leave this empty.
+    // The LLM can still understand event context from trigger_hints and scene_direction.
     let active_narrative_events: Vec<ActiveNarrativeEventContext> = match narrative_event_service
         .list_active(world_id)
         .await
@@ -190,17 +233,9 @@ pub async fn build_prompt_from_action(
                     .iter()
                     .map(|t| t.description.clone())
                     .collect(),
-                featured_npc_names: e
-                    .featured_npcs
-                    .iter()
-                    .filter_map(|npc_id| {
-                        world_snapshot
-                            .characters
-                            .iter()
-                            .find(|c| c.id == *npc_id)
-                            .map(|c| c.name.clone())
-                    })
-                    .collect(),
+                // TODO: If featured NPC names are needed for LLM context, fetch via
+                // narrative_event_service.get_featured_npcs(e.id) and resolve names
+                featured_npc_names: vec![],
             })
             .collect(),
         Err(e) => {

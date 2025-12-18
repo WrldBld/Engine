@@ -6,8 +6,8 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use tokio::sync::mpsc;
 
-use crate::domain::entities::{Character, Location, Scene, World};
-use crate::domain::value_objects::{ProposedToolInfo, SessionId, WorldId};
+use crate::application::dto::WorldSnapshot;
+use crate::domain::value_objects::{GameTime, ProposedToolInfo, SessionId, TimeOfDay, WorldId};
 use crate::infrastructure::websocket::{ParticipantRole, ServerMessage};
 
 use super::conversation::ConversationTurn;
@@ -67,72 +67,6 @@ impl PendingApproval {
     }
 }
 
-/// A snapshot of the current world state for session joining
-///
-/// Note: This struct does not derive Serialize/Deserialize because it contains
-/// domain types. Use `to_json()` method for serialization instead.
-#[derive(Debug, Clone)]
-pub struct WorldSnapshot {
-    pub world: World,
-    pub locations: Vec<Location>,
-    pub characters: Vec<Character>,
-    pub scenes: Vec<Scene>,
-    pub current_scene_id: Option<String>,
-}
-
-impl WorldSnapshot {
-    /// Convert to a JSON value for transmission
-    pub fn to_json(&self) -> serde_json::Value {
-        serde_json::json!({
-            "world": {
-                "id": self.world.id.to_string(),
-                "name": &self.world.name,
-                "description": &self.world.description
-            },
-            "locations": self.locations.iter().map(|l| serde_json::json!({
-                "id": l.id.to_string(),
-                "name": &l.name,
-                "description": &l.description,
-                "backdrop_asset": &l.backdrop_asset,
-                "location_type": format!("{:?}", l.location_type)
-            })).collect::<Vec<_>>(),
-            "characters": self.characters.iter().map(|c| serde_json::json!({
-                "id": c.id.to_string(),
-                "name": &c.name,
-                "description": &c.description,
-                "sprite_asset": &c.sprite_asset,
-                "portrait_asset": &c.portrait_asset,
-                "archetype": format!("{:?}", c.current_archetype)
-            })).collect::<Vec<_>>(),
-            "scenes": self.scenes.iter().map(|s| serde_json::json!({
-                "id": s.id.to_string(),
-                "name": &s.name,
-                "location_id": s.location_id.to_string(),
-                "directorial_notes": &s.directorial_notes
-            })).collect::<Vec<_>>(),
-            "current_scene_id": &self.current_scene_id
-        })
-    }
-}
-
-impl Default for WorldSnapshot {
-    /// Create a minimal empty world snapshot with placeholder values.
-    ///
-    /// This is used as a fallback when JSON deserialization fails during
-    /// session creation. In normal operation, proper world data should be
-    /// provided, but this ensures the system remains functional with a
-    /// basic empty world containing no locations, characters, or scenes.
-    fn default() -> Self {
-        Self {
-            world: World::new("Empty World", "A placeholder world"),
-            locations: Vec::new(),
-            characters: Vec::new(),
-            scenes: Vec::new(),
-            current_scene_id: None,
-        }
-    }
-}
-
 /// An active game session
 #[derive(Debug)]
 pub struct GameSession {
@@ -152,6 +86,8 @@ pub struct GameSession {
     pending_approvals: HashMap<String, PendingApproval>,
     /// Map of user_id -> PlayerCharacter for this session
     pub player_characters: HashMap<String, crate::domain::entities::PlayerCharacter>,
+    /// In-game time tracking (Phase 23C)
+    game_time: GameTime,
 }
 
 impl GameSession {
@@ -179,6 +115,7 @@ impl GameSession {
             max_history_length,
             pending_approvals: HashMap::new(),
             player_characters: HashMap::new(),
+            game_time: GameTime::new(),
         }
     }
 
@@ -282,7 +219,7 @@ impl GameSession {
         pc: crate::domain::entities::PlayerCharacter,
     ) -> Result<(), String> {
         // Validate that the PC belongs to this session
-        if pc.session_id != self.id {
+        if pc.session_id != Some(self.id) {
             return Err("Player character session_id does not match session".to_string());
         }
         self.player_characters.insert(pc.user_id.clone(), pc);
@@ -295,6 +232,11 @@ impl GameSession {
         user_id: &str,
     ) -> Option<&crate::domain::entities::PlayerCharacter> {
         self.player_characters.get(user_id)
+    }
+
+    /// Get the character name for a user (if they have a selected character)
+    pub fn get_character_name_for_user(&self, user_id: &str) -> Option<String> {
+        self.player_characters.get(user_id).map(|pc| pc.name.clone())
     }
 
     /// Get all player characters in the session
@@ -464,6 +406,45 @@ impl GameSession {
                 }
             }
         }
+    }
+
+    // =========================================================================
+    // Game Time (Phase 23C)
+    // =========================================================================
+
+    /// Get a reference to the game time
+    pub fn game_time(&self) -> &GameTime {
+        &self.game_time
+    }
+
+    /// Get a mutable reference to the game time
+    pub fn game_time_mut(&mut self) -> &mut GameTime {
+        &mut self.game_time
+    }
+
+    /// Advance game time by hours (convenience method)
+    pub fn advance_time_hours(&mut self, hours: u32) {
+        self.game_time.advance_hours(hours);
+    }
+
+    /// Advance game time by days (convenience method)
+    pub fn advance_time_days(&mut self, days: u32) {
+        self.game_time.advance_days(days);
+    }
+
+    /// Get the current time of day
+    pub fn time_of_day(&self) -> TimeOfDay {
+        self.game_time.time_of_day()
+    }
+
+    /// Get a human-readable game time display
+    pub fn display_game_time(&self) -> String {
+        self.game_time.display_date()
+    }
+
+    /// Check if game time is paused
+    pub fn is_time_paused(&self) -> bool {
+        self.game_time.is_paused()
     }
 }
 

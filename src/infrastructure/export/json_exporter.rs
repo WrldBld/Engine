@@ -84,41 +84,39 @@ pub struct CharacterData {
     pub is_alive: bool,
     pub is_active: bool,
     pub stats: serde_json::Value,
-    pub wants: Vec<WantData>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WantData {
-    pub description: String,
-    pub target: Option<String>,
-    pub intensity: f32,
-    pub known_to_player: bool,
+    // NOTE: Wants are now stored as separate nodes with HAS_WANT edges
+    // They are not embedded in the character export for now
+    // TODO: Add wants export via graph traversal in Phase 0.H
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LocationData {
     pub id: String,
     pub world_id: String,
-    pub parent_id: Option<String>,
     pub name: String,
     pub description: String,
     pub location_type: String,
     pub backdrop_asset: Option<String>,
-    pub grid_map_id: Option<String>,
-    pub backdrop_regions: Vec<BackdropRegionData>,
+    pub atmosphere: Option<String>,
+    // Note: parent_id, grid_map_id, and backdrop_regions are now edges in Neo4j
+    // They can be reconstructed from separate queries if needed for export
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BackdropRegionData {
+pub struct RegionData {
     pub id: String,
+    pub location_id: String,
     pub name: String,
-    pub bounds: RegionBoundsData,
-    pub backdrop_asset: String,
-    pub description: Option<String>,
+    pub description: String,
+    pub backdrop_asset: Option<String>,
+    pub atmosphere: Option<String>,
+    pub map_bounds: Option<MapBoundsData>,
+    pub is_spawn_point: bool,
+    pub order: u32,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub struct RegionBoundsData {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MapBoundsData {
     pub x: u32,
     pub y: u32,
     pub width: u32,
@@ -140,9 +138,11 @@ pub struct ConnectionData {
     pub from_location_id: String,
     pub to_location_id: String,
     pub connection_type: String,
-    pub description: String,
+    pub description: Option<String>,
     pub bidirectional: bool,
-    pub travel_time: Option<u32>,
+    pub travel_time: u32,
+    pub is_locked: bool,
+    pub lock_description: Option<String>,
 }
 
 /// JSON exporter for creating world snapshots
@@ -200,10 +200,12 @@ impl JsonExporter {
                 connections.push(ConnectionData {
                     from_location_id: conn.from_location.to_string(),
                     to_location_id: conn.to_location.to_string(),
-                    connection_type: format!("{:?}", conn.connection_type),
-                    description: conn.description,
+                    connection_type: conn.connection_type.clone(),
+                    description: conn.description.clone(),
                     bidirectional: conn.bidirectional,
                     travel_time: conn.travel_time,
+                    is_locked: conn.is_locked,
+                    lock_description: conn.lock_description.clone(),
                 });
             }
         }
@@ -283,16 +285,6 @@ impl JsonExporter {
                         "current_hp": c.stats.current_hp,
                         "max_hp": c.stats.max_hp,
                     }),
-                    wants: c
-                        .wants
-                        .into_iter()
-                        .map(|w| WantData {
-                            description: w.description,
-                            target: w.target.map(|t| format!("{:?}", t)),
-                            intensity: w.intensity,
-                            known_to_player: w.known_to_player,
-                        })
-                        .collect(),
                 })
                 .collect(),
             locations: locations
@@ -300,28 +292,11 @@ impl JsonExporter {
                 .map(|l| LocationData {
                     id: l.id.to_string(),
                     world_id: l.world_id.to_string(),
-                    parent_id: l.parent_id.map(|id| id.to_string()),
                     name: l.name,
                     description: l.description,
                     location_type: format!("{:?}", l.location_type),
                     backdrop_asset: l.backdrop_asset,
-                    grid_map_id: l.grid_map_id.map(|id| id.to_string()),
-                    backdrop_regions: l
-                        .backdrop_regions
-                        .into_iter()
-                        .map(|r| BackdropRegionData {
-                            id: r.id,
-                            name: r.name,
-                            bounds: RegionBoundsData {
-                                x: r.bounds.x,
-                                y: r.bounds.y,
-                                width: r.bounds.width,
-                                height: r.bounds.height,
-                            },
-                            backdrop_asset: r.backdrop_asset,
-                            description: r.description,
-                        })
-                        .collect(),
+                    atmosphere: l.atmosphere,
                 })
                 .collect(),
             relationships: social_network

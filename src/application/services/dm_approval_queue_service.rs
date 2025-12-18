@@ -328,9 +328,14 @@ impl<Q: ApprovalQueuePort<ApprovalItem>> DMApprovalQueueService<Q> {
                 tracing::warn!("Failed to mark approval as failed: {}", e);
             }
 
-            // TODO: Re-enqueue to LLM queue with guidance to not suggest a challenge
+            // NOTE: Re-enqueueing to LLM queue for a non-challenge response would require:
+            // 1. Access to the LLM queue service (add as dependency)
+            // 2. Retrieve the original prompt from source_action_id
+            // 3. Add guidance to the prompt context (e.g., "do not suggest a challenge")
+            // 4. Create a new LLMRequestItem with modified context
+            // For now, the DM can manually trigger a new response if needed.
             tracing::info!(
-                "Challenge discarded for approval {}. Should re-queue for non-challenge response.",
+                "Challenge discarded for approval {}. DM should trigger new response if needed.",
                 request_id
             );
         } else {

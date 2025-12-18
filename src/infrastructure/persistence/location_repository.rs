@@ -1,17 +1,19 @@
 //! Location repository implementation for Neo4j
+//!
+//! Uses Neo4j edges for:
+//! - CONTAINS_LOCATION: Parent-child hierarchy
+//! - CONNECTED_TO: Navigation connections
+//! - HAS_REGION: Regions (see region_repository.rs)
+//! - HAS_TACTICAL_MAP: Grid maps
 
 use anyhow::Result;
 use async_trait::async_trait;
 use neo4rs::{query, Row};
-use serde::{Deserialize, Serialize};
 
 use super::connection::Neo4jConnection;
 use crate::application::ports::outbound::LocationRepositoryPort;
-use crate::domain::entities::{
-    BackdropRegion, ConnectionRequirement, Location, LocationConnection, LocationType,
-    SpatialRelationship,
-};
-use crate::domain::value_objects::{GridMapId, LocationId, WorldId};
+use crate::domain::entities::{Location, LocationConnection, LocationType, MapBounds, Region};
+use crate::domain::value_objects::{GridMapId, LocationId, RegionId, WorldId};
 
 /// Repository for Location operations
 pub struct Neo4jLocationRepository {
@@ -23,42 +25,43 @@ impl Neo4jLocationRepository {
         Self { connection }
     }
 
+    // =========================================================================
+    // Core CRUD
+    // =========================================================================
+
     /// Create a new location
     pub async fn create(&self, location: &Location) -> Result<()> {
-        let backdrop_regions_json = serde_json::to_string(
-            &location
-                .backdrop_regions
-                .iter()
-                .cloned()
-                .map(BackdropRegionStored::from)
-                .collect::<Vec<_>>(),
-        )?;
+        // Serialize map_bounds as JSON if present
+        let map_bounds_json = location
+            .parent_map_bounds
+            .as_ref()
+            .map(|b| serde_json::json!({
+                "x": b.x,
+                "y": b.y,
+                "width": b.width,
+                "height": b.height
+            }).to_string())
+            .unwrap_or_default();
 
         let q = query(
             "MATCH (w:World {id: $world_id})
             CREATE (l:Location {
                 id: $id,
                 world_id: $world_id,
-                parent_id: $parent_id,
                 name: $name,
                 description: $description,
                 location_type: $location_type,
                 backdrop_asset: $backdrop_asset,
-                grid_map_id: $grid_map_id,
-                backdrop_regions: $backdrop_regions
+                map_asset: $map_asset,
+                parent_map_bounds: $parent_map_bounds,
+                default_region_id: $default_region_id,
+                atmosphere: $atmosphere
             })
             CREATE (w)-[:CONTAINS_LOCATION]->(l)
             RETURN l.id as id",
         )
         .param("id", location.id.to_string())
         .param("world_id", location.world_id.to_string())
-        .param(
-            "parent_id",
-            location
-                .parent_id
-                .map(|id| id.to_string())
-                .unwrap_or_default(),
-        )
         .param("name", location.name.clone())
         .param("description", location.description.clone())
         .param("location_type", format!("{:?}", location.location_type))
@@ -67,13 +70,18 @@ impl Neo4jLocationRepository {
             location.backdrop_asset.clone().unwrap_or_default(),
         )
         .param(
-            "grid_map_id",
-            location
-                .grid_map_id
-                .map(|id| id.to_string())
-                .unwrap_or_default(),
+            "map_asset",
+            location.map_asset.clone().unwrap_or_default(),
         )
-        .param("backdrop_regions", backdrop_regions_json);
+        .param("parent_map_bounds", map_bounds_json)
+        .param(
+            "default_region_id",
+            location.default_region_id.map(|id| id.to_string()).unwrap_or_default(),
+        )
+        .param(
+            "atmosphere",
+            location.atmosphere.clone().unwrap_or_default(),
+        );
 
         self.connection.graph().run(q).await?;
         tracing::debug!("Created location: {}", location.name);
@@ -118,49 +126,51 @@ impl Neo4jLocationRepository {
 
     /// Update a location
     pub async fn update(&self, location: &Location) -> Result<()> {
-        let backdrop_regions_json = serde_json::to_string(
-            &location
-                .backdrop_regions
-                .iter()
-                .cloned()
-                .map(BackdropRegionStored::from)
-                .collect::<Vec<_>>(),
-        )?;
+        // Serialize map_bounds as JSON if present
+        let map_bounds_json = location
+            .parent_map_bounds
+            .as_ref()
+            .map(|b| serde_json::json!({
+                "x": b.x,
+                "y": b.y,
+                "width": b.width,
+                "height": b.height
+            }).to_string())
+            .unwrap_or_default();
 
         let q = query(
             "MATCH (l:Location {id: $id})
             SET l.name = $name,
                 l.description = $description,
-                l.parent_id = $parent_id,
                 l.location_type = $location_type,
                 l.backdrop_asset = $backdrop_asset,
-                l.grid_map_id = $grid_map_id,
-                l.backdrop_regions = $backdrop_regions
+                l.map_asset = $map_asset,
+                l.parent_map_bounds = $parent_map_bounds,
+                l.default_region_id = $default_region_id,
+                l.atmosphere = $atmosphere
             RETURN l.id as id",
         )
         .param("id", location.id.to_string())
         .param("name", location.name.clone())
         .param("description", location.description.clone())
-        .param(
-            "parent_id",
-            location
-                .parent_id
-                .map(|id| id.to_string())
-                .unwrap_or_default(),
-        )
         .param("location_type", format!("{:?}", location.location_type))
         .param(
             "backdrop_asset",
             location.backdrop_asset.clone().unwrap_or_default(),
         )
         .param(
-            "grid_map_id",
-            location
-                .grid_map_id
-                .map(|id| id.to_string())
-                .unwrap_or_default(),
+            "map_asset",
+            location.map_asset.clone().unwrap_or_default(),
         )
-        .param("backdrop_regions", backdrop_regions_json);
+        .param("parent_map_bounds", map_bounds_json)
+        .param(
+            "default_region_id",
+            location.default_region_id.map(|id| id.to_string()).unwrap_or_default(),
+        )
+        .param(
+            "atmosphere",
+            location.atmosphere.clone().unwrap_or_default(),
+        );
 
         self.connection.graph().run(q).await?;
         tracing::debug!("Updated location: {}", location.name);
@@ -180,72 +190,119 @@ impl Neo4jLocationRepository {
         Ok(())
     }
 
+    // =========================================================================
+    // Location Hierarchy (CONTAINS_LOCATION edges)
+    // =========================================================================
+
+    /// Set a location's parent (creates CONTAINS_LOCATION edge)
+    pub async fn set_parent(&self, child_id: LocationId, parent_id: LocationId) -> Result<()> {
+        // First remove any existing parent edge
+        let remove_q = query(
+            "MATCH (parent:Location)-[r:CONTAINS_LOCATION]->(child:Location {id: $child_id})
+            DELETE r",
+        )
+        .param("child_id", child_id.to_string());
+        self.connection.graph().run(remove_q).await?;
+
+        // Then create the new parent edge
+        let create_q = query(
+            "MATCH (parent:Location {id: $parent_id})
+            MATCH (child:Location {id: $child_id})
+            CREATE (parent)-[:CONTAINS_LOCATION]->(child)
+            RETURN parent.id as parent_id",
+        )
+        .param("parent_id", parent_id.to_string())
+        .param("child_id", child_id.to_string());
+
+        self.connection.graph().run(create_q).await?;
+        tracing::debug!("Set parent {} for location {}", parent_id, child_id);
+        Ok(())
+    }
+
+    /// Remove a location's parent (deletes CONTAINS_LOCATION edge from parent)
+    pub async fn remove_parent(&self, child_id: LocationId) -> Result<()> {
+        let q = query(
+            "MATCH (parent:Location)-[r:CONTAINS_LOCATION]->(child:Location {id: $child_id})
+            DELETE r",
+        )
+        .param("child_id", child_id.to_string());
+
+        self.connection.graph().run(q).await?;
+        tracing::debug!("Removed parent for location {}", child_id);
+        Ok(())
+    }
+
+    /// Get a location's parent
+    pub async fn get_parent(&self, location_id: LocationId) -> Result<Option<Location>> {
+        let q = query(
+            "MATCH (parent:Location)-[:CONTAINS_LOCATION]->(child:Location {id: $id})
+            RETURN parent as l",
+        )
+        .param("id", location_id.to_string());
+
+        let mut result = self.connection.graph().execute(q).await?;
+
+        if let Some(row) = result.next().await? {
+            Ok(Some(row_to_location(row)?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Get all child locations of a parent
+    pub async fn get_children(&self, parent_id: LocationId) -> Result<Vec<Location>> {
+        let q = query(
+            "MATCH (parent:Location {id: $id})-[:CONTAINS_LOCATION]->(child:Location)
+            RETURN child as l
+            ORDER BY child.name",
+        )
+        .param("id", parent_id.to_string());
+
+        let mut result = self.connection.graph().execute(q).await?;
+        let mut locations = Vec::new();
+
+        while let Some(row) = result.next().await? {
+            locations.push(row_to_location(row)?);
+        }
+
+        Ok(locations)
+    }
+
+    // =========================================================================
+    // Location Connections (CONNECTED_TO edges)
+    // =========================================================================
+
     /// Create a connection between two locations
     pub async fn create_connection(&self, connection: &LocationConnection) -> Result<()> {
-        let requirements_json = serde_json::to_string(
-            &connection
-                .requirements
-                .iter()
-                .cloned()
-                .map(ConnectionRequirementStored::try_from)
-                .collect::<Result<Vec<_>>>()?,
-        )?;
-        let connection_type_str = format!("{:?}", connection.connection_type);
-
         let q = query(
             "MATCH (from:Location {id: $from_id})
             MATCH (to:Location {id: $to_id})
-            CREATE (from)-[c:CONNECTS_TO {
+            CREATE (from)-[:CONNECTED_TO {
                 connection_type: $connection_type,
                 description: $description,
                 bidirectional: $bidirectional,
-                requirements: $requirements,
-                travel_time: $travel_time
+                travel_time: $travel_time,
+                is_locked: $is_locked,
+                lock_description: $lock_description
             }]->(to)
             RETURN from.id as from_id",
         )
         .param("from_id", connection.from_location.to_string())
         .param("to_id", connection.to_location.to_string())
-        .param("connection_type", connection_type_str.clone())
-        .param("description", connection.description.clone())
+        .param("connection_type", connection.connection_type.clone())
+        .param(
+            "description",
+            connection.description.clone().unwrap_or_default(),
+        )
         .param("bidirectional", connection.bidirectional)
-        .param("requirements", requirements_json.clone())
-        .param("travel_time", connection.travel_time.unwrap_or(0) as i64);
+        .param("travel_time", connection.travel_time as i64)
+        .param("is_locked", connection.is_locked)
+        .param(
+            "lock_description",
+            connection.lock_description.clone().unwrap_or_default(),
+        );
 
         self.connection.graph().run(q).await?;
-
-        // If bidirectional, create the reverse connection too
-        if connection.bidirectional {
-            // For bidirectional, reverse the connection type if applicable
-            let reverse_type = match connection.connection_type {
-                SpatialRelationship::Enters => "Exits",
-                SpatialRelationship::Exits => "Enters",
-                _ => &connection_type_str,
-            };
-
-            let reverse_q = query(
-                "MATCH (from:Location {id: $from_id})
-                MATCH (to:Location {id: $to_id})
-                CREATE (to)-[c:CONNECTS_TO {
-                    connection_type: $connection_type,
-                    description: $description,
-                    bidirectional: $bidirectional,
-                    requirements: $requirements,
-                    travel_time: $travel_time
-                }]->(from)
-                RETURN to.id as to_id",
-            )
-            .param("from_id", connection.from_location.to_string())
-            .param("to_id", connection.to_location.to_string())
-            .param("connection_type", reverse_type)
-            .param("description", connection.description.clone())
-            .param("bidirectional", connection.bidirectional)
-            .param("requirements", requirements_json)
-            .param("travel_time", connection.travel_time.unwrap_or(0) as i64);
-
-            self.connection.graph().run(reverse_q).await?;
-        }
-
         tracing::debug!(
             "Created connection from {} to {}",
             connection.from_location,
@@ -255,16 +312,16 @@ impl Neo4jLocationRepository {
     }
 
     /// Get all connections from a location
-    pub async fn get_connections(
-        &self,
-        location_id: LocationId,
-    ) -> Result<Vec<LocationConnection>> {
+    pub async fn get_connections(&self, location_id: LocationId) -> Result<Vec<LocationConnection>> {
         let q = query(
-            "MATCH (from:Location {id: $id})-[c:CONNECTS_TO]->(to:Location)
-            RETURN from.id as from_id, to.id as to_id,
-                   c.connection_type as connection_type, c.description as description,
-                   c.bidirectional as bidirectional, c.requirements as requirements,
-                   c.travel_time as travel_time",
+            "MATCH (from:Location {id: $id})-[r:CONNECTED_TO]->(to:Location)
+            RETURN from.id as from_id, to.id as to_id, 
+                   r.connection_type as connection_type,
+                   r.description as description,
+                   r.bidirectional as bidirectional,
+                   r.travel_time as travel_time,
+                   r.is_locked as is_locked,
+                   r.lock_description as lock_description",
         )
         .param("id", location_id.to_string());
 
@@ -278,11 +335,47 @@ impl Neo4jLocationRepository {
         Ok(connections)
     }
 
-    /// Delete a connection between locations
+    /// Update a connection between two locations
+    pub async fn update_connection(&self, connection: &LocationConnection) -> Result<()> {
+        let q = query(
+            "MATCH (from:Location {id: $from_id})-[r:CONNECTED_TO]->(to:Location {id: $to_id})
+            SET r.connection_type = $connection_type,
+                r.description = $description,
+                r.bidirectional = $bidirectional,
+                r.travel_time = $travel_time,
+                r.is_locked = $is_locked,
+                r.lock_description = $lock_description
+            RETURN from.id as from_id",
+        )
+        .param("from_id", connection.from_location.to_string())
+        .param("to_id", connection.to_location.to_string())
+        .param("connection_type", connection.connection_type.clone())
+        .param(
+            "description",
+            connection.description.clone().unwrap_or_default(),
+        )
+        .param("bidirectional", connection.bidirectional)
+        .param("travel_time", connection.travel_time as i64)
+        .param("is_locked", connection.is_locked)
+        .param(
+            "lock_description",
+            connection.lock_description.clone().unwrap_or_default(),
+        );
+
+        self.connection.graph().run(q).await?;
+        tracing::debug!(
+            "Updated connection from {} to {}",
+            connection.from_location,
+            connection.to_location
+        );
+        Ok(())
+    }
+
+    /// Delete a connection between two locations
     pub async fn delete_connection(&self, from: LocationId, to: LocationId) -> Result<()> {
         let q = query(
-            "MATCH (from:Location {id: $from_id})-[c:CONNECTS_TO]->(to:Location {id: $to_id})
-            DELETE c",
+            "MATCH (from:Location {id: $from_id})-[r:CONNECTED_TO]->(to:Location {id: $to_id})
+            DELETE r",
         )
         .param("from_id", from.to_string())
         .param("to_id", to.to_string());
@@ -291,33 +384,172 @@ impl Neo4jLocationRepository {
         tracing::debug!("Deleted connection from {} to {}", from, to);
         Ok(())
     }
+
+    /// Unlock a connection
+    pub async fn unlock_connection(&self, from: LocationId, to: LocationId) -> Result<()> {
+        let q = query(
+            "MATCH (from:Location {id: $from_id})-[r:CONNECTED_TO]->(to:Location {id: $to_id})
+            SET r.is_locked = false, r.lock_description = ''
+            RETURN from.id as from_id",
+        )
+        .param("from_id", from.to_string())
+        .param("to_id", to.to_string());
+
+        self.connection.graph().run(q).await?;
+        tracing::debug!("Unlocked connection from {} to {}", from, to);
+        Ok(())
+    }
+
+    // =========================================================================
+    // Grid Map (HAS_TACTICAL_MAP edge)
+    // =========================================================================
+
+    /// Set a location's tactical map
+    pub async fn set_grid_map(&self, location_id: LocationId, grid_map_id: GridMapId) -> Result<()> {
+        // First remove any existing grid map edge
+        let remove_q = query(
+            "MATCH (l:Location {id: $location_id})-[r:HAS_TACTICAL_MAP]->()
+            DELETE r",
+        )
+        .param("location_id", location_id.to_string());
+        self.connection.graph().run(remove_q).await?;
+
+        // Then create the new edge
+        let create_q = query(
+            "MATCH (l:Location {id: $location_id})
+            MATCH (g:GridMap {id: $grid_map_id})
+            CREATE (l)-[:HAS_TACTICAL_MAP]->(g)
+            RETURN l.id as location_id",
+        )
+        .param("location_id", location_id.to_string())
+        .param("grid_map_id", grid_map_id.to_string());
+
+        self.connection.graph().run(create_q).await?;
+        tracing::debug!("Set grid map {} for location {}", grid_map_id, location_id);
+        Ok(())
+    }
+
+    /// Remove a location's tactical map
+    pub async fn remove_grid_map(&self, location_id: LocationId) -> Result<()> {
+        let q = query(
+            "MATCH (l:Location {id: $location_id})-[r:HAS_TACTICAL_MAP]->()
+            DELETE r",
+        )
+        .param("location_id", location_id.to_string());
+
+        self.connection.graph().run(q).await?;
+        tracing::debug!("Removed grid map from location {}", location_id);
+        Ok(())
+    }
+
+    /// Get a location's tactical map ID
+    pub async fn get_grid_map_id(&self, location_id: LocationId) -> Result<Option<GridMapId>> {
+        let q = query(
+            "MATCH (l:Location {id: $location_id})-[:HAS_TACTICAL_MAP]->(g:GridMap)
+            RETURN g.id as grid_map_id",
+        )
+        .param("location_id", location_id.to_string());
+
+        let mut result = self.connection.graph().execute(q).await?;
+
+        if let Some(row) = result.next().await? {
+            let id_str: String = row.get("grid_map_id")?;
+            let id = uuid::Uuid::parse_str(&id_str)?;
+            Ok(Some(GridMapId::from_uuid(id)))
+        } else {
+            Ok(None)
+        }
+    }
+
+    // =========================================================================
+    // Regions (HAS_REGION edges)
+    // =========================================================================
+
+    /// Create a region within a location
+    pub async fn create_region(&self, location_id: LocationId, region: &Region) -> Result<()> {
+        // Serialize map_bounds as JSON if present
+        let map_bounds_json = region
+            .map_bounds
+            .as_ref()
+            .map(|b| serde_json::json!({
+                "x": b.x,
+                "y": b.y,
+                "width": b.width,
+                "height": b.height
+            }).to_string())
+            .unwrap_or_default();
+
+        let q = query(
+            "MATCH (l:Location {id: $location_id})
+            CREATE (r:Region {
+                id: $id,
+                location_id: $location_id,
+                name: $name,
+                description: $description,
+                backdrop_asset: $backdrop_asset,
+                atmosphere: $atmosphere,
+                map_bounds: $map_bounds,
+                is_spawn_point: $is_spawn_point,
+                order: $order
+            })
+            CREATE (l)-[:HAS_REGION]->(r)
+            RETURN r.id as id",
+        )
+        .param("location_id", location_id.to_string())
+        .param("id", region.id.to_string())
+        .param("name", region.name.clone())
+        .param("description", region.description.clone())
+        .param("backdrop_asset", region.backdrop_asset.clone().unwrap_or_default())
+        .param("atmosphere", region.atmosphere.clone().unwrap_or_default())
+        .param("map_bounds", map_bounds_json)
+        .param("is_spawn_point", region.is_spawn_point)
+        .param("order", region.order as i64);
+
+        self.connection.graph().run(q).await?;
+        tracing::debug!("Created region {} in location {}", region.id, location_id);
+        Ok(())
+    }
+
+    /// Get all regions in a location
+    pub async fn get_regions(&self, location_id: LocationId) -> Result<Vec<Region>> {
+        let q = query(
+            "MATCH (l:Location {id: $location_id})-[:HAS_REGION]->(r:Region)
+            RETURN r
+            ORDER BY r.order",
+        )
+        .param("location_id", location_id.to_string());
+
+        let mut result = self.connection.graph().execute(q).await?;
+        let mut regions = Vec::new();
+
+        while let Some(row) = result.next().await? {
+            regions.push(row_to_region(row)?);
+        }
+
+        Ok(regions)
+    }
 }
+
+// ============================================================================
+// Row conversion helpers
+// ============================================================================
 
 fn row_to_location(row: Row) -> Result<Location> {
     let node: neo4rs::Node = row.get("l")?;
 
     let id_str: String = node.get("id")?;
     let world_id_str: String = node.get("world_id")?;
-    let parent_id_str: String = node.get("parent_id").unwrap_or_default();
     let name: String = node.get("name")?;
     let description: String = node.get("description")?;
     let location_type_str: String = node.get("location_type")?;
-    let backdrop_asset: String = node.get("backdrop_asset")?;
-    let grid_map_id_str: String = node.get("grid_map_id")?;
-    let backdrop_regions_json: String = node
-        .get("backdrop_regions")
-        .unwrap_or_else(|_| "[]".to_string());
+    let backdrop_asset: String = node.get("backdrop_asset").unwrap_or_default();
+    let map_asset: String = node.get("map_asset").unwrap_or_default();
+    let parent_map_bounds_json: String = node.get("parent_map_bounds").unwrap_or_default();
+    let default_region_id_str: String = node.get("default_region_id").unwrap_or_default();
+    let atmosphere: String = node.get("atmosphere").unwrap_or_default();
 
     let id = uuid::Uuid::parse_str(&id_str)?;
     let world_id = uuid::Uuid::parse_str(&world_id_str)?;
-
-    let parent_id = if parent_id_str.is_empty() {
-        None
-    } else {
-        uuid::Uuid::parse_str(&parent_id_str)
-            .ok()
-            .map(LocationId::from_uuid)
-    };
 
     let location_type = match location_type_str.as_str() {
         "Interior" => LocationType::Interior,
@@ -326,25 +558,34 @@ fn row_to_location(row: Row) -> Result<Location> {
         _ => LocationType::Interior,
     };
 
-    let grid_map_id = if grid_map_id_str.is_empty() {
+    // Parse parent_map_bounds from JSON
+    let parent_map_bounds = if parent_map_bounds_json.is_empty() {
         None
     } else {
-        uuid::Uuid::parse_str(&grid_map_id_str)
+        serde_json::from_str::<serde_json::Value>(&parent_map_bounds_json)
             .ok()
-            .map(GridMapId::from_uuid)
+            .and_then(|v| {
+                Some(MapBounds {
+                    x: v.get("x")?.as_u64()? as u32,
+                    y: v.get("y")?.as_u64()? as u32,
+                    width: v.get("width")?.as_u64()? as u32,
+                    height: v.get("height")?.as_u64()? as u32,
+                })
+            })
     };
 
-    let backdrop_regions: Vec<BackdropRegion> =
-        serde_json::from_str::<Vec<BackdropRegionStored>>(&backdrop_regions_json)
-            .unwrap_or_default()
-            .into_iter()
-            .map(Into::into)
-            .collect();
+    // Parse default_region_id
+    let default_region_id = if default_region_id_str.is_empty() {
+        None
+    } else {
+        uuid::Uuid::parse_str(&default_region_id_str)
+            .ok()
+            .map(RegionId::from_uuid)
+    };
 
     Ok(Location {
         id: LocationId::from_uuid(id),
         world_id: WorldId::from_uuid(world_id),
-        parent_id,
         name,
         description,
         location_type,
@@ -353,148 +594,97 @@ fn row_to_location(row: Row) -> Result<Location> {
         } else {
             Some(backdrop_asset)
         },
-        grid_map_id,
-        backdrop_regions,
+        map_asset: if map_asset.is_empty() {
+            None
+        } else {
+            Some(map_asset)
+        },
+        parent_map_bounds,
+        default_region_id,
+        atmosphere: if atmosphere.is_empty() {
+            None
+        } else {
+            Some(atmosphere)
+        },
     })
 }
 
 fn row_to_connection(row: Row) -> Result<LocationConnection> {
     let from_id_str: String = row.get("from_id")?;
     let to_id_str: String = row.get("to_id")?;
-    let connection_type_str: String = row
-        .get("connection_type")
-        .unwrap_or_else(|_| "ConnectsTo".to_string());
-    let description: String = row.get("description")?;
+    let connection_type: String = row.get("connection_type")?;
+    let description: String = row.get("description").unwrap_or_default();
     let bidirectional: bool = row.get("bidirectional")?;
-    let requirements_json: String = row.get("requirements")?;
     let travel_time: i64 = row.get("travel_time")?;
+    let is_locked: bool = row.get("is_locked").unwrap_or(false);
+    let lock_description: String = row.get("lock_description").unwrap_or_default();
 
     let from_id = uuid::Uuid::parse_str(&from_id_str)?;
     let to_id = uuid::Uuid::parse_str(&to_id_str)?;
-    let requirements: Vec<ConnectionRequirement> =
-        serde_json::from_str::<Vec<ConnectionRequirementStored>>(&requirements_json)?
-            .into_iter()
-            .map(TryInto::try_into)
-            .collect::<Result<Vec<_>>>()?;
-
-    let connection_type = match connection_type_str.as_str() {
-        "Enters" => SpatialRelationship::Enters,
-        "Exits" => SpatialRelationship::Exits,
-        "LeadsTo" => SpatialRelationship::LeadsTo,
-        "AdjacentTo" => SpatialRelationship::AdjacentTo,
-        _ => SpatialRelationship::ConnectsTo,
-    };
 
     Ok(LocationConnection {
         from_location: LocationId::from_uuid(from_id),
         to_location: LocationId::from_uuid(to_id),
         connection_type,
-        description,
-        bidirectional,
-        requirements,
-        travel_time: if travel_time == 0 {
+        description: if description.is_empty() {
             None
         } else {
-            Some(travel_time as u32)
+            Some(description)
+        },
+        bidirectional,
+        travel_time: travel_time as u32,
+        is_locked,
+        lock_description: if lock_description.is_empty() {
+            None
+        } else {
+            Some(lock_description)
         },
     })
 }
 
-// ============================================================================
-// Persistence serde models (so domain doesn't require serde)
-// ============================================================================
+fn row_to_region(row: Row) -> Result<Region> {
+    let node: neo4rs::Node = row.get("r")?;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct RegionBoundsStored {
-    pub x: u32,
-    pub y: u32,
-    pub width: u32,
-    pub height: u32,
-}
+    let id_str: String = node.get("id")?;
+    let location_id_str: String = node.get("location_id")?;
+    let name: String = node.get("name")?;
+    let description: String = node.get("description").unwrap_or_default();
+    let backdrop_asset: String = node.get("backdrop_asset").unwrap_or_default();
+    let atmosphere: String = node.get("atmosphere").unwrap_or_default();
+    let map_bounds_json: String = node.get("map_bounds").unwrap_or_default();
+    let is_spawn_point: bool = node.get("is_spawn_point").unwrap_or(false);
+    let order: i64 = node.get("order").unwrap_or(0);
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct BackdropRegionStored {
-    pub id: String,
-    pub name: String,
-    pub bounds: RegionBoundsStored,
-    pub backdrop_asset: String,
-    pub description: Option<String>,
-}
+    let id = uuid::Uuid::parse_str(&id_str)?;
+    let location_id = uuid::Uuid::parse_str(&location_id_str)?;
 
-impl From<BackdropRegion> for BackdropRegionStored {
-    fn from(value: BackdropRegion) -> Self {
-        Self {
-            id: value.id,
-            name: value.name,
-            bounds: RegionBoundsStored {
-                x: value.bounds.x,
-                y: value.bounds.y,
-                width: value.bounds.width,
-                height: value.bounds.height,
-            },
-            backdrop_asset: value.backdrop_asset,
-            description: value.description,
-        }
-    }
-}
+    // Parse map_bounds from JSON
+    let map_bounds = if map_bounds_json.is_empty() {
+        None
+    } else {
+        serde_json::from_str::<serde_json::Value>(&map_bounds_json)
+            .ok()
+            .and_then(|v| {
+                Some(MapBounds {
+                    x: v.get("x")?.as_u64()? as u32,
+                    y: v.get("y")?.as_u64()? as u32,
+                    width: v.get("width")?.as_u64()? as u32,
+                    height: v.get("height")?.as_u64()? as u32,
+                })
+            })
+    };
 
-impl From<BackdropRegionStored> for BackdropRegion {
-    fn from(value: BackdropRegionStored) -> Self {
-        Self {
-            id: value.id,
-            name: value.name,
-            bounds: crate::domain::entities::RegionBounds {
-                x: value.bounds.x,
-                y: value.bounds.y,
-                width: value.bounds.width,
-                height: value.bounds.height,
-            },
-            backdrop_asset: value.backdrop_asset,
-            description: value.description,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-enum ConnectionRequirementStored {
-    HasItem(String),
-    CompletedScene(String),
-    SkillCheck { stat: String, difficulty: i32 },
-    Custom(String),
-}
-
-impl TryFrom<ConnectionRequirement> for ConnectionRequirementStored {
-    type Error = anyhow::Error;
-
-    fn try_from(value: ConnectionRequirement) -> Result<Self> {
-        Ok(match value {
-            ConnectionRequirement::HasItem(id) => Self::HasItem(id.to_string()),
-            ConnectionRequirement::CompletedScene(id) => Self::CompletedScene(id.to_string()),
-            ConnectionRequirement::SkillCheck { stat, difficulty } => {
-                Self::SkillCheck { stat, difficulty }
-            }
-            ConnectionRequirement::Custom(s) => Self::Custom(s),
-        })
-    }
-}
-
-impl TryFrom<ConnectionRequirementStored> for ConnectionRequirement {
-    type Error = anyhow::Error;
-
-    fn try_from(value: ConnectionRequirementStored) -> Result<Self> {
-        Ok(match value {
-            ConnectionRequirementStored::HasItem(id) => ConnectionRequirement::HasItem(
-                crate::domain::value_objects::ItemId::from_uuid(uuid::Uuid::parse_str(&id)?),
-            ),
-            ConnectionRequirementStored::CompletedScene(id) => ConnectionRequirement::CompletedScene(
-                crate::domain::value_objects::SceneId::from_uuid(uuid::Uuid::parse_str(&id)?),
-            ),
-            ConnectionRequirementStored::SkillCheck { stat, difficulty } => {
-                ConnectionRequirement::SkillCheck { stat, difficulty }
-            }
-            ConnectionRequirementStored::Custom(s) => ConnectionRequirement::Custom(s),
-        })
-    }
+    Ok(Region {
+        id: RegionId::from_uuid(id),
+        location_id: LocationId::from_uuid(location_id),
+        name,
+        description,
+        backdrop_asset: if backdrop_asset.is_empty() { None } else { Some(backdrop_asset) },
+        atmosphere: if atmosphere.is_empty() { None } else { Some(atmosphere) },
+        map_bounds,
+        is_spawn_point,
+        order: order as u32,
+    })
 }
 
 // =============================================================================
@@ -523,6 +713,22 @@ impl LocationRepositoryPort for Neo4jLocationRepository {
         Neo4jLocationRepository::delete(self, id).await
     }
 
+    async fn set_parent(&self, child_id: LocationId, parent_id: LocationId) -> Result<()> {
+        Neo4jLocationRepository::set_parent(self, child_id, parent_id).await
+    }
+
+    async fn remove_parent(&self, child_id: LocationId) -> Result<()> {
+        Neo4jLocationRepository::remove_parent(self, child_id).await
+    }
+
+    async fn get_parent(&self, location_id: LocationId) -> Result<Option<Location>> {
+        Neo4jLocationRepository::get_parent(self, location_id).await
+    }
+
+    async fn get_children(&self, location_id: LocationId) -> Result<Vec<Location>> {
+        Neo4jLocationRepository::get_children(self, location_id).await
+    }
+
     async fn create_connection(&self, connection: &LocationConnection) -> Result<()> {
         Neo4jLocationRepository::create_connection(self, connection).await
     }
@@ -531,7 +737,35 @@ impl LocationRepositoryPort for Neo4jLocationRepository {
         Neo4jLocationRepository::get_connections(self, location_id).await
     }
 
+    async fn update_connection(&self, connection: &LocationConnection) -> Result<()> {
+        Neo4jLocationRepository::update_connection(self, connection).await
+    }
+
     async fn delete_connection(&self, from: LocationId, to: LocationId) -> Result<()> {
         Neo4jLocationRepository::delete_connection(self, from, to).await
+    }
+
+    async fn unlock_connection(&self, from: LocationId, to: LocationId) -> Result<()> {
+        Neo4jLocationRepository::unlock_connection(self, from, to).await
+    }
+
+    async fn set_grid_map(&self, location_id: LocationId, grid_map_id: GridMapId) -> Result<()> {
+        Neo4jLocationRepository::set_grid_map(self, location_id, grid_map_id).await
+    }
+
+    async fn remove_grid_map(&self, location_id: LocationId) -> Result<()> {
+        Neo4jLocationRepository::remove_grid_map(self, location_id).await
+    }
+
+    async fn get_grid_map_id(&self, location_id: LocationId) -> Result<Option<GridMapId>> {
+        Neo4jLocationRepository::get_grid_map_id(self, location_id).await
+    }
+
+    async fn create_region(&self, location_id: LocationId, region: &Region) -> Result<()> {
+        Neo4jLocationRepository::create_region(self, location_id, region).await
+    }
+
+    async fn get_regions(&self, location_id: LocationId) -> Result<Vec<Region>> {
+        Neo4jLocationRepository::get_regions(self, location_id).await
     }
 }

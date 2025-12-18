@@ -9,10 +9,8 @@ use std::sync::Arc;
 use tracing::{debug, info, instrument};
 
 use crate::application::ports::outbound::{LocationRepositoryPort, WorldRepositoryPort};
-use crate::domain::entities::{
-    BackdropRegion, Location, LocationConnection, LocationType, SpatialRelationship,
-};
-use crate::domain::value_objects::{GridMapId, LocationId, WorldId};
+use crate::domain::entities::{Location, LocationConnection, LocationType, Region};
+use crate::domain::value_objects::{GridMapId, LocationId, RegionId, WorldId};
 
 // Validation constants
 const MAX_LOCATION_NAME_LENGTH: usize = 255;
@@ -27,8 +25,7 @@ pub struct CreateLocationRequest {
     pub location_type: LocationType,
     pub parent_id: Option<LocationId>,
     pub backdrop_asset: Option<String>,
-    pub grid_map_id: Option<GridMapId>,
-    pub backdrop_regions: Vec<BackdropRegion>,
+    pub atmosphere: Option<String>,
 }
 
 /// Request to update an existing location
@@ -37,9 +34,8 @@ pub struct UpdateLocationRequest {
     pub name: Option<String>,
     pub description: Option<String>,
     pub location_type: Option<LocationType>,
-    pub parent_id: Option<Option<LocationId>>,
-    pub backdrop_asset: Option<String>,
-    pub grid_map_id: Option<Option<GridMapId>>,
+    pub backdrop_asset: Option<Option<String>>,
+    pub atmosphere: Option<Option<String>>,
 }
 
 /// Request to create a connection between locations
@@ -47,10 +43,12 @@ pub struct UpdateLocationRequest {
 pub struct CreateConnectionRequest {
     pub from_location: LocationId,
     pub to_location: LocationId,
-    pub connection_type: SpatialRelationship,
+    pub connection_type: String,
     pub description: Option<String>,
     pub bidirectional: bool,
-    pub travel_time: Option<u32>,
+    pub travel_time: u32,
+    pub is_locked: bool,
+    pub lock_description: Option<String>,
 }
 
 /// Location with all its connections
@@ -58,6 +56,9 @@ pub struct CreateConnectionRequest {
 pub struct LocationWithConnections {
     pub location: Location,
     pub connections: Vec<LocationConnection>,
+    pub parent: Option<Location>,
+    pub children: Vec<Location>,
+    pub regions: Vec<Region>,
 }
 
 /// Location hierarchy node
@@ -70,13 +71,13 @@ pub struct LocationHierarchy {
 /// Location service trait defining the application use cases
 #[async_trait]
 pub trait LocationService: Send + Sync {
-    /// Create a new location with optional hierarchy support
+    /// Create a new location
     async fn create_location(&self, request: CreateLocationRequest) -> Result<Location>;
 
     /// Get a location by ID
     async fn get_location(&self, id: LocationId) -> Result<Option<Location>>;
 
-    /// Get a location with all its connections
+    /// Get a location with all its related data (connections, parent, children, regions)
     async fn get_location_with_connections(
         &self,
         id: LocationId,
@@ -84,9 +85,6 @@ pub trait LocationService: Send + Sync {
 
     /// List all locations in a world
     async fn list_locations(&self, world_id: WorldId) -> Result<Vec<Location>>;
-
-    /// List child locations of a parent
-    async fn list_children(&self, parent_id: LocationId) -> Result<Vec<Location>>;
 
     /// Get the location hierarchy for a world (tree structure)
     async fn get_location_hierarchy(&self, world_id: WorldId) -> Result<Vec<LocationHierarchy>>;
@@ -101,38 +99,56 @@ pub trait LocationService: Send + Sync {
     /// Delete a location
     async fn delete_location(&self, id: LocationId) -> Result<()>;
 
-    /// Create a connection between two locations
-    async fn create_connection(&self, request: CreateConnectionRequest) -> Result<()>;
+    // -------------------------------------------------------------------------
+    // Hierarchy operations (via edges)
+    // -------------------------------------------------------------------------
 
-    /// Delete a connection between locations
-    async fn delete_connection(&self, from: LocationId, to: LocationId) -> Result<()>;
-
-    /// Get all connections from a location
-    async fn get_connections(&self, location_id: LocationId) -> Result<Vec<LocationConnection>>;
-
-    /// Add a backdrop region to a location
-    async fn add_backdrop_region(
-        &self,
-        location_id: LocationId,
-        region: BackdropRegion,
-    ) -> Result<Location>;
-
-    /// Remove a backdrop region from a location
-    async fn remove_backdrop_region(
-        &self,
-        location_id: LocationId,
-        region_id: String,
-    ) -> Result<Location>;
-
-    /// Update backdrop asset for a location
-    async fn update_backdrop(&self, location_id: LocationId, asset_path: String) -> Result<Location>;
-
-    /// Set the parent of a location (move in hierarchy)
+    /// Set a location's parent (move in hierarchy)
     async fn set_parent(
         &self,
         location_id: LocationId,
         parent_id: Option<LocationId>,
-    ) -> Result<Location>;
+    ) -> Result<()>;
+
+    /// Get a location's children
+    async fn get_children(&self, location_id: LocationId) -> Result<Vec<Location>>;
+
+    // -------------------------------------------------------------------------
+    // Connection operations (via edges)
+    // -------------------------------------------------------------------------
+
+    /// Create a connection between two locations
+    async fn create_connection(&self, request: CreateConnectionRequest) -> Result<()>;
+
+    /// Get all connections from a location
+    async fn get_connections(&self, location_id: LocationId) -> Result<Vec<LocationConnection>>;
+
+    /// Delete a connection between locations
+    async fn delete_connection(&self, from: LocationId, to: LocationId) -> Result<()>;
+
+    /// Unlock a connection
+    async fn unlock_connection(&self, from: LocationId, to: LocationId) -> Result<()>;
+
+    // -------------------------------------------------------------------------
+    // Region operations (via edges)
+    // -------------------------------------------------------------------------
+
+    /// Add a region to a location
+    async fn add_region(
+        &self,
+        location_id: LocationId,
+        region: Region,
+    ) -> Result<()>;
+
+    // -------------------------------------------------------------------------
+    // Grid map operations (via edge)
+    // -------------------------------------------------------------------------
+
+    /// Set a location's tactical map
+    async fn set_grid_map(&self, location_id: LocationId, grid_map_id: GridMapId) -> Result<()>;
+
+    /// Remove a location's tactical map
+    async fn remove_grid_map(&self, location_id: LocationId) -> Result<()>;
 }
 
 /// Default implementation of LocationService using port abstractions
@@ -187,40 +203,59 @@ impl LocationServiceImpl {
         Ok(())
     }
 
-    /// Build hierarchy tree from flat list of locations
-    fn build_hierarchy(locations: Vec<Location>) -> Vec<LocationHierarchy> {
-        use std::collections::HashMap;
+    /// Build hierarchy tree by querying parent/child edges
+    async fn build_hierarchy_from_repo(
+        &self,
+        world_id: WorldId,
+    ) -> Result<Vec<LocationHierarchy>> {
+        // Get all locations in the world
+        let locations = self.location_repository.list(world_id).await?;
 
-        // Group locations by parent_id
-        let mut children_map: HashMap<Option<LocationId>, Vec<Location>> = HashMap::new();
-        for location in locations {
-            children_map
-                .entry(location.parent_id)
-                .or_default()
-                .push(location);
+        // Build a map of location_id -> Location
+        let location_map: std::collections::HashMap<LocationId, Location> = locations
+            .iter()
+            .cloned()
+            .map(|l| (l.id, l))
+            .collect();
+
+        // Build parent -> children map by querying each location's children
+        let mut children_map: std::collections::HashMap<LocationId, Vec<Location>> =
+            std::collections::HashMap::new();
+        let mut root_locations = Vec::new();
+
+        for location in &locations {
+            let parent = self.location_repository.get_parent(location.id).await?;
+            if let Some(parent_loc) = parent {
+                children_map
+                    .entry(parent_loc.id)
+                    .or_default()
+                    .push(location.clone());
+            } else {
+                root_locations.push(location.clone());
+            }
         }
 
         // Recursive function to build tree
         fn build_tree(
-            parent_id: Option<LocationId>,
-            children_map: &HashMap<Option<LocationId>, Vec<Location>>,
-        ) -> Vec<LocationHierarchy> {
-            children_map
-                .get(&parent_id)
-                .map(|children| {
-                    children
-                        .iter()
-                        .map(|location| LocationHierarchy {
-                            location: location.clone(),
-                            children: build_tree(Some(location.id), children_map),
-                        })
+            location: Location,
+            children_map: &std::collections::HashMap<LocationId, Vec<Location>>,
+        ) -> LocationHierarchy {
+            let children = children_map
+                .get(&location.id)
+                .map(|kids| {
+                    kids.iter()
+                        .map(|child| build_tree(child.clone(), children_map))
                         .collect()
                 })
-                .unwrap_or_default()
+                .unwrap_or_default();
+
+            LocationHierarchy { location, children }
         }
 
-        // Start with root locations (no parent)
-        build_tree(None, &children_map)
+        Ok(root_locations
+            .into_iter()
+            .map(|loc| build_tree(loc, &children_map))
+            .collect())
     }
 }
 
@@ -251,23 +286,26 @@ impl LocationService for LocationServiceImpl {
         if let Some(description) = request.description {
             location = location.with_description(description);
         }
-        if let Some(parent_id) = request.parent_id {
-            location = location.with_parent(parent_id);
-        }
         if let Some(backdrop) = request.backdrop_asset {
             location = location.with_backdrop(backdrop);
         }
-        if let Some(grid_map_id) = request.grid_map_id {
-            location = location.with_grid_map(grid_map_id);
-        }
-        for region in request.backdrop_regions {
-            location = location.with_backdrop_region(region);
+        if let Some(atmosphere) = request.atmosphere {
+            location = location.with_atmosphere(atmosphere);
         }
 
+        // Create the location node
         self.location_repository
             .create(&location)
             .await
             .context("Failed to create location in repository")?;
+
+        // Set parent if specified (creates CONTAINS_LOCATION edge)
+        if let Some(parent_id) = request.parent_id {
+            self.location_repository
+                .set_parent(location.id, parent_id)
+                .await
+                .context("Failed to set location parent")?;
+        }
 
         info!(
             location_id = %location.id,
@@ -306,9 +344,30 @@ impl LocationService for LocationServiceImpl {
             .await
             .context("Failed to get connections for location")?;
 
+        let parent = self
+            .location_repository
+            .get_parent(id)
+            .await
+            .context("Failed to get parent location")?;
+
+        let children = self
+            .location_repository
+            .get_children(id)
+            .await
+            .context("Failed to get child locations")?;
+
+        let regions = self
+            .location_repository
+            .get_regions(id)
+            .await
+            .context("Failed to get backdrop regions")?;
+
         Ok(Some(LocationWithConnections {
             location,
             connections,
+            parent,
+            children,
+            regions,
         }))
     }
 
@@ -322,38 +381,9 @@ impl LocationService for LocationServiceImpl {
     }
 
     #[instrument(skip(self))]
-    async fn list_children(&self, parent_id: LocationId) -> Result<Vec<Location>> {
-        debug!(parent_id = %parent_id, "Listing child locations");
-
-        // Get the parent to find its world
-        let parent = self
-            .location_repository
-            .get(parent_id)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("Parent location not found: {}", parent_id))?;
-
-        let all_locations = self
-            .location_repository
-            .list(parent.world_id)
-            .await?;
-
-        Ok(all_locations
-            .into_iter()
-            .filter(|l| l.parent_id == Some(parent_id))
-            .collect())
-    }
-
-    #[instrument(skip(self))]
     async fn get_location_hierarchy(&self, world_id: WorldId) -> Result<Vec<LocationHierarchy>> {
         debug!(world_id = %world_id, "Building location hierarchy");
-
-        let locations = self
-            .location_repository
-            .list(world_id)
-            .await
-            .context("Failed to list locations for hierarchy")?;
-
-        Ok(Self::build_hierarchy(locations))
+        self.build_hierarchy_from_repo(world_id).await
     }
 
     #[instrument(skip(self), fields(location_id = %id))]
@@ -379,26 +409,11 @@ impl LocationService for LocationServiceImpl {
         if let Some(location_type) = request.location_type {
             location.location_type = location_type;
         }
-        if let Some(parent_id) = request.parent_id {
-            // Verify new parent exists if Some
-            if let Some(pid) = parent_id {
-                // Prevent circular references
-                if pid == id {
-                    anyhow::bail!("Location cannot be its own parent");
-                }
-                let _ = self
-                    .location_repository
-                    .get(pid)
-                    .await?
-                    .ok_or_else(|| anyhow::anyhow!("Parent location not found: {}", pid))?;
-            }
-            location.parent_id = parent_id;
+        if let Some(backdrop_asset) = request.backdrop_asset {
+            location.backdrop_asset = backdrop_asset;
         }
-        if request.backdrop_asset.is_some() {
-            location.backdrop_asset = request.backdrop_asset;
-        }
-        if let Some(grid_map_id) = request.grid_map_id {
-            location.grid_map_id = grid_map_id;
+        if let Some(atmosphere) = request.atmosphere {
+            location.atmosphere = atmosphere;
         }
 
         self.location_repository
@@ -419,16 +434,12 @@ impl LocationService for LocationServiceImpl {
             .ok_or_else(|| anyhow::anyhow!("Location not found: {}", id))?;
 
         // Check for child locations
-        let all_locations = self
-            .location_repository
-            .list(location.world_id)
-            .await?;
-
-        let has_children = all_locations.iter().any(|l| l.parent_id == Some(id));
-        if has_children {
+        let children = self.location_repository.get_children(id).await?;
+        if !children.is_empty() {
             anyhow::bail!(
-                "Cannot delete location '{}' because it has child locations. Delete children first.",
-                location.name
+                "Cannot delete location '{}' because it has {} child location(s). Delete children first.",
+                location.name,
+                children.len()
             );
         }
 
@@ -439,6 +450,76 @@ impl LocationService for LocationServiceImpl {
 
         info!(location_id = %id, "Deleted location: {}", location.name);
         Ok(())
+    }
+
+    #[instrument(skip(self), fields(location_id = %location_id))]
+    async fn set_parent(
+        &self,
+        location_id: LocationId,
+        parent_id: Option<LocationId>,
+    ) -> Result<()> {
+        let location = self
+            .location_repository
+            .get(location_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Location not found: {}", location_id))?;
+
+        if let Some(pid) = parent_id {
+            // Prevent self-reference
+            if pid == location_id {
+                anyhow::bail!("Location cannot be its own parent");
+            }
+
+            let parent = self
+                .location_repository
+                .get(pid)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("Parent location not found: {}", pid))?;
+
+            // Verify same world
+            if parent.world_id != location.world_id {
+                anyhow::bail!("Parent location must be in the same world");
+            }
+
+            // Check for circular reference
+            let mut current_parent_id = Some(pid);
+            while let Some(cpid) = current_parent_id {
+                if cpid == location_id {
+                    anyhow::bail!("Cannot set parent: would create circular reference");
+                }
+                current_parent_id = self
+                    .location_repository
+                    .get_parent(cpid)
+                    .await?
+                    .map(|p| p.id);
+            }
+
+            self.location_repository
+                .set_parent(location_id, pid)
+                .await
+                .context("Failed to set location parent")?;
+        } else {
+            self.location_repository
+                .remove_parent(location_id)
+                .await
+                .context("Failed to remove location parent")?;
+        }
+
+        info!(
+            location_id = %location_id,
+            parent_id = ?parent_id,
+            "Updated parent for location: {}",
+            location.name
+        );
+        Ok(())
+    }
+
+    #[instrument(skip(self))]
+    async fn get_children(&self, location_id: LocationId) -> Result<Vec<Location>> {
+        self.location_repository
+            .get_children(location_id)
+            .await
+            .context("Failed to get child locations")
     }
 
     #[instrument(skip(self), fields(from = %request.from_location, to = %request.to_location))]
@@ -466,15 +547,21 @@ impl LocationService for LocationServiceImpl {
             anyhow::bail!("Cannot create connection from a location to itself");
         }
 
-        let mut connection = LocationConnection::new(request.from_location, request.to_location)
-            .with_connection_type(request.connection_type);
+        let mut connection =
+            LocationConnection::new(request.from_location, request.to_location, &request.connection_type);
 
         if let Some(description) = request.description {
             connection = connection.with_description(description);
         }
-
         connection.bidirectional = request.bidirectional;
         connection.travel_time = request.travel_time;
+        if request.is_locked {
+            if let Some(lock_desc) = request.lock_description {
+                connection = connection.locked(lock_desc);
+            } else {
+                connection.is_locked = true;
+            }
+        }
 
         self.location_repository
             .create_connection(&connection)
@@ -484,12 +571,21 @@ impl LocationService for LocationServiceImpl {
         info!(
             from = %request.from_location,
             to = %request.to_location,
-            connection_type = ?request.connection_type,
+            connection_type = %request.connection_type,
             "Created connection from '{}' to '{}'",
             from.name,
             to.name
         );
         Ok(())
+    }
+
+    #[instrument(skip(self))]
+    async fn get_connections(&self, location_id: LocationId) -> Result<Vec<LocationConnection>> {
+        debug!(location_id = %location_id, "Getting connections for location");
+        self.location_repository
+            .get_connections(location_id)
+            .await
+            .context("Failed to get connections from repository")
     }
 
     #[instrument(skip(self))]
@@ -504,153 +600,70 @@ impl LocationService for LocationServiceImpl {
     }
 
     #[instrument(skip(self))]
-    async fn get_connections(&self, location_id: LocationId) -> Result<Vec<LocationConnection>> {
-        debug!(location_id = %location_id, "Getting connections for location");
+    async fn unlock_connection(&self, from: LocationId, to: LocationId) -> Result<()> {
         self.location_repository
-            .get_connections(location_id)
+            .unlock_connection(from, to)
             .await
-            .context("Failed to get connections from repository")
+            .context("Failed to unlock connection")?;
+
+        info!(from = %from, to = %to, "Unlocked connection");
+        Ok(())
     }
 
     #[instrument(skip(self, region), fields(location_id = %location_id))]
-    async fn add_backdrop_region(
+    async fn add_region(
         &self,
         location_id: LocationId,
-        region: BackdropRegion,
-    ) -> Result<Location> {
-        let mut location = self
+        region: Region,
+    ) -> Result<()> {
+        // Verify location exists
+        let location = self
             .location_repository
             .get(location_id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("Location not found: {}", location_id))?;
 
-        location.backdrop_regions.push(region.clone());
-
         self.location_repository
-            .update(&location)
+            .create_region(location_id, &region)
             .await
-            .context("Failed to add backdrop region to location")?;
+            .context("Failed to add region")?;
 
         debug!(
             location_id = %location_id,
             region_id = %region.id,
-            "Added backdrop region to location: {}",
+            "Added region to location: {}",
             location.name
         );
-        Ok(location)
+        Ok(())
     }
 
-    #[instrument(skip(self), fields(location_id = %location_id, region_id = %region_id))]
-    async fn remove_backdrop_region(
-        &self,
-        location_id: LocationId,
-        region_id: String,
-    ) -> Result<Location> {
-        let mut location = self
+    #[instrument(skip(self))]
+    async fn set_grid_map(&self, location_id: LocationId, grid_map_id: GridMapId) -> Result<()> {
+        // Verify location exists
+        let _ = self
             .location_repository
             .get(location_id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("Location not found: {}", location_id))?;
-
-        if let Some(pos) = location
-            .backdrop_regions
-            .iter()
-            .position(|r| r.id == region_id)
-        {
-            location.backdrop_regions.remove(pos);
-
-            self.location_repository
-                .update(&location)
-                .await
-                .context("Failed to remove backdrop region from location")?;
-
-            debug!(
-                location_id = %location_id,
-                region_id = %region_id,
-                "Removed backdrop region from location: {}",
-                location.name
-            );
-        }
-
-        Ok(location)
-    }
-
-    #[instrument(skip(self), fields(location_id = %location_id))]
-    async fn update_backdrop(&self, location_id: LocationId, asset_path: String) -> Result<Location> {
-        let mut location = self
-            .location_repository
-            .get(location_id)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("Location not found: {}", location_id))?;
-
-        location.backdrop_asset = Some(asset_path);
 
         self.location_repository
-            .update(&location)
+            .set_grid_map(location_id, grid_map_id)
             .await
-            .context("Failed to update location backdrop")?;
+            .context("Failed to set grid map")?;
 
-        debug!(location_id = %location_id, "Updated backdrop for location: {}", location.name);
-        Ok(location)
+        info!(location_id = %location_id, grid_map_id = %grid_map_id, "Set grid map for location");
+        Ok(())
     }
 
-    #[instrument(skip(self), fields(location_id = %location_id))]
-    async fn set_parent(
-        &self,
-        location_id: LocationId,
-        parent_id: Option<LocationId>,
-    ) -> Result<Location> {
-        let mut location = self
-            .location_repository
-            .get(location_id)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("Location not found: {}", location_id))?;
-
-        // Verify new parent exists and prevent circular references
-        if let Some(pid) = parent_id {
-            if pid == location_id {
-                anyhow::bail!("Location cannot be its own parent");
-            }
-
-            let parent = self
-                .location_repository
-                .get(pid)
-                .await?
-                .ok_or_else(|| anyhow::anyhow!("Parent location not found: {}", pid))?;
-
-            // Verify same world
-            if parent.world_id != location.world_id {
-                anyhow::bail!("Parent location must be in the same world");
-            }
-
-            // Check for circular reference (parent's ancestors should not include this location)
-            let mut current_parent_id = Some(pid);
-            while let Some(cpid) = current_parent_id {
-                if cpid == location_id {
-                    anyhow::bail!("Cannot set parent: would create circular reference");
-                }
-                if let Some(ancestor) = self.location_repository.get(cpid).await? {
-                    current_parent_id = ancestor.parent_id;
-                } else {
-                    break;
-                }
-            }
-        }
-
-        location.parent_id = parent_id;
-
+    #[instrument(skip(self))]
+    async fn remove_grid_map(&self, location_id: LocationId) -> Result<()> {
         self.location_repository
-            .update(&location)
+            .remove_grid_map(location_id)
             .await
-            .context("Failed to update location parent")?;
+            .context("Failed to remove grid map")?;
 
-        info!(
-            location_id = %location_id,
-            parent_id = ?parent_id,
-            "Updated parent for location: {}",
-            location.name
-        );
-        Ok(location)
+        info!(location_id = %location_id, "Removed grid map from location");
+        Ok(())
     }
 }
 
@@ -668,8 +681,7 @@ mod tests {
             location_type: LocationType::Interior,
             parent_id: None,
             backdrop_asset: None,
-            grid_map_id: None,
-            backdrop_regions: vec![],
+            atmosphere: None,
         };
         assert!(LocationServiceImpl::validate_create_request(&request).is_err());
 
@@ -681,80 +693,8 @@ mod tests {
             location_type: LocationType::Interior,
             parent_id: None,
             backdrop_asset: None,
-            grid_map_id: None,
-            backdrop_regions: vec![],
+            atmosphere: None,
         };
         assert!(LocationServiceImpl::validate_create_request(&request).is_ok());
-    }
-
-    #[test]
-    fn test_build_hierarchy() {
-        let world_id = WorldId::new();
-        let root_id = LocationId::new();
-        let child1_id = LocationId::new();
-        let child2_id = LocationId::new();
-        let grandchild_id = LocationId::new();
-
-        let locations = vec![
-            Location {
-                id: root_id,
-                world_id,
-                parent_id: None,
-                name: "Root".to_string(),
-                description: String::new(),
-                location_type: LocationType::Exterior,
-                backdrop_asset: None,
-                grid_map_id: None,
-                backdrop_regions: vec![],
-            },
-            Location {
-                id: child1_id,
-                world_id,
-                parent_id: Some(root_id),
-                name: "Child1".to_string(),
-                description: String::new(),
-                location_type: LocationType::Interior,
-                backdrop_asset: None,
-                grid_map_id: None,
-                backdrop_regions: vec![],
-            },
-            Location {
-                id: child2_id,
-                world_id,
-                parent_id: Some(root_id),
-                name: "Child2".to_string(),
-                description: String::new(),
-                location_type: LocationType::Interior,
-                backdrop_asset: None,
-                grid_map_id: None,
-                backdrop_regions: vec![],
-            },
-            Location {
-                id: grandchild_id,
-                world_id,
-                parent_id: Some(child1_id),
-                name: "Grandchild".to_string(),
-                description: String::new(),
-                location_type: LocationType::Interior,
-                backdrop_asset: None,
-                grid_map_id: None,
-                backdrop_regions: vec![],
-            },
-        ];
-
-        let hierarchy = LocationServiceImpl::build_hierarchy(locations);
-
-        assert_eq!(hierarchy.len(), 1); // One root
-        assert_eq!(hierarchy[0].location.name, "Root");
-        assert_eq!(hierarchy[0].children.len(), 2); // Two children
-
-        // Find Child1 and verify it has the grandchild
-        let child1 = hierarchy[0]
-            .children
-            .iter()
-            .find(|h| h.location.name == "Child1")
-            .unwrap();
-        assert_eq!(child1.children.len(), 1);
-        assert_eq!(child1.children[0].location.name, "Grandchild");
     }
 }

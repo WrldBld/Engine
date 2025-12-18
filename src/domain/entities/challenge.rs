@@ -2,29 +2,42 @@
 //!
 //! Challenges can be attached to scenes and triggered either manually by the DM
 //! or suggested by the LLM when trigger conditions are met.
+//!
+//! ## Graph-First Design (Phase 0.E)
+//!
+//! Challenges use Neo4j edges for relationships:
+//! - `(Challenge)-[:REQUIRES_SKILL]->(Skill)` - Skill tested by this challenge
+//! - `(Challenge)-[:TIED_TO_SCENE]->(Scene)` - Scene this challenge appears in
+//! - `(Challenge)-[:REQUIRES_COMPLETION_OF {success_required}]->(Challenge)` - Prerequisites
+//! - `(Challenge)-[:AVAILABLE_AT {always_available, time_restriction}]->(Location)` - Location availability
+//! - `(Challenge)-[:ON_SUCCESS_UNLOCKS]->(Location)` - Location unlocked on success
+//!
+//! The embedded fields `scene_id`, `skill_id`, and `prerequisite_challenges` are
+//! DEPRECATED and kept only for backward compatibility during migration.
 
-use crate::domain::value_objects::{ChallengeId, SceneId, SkillId, WorldId};
+use crate::domain::value_objects::{ChallengeId, LocationId, SceneId, SkillId, WorldId};
 
 /// A challenge that can be triggered during gameplay
+///
+/// ## Graph Relationships (via repository edge methods)
+/// - `REQUIRES_SKILL` -> Skill: The skill tested by this challenge
+/// - `TIED_TO_SCENE` -> Scene: Scene this challenge appears in (optional)
+/// - `REQUIRES_COMPLETION_OF` -> Challenge: Prerequisite challenges
+/// - `AVAILABLE_AT` -> Location: Locations where this challenge is available
+/// - `ON_SUCCESS_UNLOCKS` -> Location: Locations unlocked on success
 #[derive(Debug, Clone)]
 pub struct Challenge {
     pub id: ChallengeId,
     pub world_id: WorldId,
-    /// Optional scene this challenge is specifically tied to
-    pub scene_id: Option<SceneId>,
     pub name: String,
     pub description: String,
     pub challenge_type: ChallengeType,
-    /// The skill (or ability) required for this challenge
-    pub skill_id: SkillId,
     pub difficulty: Difficulty,
     pub outcomes: ChallengeOutcomes,
-    /// Conditions that trigger LLM to suggest this challenge
+    /// Conditions that trigger LLM to suggest this challenge (non-entity triggers stored as JSON)
     pub trigger_conditions: Vec<TriggerCondition>,
     /// Whether this challenge can currently be triggered
     pub active: bool,
-    /// Challenges that must be completed (success or failure) before this one
-    pub prerequisite_challenges: Vec<ChallengeId>,
     /// Display order in challenge library
     pub order: u32,
     /// Whether the DM favorited this challenge
@@ -34,25 +47,25 @@ pub struct Challenge {
 }
 
 impl Challenge {
+    /// Create a new challenge.
+    ///
+    /// Note: The skill relationship should be set via `ChallengeRepositoryPort::set_required_skill()`
+    /// after creating the challenge.
     pub fn new(
         world_id: WorldId,
         name: impl Into<String>,
-        skill_id: SkillId,
         difficulty: Difficulty,
     ) -> Self {
         Self {
             id: ChallengeId::new(),
             world_id,
-            scene_id: None,
             name: name.into(),
             description: String::new(),
             challenge_type: ChallengeType::SkillCheck,
-            skill_id,
             difficulty,
             outcomes: ChallengeOutcomes::default(),
             trigger_conditions: Vec::new(),
             active: true,
-            prerequisite_challenges: Vec::new(),
             order: 0,
             is_favorite: false,
             tags: Vec::new(),
@@ -61,11 +74,6 @@ impl Challenge {
 
     pub fn with_description(mut self, description: impl Into<String>) -> Self {
         self.description = description.into();
-        self
-    }
-
-    pub fn with_scene(mut self, scene_id: SceneId) -> Self {
-        self.scene_id = Some(scene_id);
         self
     }
 
@@ -81,11 +89,6 @@ impl Challenge {
 
     pub fn with_trigger(mut self, condition: TriggerCondition) -> Self {
         self.trigger_conditions.push(condition);
-        self
-    }
-
-    pub fn with_prerequisite(mut self, challenge_id: ChallengeId) -> Self {
-        self.prerequisite_challenges.push(challenge_id);
         self
     }
 
@@ -558,6 +561,75 @@ impl Default for ComplexChallengeSettings {
     }
 }
 
+// =============================================================================
+// Edge Support Structs (Graph-First Design)
+// =============================================================================
+
+/// Data for REQUIRES_COMPLETION_OF edge between challenges
+#[derive(Debug, Clone)]
+pub struct ChallengePrerequisite {
+    /// The prerequisite challenge ID
+    pub challenge_id: ChallengeId,
+    /// Whether success is required (true = must succeed, false = just attempted)
+    pub success_required: bool,
+}
+
+impl ChallengePrerequisite {
+    pub fn new(challenge_id: ChallengeId) -> Self {
+        Self {
+            challenge_id,
+            success_required: false,
+        }
+    }
+
+    pub fn requiring_success(challenge_id: ChallengeId) -> Self {
+        Self {
+            challenge_id,
+            success_required: true,
+        }
+    }
+}
+
+/// Data for AVAILABLE_AT edge between Challenge and Location
+#[derive(Debug, Clone)]
+pub struct ChallengeLocationAvailability {
+    /// The location where this challenge is available
+    pub location_id: LocationId,
+    /// Whether the challenge is always available at this location
+    pub always_available: bool,
+    /// Time restriction (if any): "Morning", "Afternoon", "Evening", "Night"
+    pub time_restriction: Option<String>,
+}
+
+impl ChallengeLocationAvailability {
+    pub fn new(location_id: LocationId) -> Self {
+        Self {
+            location_id,
+            always_available: true,
+            time_restriction: None,
+        }
+    }
+
+    pub fn with_time_restriction(mut self, time: impl Into<String>) -> Self {
+        self.time_restriction = Some(time.into());
+        self.always_available = false;
+        self
+    }
+}
+
+/// Data for ON_SUCCESS_UNLOCKS edge between Challenge and Location
+#[derive(Debug, Clone)]
+pub struct ChallengeUnlock {
+    /// The location that gets unlocked on successful completion
+    pub location_id: LocationId,
+}
+
+impl ChallengeUnlock {
+    pub fn new(location_id: LocationId) -> Self {
+        Self { location_id }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -565,9 +637,8 @@ mod tests {
     #[test]
     fn test_challenge_creation() {
         let world_id = WorldId::new();
-        let skill_id = SkillId::new();
 
-        let challenge = Challenge::new(world_id, "Investigate the Statue", skill_id, Difficulty::d20_medium())
+        let challenge = Challenge::new(world_id, "Investigate the Statue", Difficulty::d20_medium())
             .with_description("Examine the ancient statue for hidden compartments")
             .with_outcomes(ChallengeOutcomes::simple(
                 "You find a hidden mechanism in the statue's base",

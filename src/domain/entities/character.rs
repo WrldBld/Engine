@@ -1,8 +1,16 @@
-//! Character entity - NPCs with Campbell archetypes and actantial wants
+//! Character entity - NPCs with Campbell archetypes
+//!
+//! # Graph-First Design (Phase 0.C)
+//!
+//! The following relationships are stored as Neo4j edges, NOT embedded fields:
+//! - Wants: `(Character)-[:HAS_WANT]->(Want)`
+//! - Inventory: `(Character)-[:POSSESSES]->(Item)`
+//! - Location relationships: `HOME_LOCATION`, `WORKS_AT`, `FREQUENTS`, `AVOIDS`
+//! - Actantial views: `VIEWS_AS_HELPER`, `VIEWS_AS_OPPONENT`, etc.
+//!
+//! Archetype history remains as JSON (acceptable per ADR - complex nested non-relational)
 
-use crate::domain::value_objects::{
-    ArchetypeChange, CampbellArchetype, CharacterId, ItemId, Want, WorldId,
-};
+use crate::domain::value_objects::{ArchetypeChange, CampbellArchetype, CharacterId, WorldId};
 
 /// A character (NPC) in the world
 #[derive(Debug, Clone)]
@@ -21,16 +29,11 @@ pub struct Character {
     pub base_archetype: CampbellArchetype,
     /// Current archetype (may differ from base)
     pub current_archetype: CampbellArchetype,
-    /// History of archetype changes
+    /// History of archetype changes (stored as JSON - acceptable per ADR)
     pub archetype_history: Vec<ArchetypeChange>,
 
-    // Actantial Model
-    /// The character's wants/desires
-    pub wants: Vec<Want>,
-
-    // Game Stats
+    // Game Stats (stored as JSON - acceptable per ADR)
     pub stats: StatBlock,
-    pub inventory: Vec<ItemId>,
 
     // Character state
     pub is_alive: bool,
@@ -49,9 +52,7 @@ impl Character {
             base_archetype: archetype,
             current_archetype: archetype,
             archetype_history: Vec::new(),
-            wants: Vec::new(),
             stats: StatBlock::default(),
-            inventory: Vec::new(),
             is_alive: true,
             is_active: true,
         }
@@ -69,11 +70,6 @@ impl Character {
 
     pub fn with_portrait(mut self, asset_path: impl Into<String>) -> Self {
         self.portrait_asset = Some(asset_path.into());
-        self
-    }
-
-    pub fn with_want(mut self, want: Want) -> Self {
-        self.wants.push(want);
         self
     }
 
@@ -102,19 +98,6 @@ impl Character {
     /// Revert to base archetype
     pub fn revert_to_base(&mut self) {
         self.current_archetype = self.base_archetype;
-    }
-
-    pub fn add_item(&mut self, item_id: ItemId) {
-        self.inventory.push(item_id);
-    }
-
-    pub fn remove_item(&mut self, item_id: &ItemId) -> bool {
-        if let Some(pos) = self.inventory.iter().position(|id| id == item_id) {
-            self.inventory.remove(pos);
-            true
-        } else {
-            false
-        }
     }
 }
 

@@ -5,6 +5,7 @@ use axum::{
     http::StatusCode,
     Json,
 };
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -13,13 +14,14 @@ use crate::application::services::{
     CreateCharacterRequest as ServiceCreateCharacterRequest, RelationshipService,
     UpdateCharacterRequest as ServiceUpdateCharacterRequest,
 };
-use crate::domain::value_objects::{
-    CharacterId, Relationship, RelationshipId, WorldId,
-};
+use crate::domain::value_objects::{CharacterId, RegionId, Relationship, RelationshipId, WorldId};
 use crate::application::ports::outbound::SocialNetwork;
 use crate::application::dto::{
     ChangeArchetypeRequestDto, CharacterResponseDto, CreateCharacterRequestDto,
     CreateRelationshipRequestDto, CreatedIdResponseDto, parse_archetype, parse_relationship_type,
+};
+use crate::infrastructure::persistence::{
+    RegionFrequency, RegionRelationship, RegionRelationshipType, RegionShift,
 };
 use crate::infrastructure::state::AppState;
 
@@ -62,7 +64,7 @@ pub async fn create_character(
         sprite_asset: req.sprite_asset,
         portrait_asset: req.portrait_asset,
         stats: None,
-        wants: vec![],
+        initial_wants: vec![],
     };
 
     let character = state
@@ -272,3 +274,196 @@ pub async fn delete_relationship(
 }
 
 // NOTE: parsing helpers live in `application/dto/character.rs`.
+
+// =============================================================================
+// Region Relationship DTOs (Phase 23C)
+// =============================================================================
+
+/// Request to create a region relationship
+#[derive(Debug, Deserialize)]
+pub struct CreateRegionRelationshipRequest {
+    pub region_id: String,
+    #[serde(flatten)]
+    pub relationship_type: RegionRelationshipTypeDto,
+}
+
+/// DTO for region relationship type
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum RegionRelationshipTypeDto {
+    Home,
+    WorksAt {
+        #[serde(default = "default_shift")]
+        shift: String,
+    },
+    Frequents {
+        #[serde(default = "default_frequency")]
+        frequency: String,
+    },
+    Avoids {
+        #[serde(default)]
+        reason: String,
+    },
+}
+
+fn default_shift() -> String {
+    "always".to_string()
+}
+
+fn default_frequency() -> String {
+    "sometimes".to_string()
+}
+
+/// Response for region relationship
+#[derive(Debug, Serialize)]
+pub struct RegionRelationshipResponse {
+    pub region_id: String,
+    pub region_name: String,
+    #[serde(flatten)]
+    pub relationship_type: RegionRelationshipTypeDto,
+}
+
+impl From<RegionRelationship> for RegionRelationshipResponse {
+    fn from(rel: RegionRelationship) -> Self {
+        let relationship_type = match rel.relationship_type {
+            RegionRelationshipType::Home => RegionRelationshipTypeDto::Home,
+            RegionRelationshipType::WorksAt { shift } => RegionRelationshipTypeDto::WorksAt {
+                shift: shift.to_string(),
+            },
+            RegionRelationshipType::Frequents { frequency } => {
+                RegionRelationshipTypeDto::Frequents {
+                    frequency: frequency.to_string(),
+                }
+            }
+            RegionRelationshipType::Avoids { reason } => {
+                RegionRelationshipTypeDto::Avoids { reason }
+            }
+        };
+
+        Self {
+            region_id: rel.region_id.to_string(),
+            region_name: rel.region_name,
+            relationship_type,
+        }
+    }
+}
+
+// =============================================================================
+// Region Relationship Routes (Phase 23C)
+// =============================================================================
+
+/// List all region relationships for a character
+pub async fn list_region_relationships(
+    State(state): State<Arc<AppState>>,
+    Path(character_id): Path<String>,
+) -> Result<Json<Vec<RegionRelationshipResponse>>, (StatusCode, String)> {
+    let uuid = Uuid::parse_str(&character_id)
+        .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid character ID".to_string()))?;
+
+    let relationships = state
+        .repository
+        .characters()
+        .list_region_relationships(CharacterId::from_uuid(uuid))
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    Ok(Json(
+        relationships
+            .into_iter()
+            .map(RegionRelationshipResponse::from)
+            .collect(),
+    ))
+}
+
+/// Add a region relationship for a character
+pub async fn add_region_relationship(
+    State(state): State<Arc<AppState>>,
+    Path(character_id): Path<String>,
+    Json(req): Json<CreateRegionRelationshipRequest>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    let char_uuid = Uuid::parse_str(&character_id)
+        .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid character ID".to_string()))?;
+    let region_uuid = Uuid::parse_str(&req.region_id)
+        .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid region ID".to_string()))?;
+
+    let char_id = CharacterId::from_uuid(char_uuid);
+    let region_id = RegionId::from_uuid(region_uuid);
+    let repo = state.repository.characters();
+
+    match req.relationship_type {
+        RegionRelationshipTypeDto::Home => {
+            repo.set_home_region(char_id, region_id)
+                .await
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        }
+        RegionRelationshipTypeDto::WorksAt { shift } => {
+            let shift: RegionShift = shift
+                .parse()
+                .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid shift value".to_string()))?;
+            repo.set_work_region(char_id, region_id, shift)
+                .await
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        }
+        RegionRelationshipTypeDto::Frequents { frequency } => {
+            let frequency: RegionFrequency = frequency
+                .parse()
+                .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid frequency value".to_string()))?;
+            repo.add_frequented_region(char_id, region_id, frequency)
+                .await
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        }
+        RegionRelationshipTypeDto::Avoids { reason } => {
+            repo.add_avoided_region(char_id, region_id, reason)
+                .await
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        }
+    }
+
+    Ok(StatusCode::CREATED)
+}
+
+/// Remove a region relationship for a character
+pub async fn remove_region_relationship(
+    State(state): State<Arc<AppState>>,
+    Path((character_id, region_id, rel_type)): Path<(String, String, String)>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    let char_uuid = Uuid::parse_str(&character_id)
+        .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid character ID".to_string()))?;
+    let region_uuid = Uuid::parse_str(&region_id)
+        .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid region ID".to_string()))?;
+
+    let char_id = CharacterId::from_uuid(char_uuid);
+    let region_id = RegionId::from_uuid(region_uuid);
+    let repo = state.repository.characters();
+
+    match rel_type.as_str() {
+        "home" => {
+            repo.remove_home_region(char_id)
+                .await
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        }
+        "works_at" => {
+            repo.remove_work_region(char_id)
+                .await
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        }
+        "frequents" => {
+            repo.remove_frequented_region(char_id, region_id)
+                .await
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        }
+        "avoids" => {
+            repo.remove_avoided_region(char_id, region_id)
+                .await
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        }
+        _ => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!("Invalid relationship type: {}", rel_type),
+            ));
+        }
+    }
+
+    Ok(StatusCode::NO_CONTENT)
+}

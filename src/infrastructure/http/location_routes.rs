@@ -15,10 +15,8 @@ use crate::application::services::{
 };
 use crate::application::dto::{
     ConnectionResponseDto, CreateConnectionRequestDto, CreateLocationRequestDto,
-    LocationResponseDto, backdrop_regions_from_requests, parse_location_type,
-    parse_spatial_relationship,
+    LocationResponseDto, parse_location_type,
 };
-use crate::domain::entities::{BackdropRegion, SpatialRelationship};
 use crate::domain::value_objects::{LocationId, WorldId};
 use crate::infrastructure::state::AppState;
 
@@ -60,8 +58,6 @@ pub async fn create_location(
         None
     };
 
-    let backdrop_regions: Vec<BackdropRegion> = backdrop_regions_from_requests(req.backdrop_regions);
-
     let service_request = ServiceCreateLocationRequest {
         world_id: WorldId::from_uuid(uuid),
         name: req.name,
@@ -73,8 +69,7 @@ pub async fn create_location(
         location_type,
         parent_id,
         backdrop_asset: req.backdrop_asset,
-        grid_map_id: None,
-        backdrop_regions,
+        atmosphere: req.atmosphere,
     };
 
     let location = state
@@ -113,13 +108,16 @@ pub async fn update_location(
     let uuid = Uuid::parse_str(&id)
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid location ID".to_string()))?;
 
-    let parent_id = if let Some(ref parent_id_str) = req.parent_id {
+    // Handle parent_id update separately via set_parent
+    if let Some(ref parent_id_str) = req.parent_id {
         let parent_uuid = Uuid::parse_str(parent_id_str)
             .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid parent ID".to_string()))?;
-        Some(Some(LocationId::from_uuid(parent_uuid)))
-    } else {
-        Some(None) // Explicitly set to no parent
-    };
+        state
+            .core.location_service
+            .set_parent(LocationId::from_uuid(uuid), Some(LocationId::from_uuid(parent_uuid)))
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    }
 
     let service_request = ServiceUpdateLocationRequest {
         name: Some(req.name),
@@ -129,9 +127,8 @@ pub async fn update_location(
             Some(req.description)
         },
         location_type: Some(parse_location_type(&req.location_type)),
-        parent_id,
-        backdrop_asset: req.backdrop_asset,
-        grid_map_id: None,
+        backdrop_asset: req.backdrop_asset.map(Some),
+        atmosphere: req.atmosphere.map(Some),
     };
 
     let location = state
@@ -239,23 +236,15 @@ pub async fn create_connection(
         )
     })?;
 
-    let connection_type = req
-        .connection_type
-        .as_ref()
-        .map(|ct| parse_spatial_relationship(ct))
-        .unwrap_or(SpatialRelationship::ConnectsTo);
-
     let service_request = ServiceCreateConnectionRequest {
         from_location: LocationId::from_uuid(from_uuid),
         to_location: LocationId::from_uuid(to_uuid),
-        connection_type,
-        description: if req.description.is_empty() {
-            None
-        } else {
-            Some(req.description)
-        },
+        connection_type: req.connection_type,
+        description: req.description,
         bidirectional: req.bidirectional,
         travel_time: req.travel_time,
+        is_locked: req.is_locked,
+        lock_description: req.lock_description,
     };
 
     state
@@ -275,5 +264,3 @@ pub async fn create_connection(
 
     Ok(StatusCode::CREATED)
 }
-
-// NOTE: parsing + DTOs live in `application/dto/location.rs`.

@@ -8,9 +8,11 @@ use axum::{
 };
 use serde_json::json;
 use std::sync::Arc;
+use uuid::Uuid;
 
 use crate::application::ports::outbound::{ProcessingQueuePort, QueuePort, QueueItemStatus};
 use crate::application::services::GenerationQueueSnapshot;
+use crate::domain::value_objects::WorldId;
 use crate::infrastructure::state::AppState;
 
 /// Create queue-related routes
@@ -162,11 +164,13 @@ async fn queue_health_check(State(state): State<Arc<AppState>>) -> Json<serde_js
 ///
 /// This is used by the Player Creator UI to reconstruct the unified generation
 /// queue (image batches + text suggestions) after a reload.
+///
+/// Requires `world_id` query parameter to scope batches to a specific world.
 pub async fn get_generation_queue(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Query(params): Query<std::collections::HashMap<String, String>>,
-) -> Json<GenerationQueueSnapshot> {
+) -> Result<Json<GenerationQueueSnapshot>, (StatusCode, String)> {
     // Prefer header-based user ID for future auth/middleware friendliness
     let user_id = headers
         .get("X-User-Id")
@@ -175,18 +179,19 @@ pub async fn get_generation_queue(
         // Fallback to query param for backward compatibility
         .or_else(|| params.get("user_id").cloned());
 
-    // World context for scoping read-state. Until the Player passes an explicit
-    // world_id, we fall back to a global placeholder so existing data continues
-    // to function.
-    let world_key = params
+    // World ID is required for scoping batches
+    let world_id_str = params
         .get("world_id")
-        .cloned()
-        .unwrap_or_else(|| "GLOBAL".to_string());
+        .ok_or_else(|| (StatusCode::BAD_REQUEST, "world_id query parameter is required".to_string()))?;
+    
+    let world_uuid = Uuid::parse_str(world_id_str)
+        .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid world_id".to_string()))?;
+    let world_id = WorldId::from_uuid(world_uuid);
 
     // Delegate to the application-layer projection service for reconstruction.
     let snapshot = state
         .assets.generation_queue_projection_service
-        .project_queue(user_id.as_deref(), &world_key)
+        .project_queue(user_id.as_deref(), world_id)
         .await
         .unwrap_or_else(|e| {
             tracing::error!("Failed to project generation queue: {}", e);
@@ -196,7 +201,7 @@ pub async fn get_generation_queue(
             }
         });
 
-    Json(snapshot)
+    Ok(Json(snapshot))
 }
 
 /// Request body for marking generation queue items as read

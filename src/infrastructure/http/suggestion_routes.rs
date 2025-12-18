@@ -237,6 +237,7 @@ pub async fn suggest(
             entity_id: None, // Could extract from context if needed
         },
         session_id: None, // Creator mode, no session
+        pc_id: None, // Creator mode, no player character
         prompt: None, // Suggestions don't use GamePromptRequest
         suggestion_context: Some(context),
         callback_id: request_id.clone(),
@@ -297,6 +298,7 @@ pub async fn retry_suggestion(
             entity_id: None,
         },
         session_id: None,
+        pc_id: None, // Suggestion retry, no player character context
         prompt: None,
         suggestion_context: Some(context),
         callback_id: new_request_id.clone(),

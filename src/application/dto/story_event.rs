@@ -135,41 +135,94 @@ impl From<DmMarkerType> for DmMarkerTypeRequestDto {
 }
 
 /// Story event response.
+///
+/// # Graph-First Architecture
+///
+/// Session, scene, location, involved_characters, and triggered_by are now stored as
+/// graph edges and must be provided separately when constructing this DTO.
 #[derive(Debug, Serialize)]
 pub struct StoryEventResponseDto {
     pub id: String,
     pub world_id: String,
-    pub session_id: String,
+    /// Session ID from OCCURRED_IN_SESSION edge (optional until we have edge data)
+    pub session_id: Option<String>,
+    /// Scene ID from OCCURRED_IN_SCENE edge
     pub scene_id: Option<String>,
+    /// Location ID from OCCURRED_AT edge
     pub location_id: Option<String>,
     pub event_type: StoryEventTypeResponseDto,
     pub timestamp: String,
     pub game_time: Option<String>,
     pub summary: String,
-    pub involved_characters: Vec<String>,
+    /// Character IDs from INVOLVES edges (with roles)
+    pub involved_characters: Vec<InvolvedCharacterResponseDto>,
     pub is_hidden: bool,
     pub tags: Vec<String>,
+    /// Narrative event ID from TRIGGERED_BY_NARRATIVE edge
     pub triggered_by: Option<String>,
     pub type_name: String,
 }
 
+/// Response DTO for involved character (from INVOLVES edge)
+#[derive(Debug, Serialize)]
+pub struct InvolvedCharacterResponseDto {
+    pub character_id: String,
+    pub role: String,
+}
+
+impl StoryEventResponseDto {
+    /// Create a response DTO with edge data
+    ///
+    /// Use this when you have fetched edge data separately from the repository.
+    pub fn with_edges(
+        event: StoryEvent,
+        session_id: Option<String>,
+        scene_id: Option<String>,
+        location_id: Option<String>,
+        involved_characters: Vec<InvolvedCharacterResponseDto>,
+        triggered_by: Option<String>,
+    ) -> Self {
+        let type_name = event.type_name().to_string();
+        Self {
+            id: event.id.to_string(),
+            world_id: event.world_id.to_string(),
+            session_id,
+            scene_id,
+            location_id,
+            event_type: StoryEventTypeResponseDto::from(event.event_type),
+            timestamp: event.timestamp.to_rfc3339(),
+            game_time: event.game_time,
+            summary: event.summary,
+            involved_characters,
+            is_hidden: event.is_hidden,
+            tags: event.tags,
+            triggered_by,
+            type_name,
+        }
+    }
+}
+
 impl From<StoryEvent> for StoryEventResponseDto {
+    /// Create a minimal response DTO without edge data.
+    ///
+    /// NOTE: This creates a DTO with edge fields set to None/empty.
+    /// For full response with edges, use `StoryEventResponseDto::with_edges()`.
     fn from(e: StoryEvent) -> Self {
         let type_name = e.type_name().to_string();
         Self {
             id: e.id.to_string(),
             world_id: e.world_id.to_string(),
-            session_id: e.session_id.to_string(),
-            scene_id: e.scene_id.map(|s| s.to_string()),
-            location_id: e.location_id.map(|l| l.to_string()),
+            session_id: None,
+            scene_id: None,
+            location_id: None,
             event_type: StoryEventTypeResponseDto::from(e.event_type),
             timestamp: e.timestamp.to_rfc3339(),
             game_time: e.game_time,
             summary: e.summary,
-            involved_characters: e.involved_characters.iter().map(|c| c.to_string()).collect(),
+            involved_characters: Vec::new(),
             is_hidden: e.is_hidden,
             tags: e.tags,
-            triggered_by: e.triggered_by.map(|t| t.to_string()),
+            triggered_by: None,
             type_name,
         }
     }

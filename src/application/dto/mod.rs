@@ -23,6 +23,7 @@ mod story_event;
 mod suggestion;
 mod workflow;
 mod world;
+mod world_snapshot;
 
 // Application events (published through event bus)
 pub use app_events::AppEvent;
@@ -46,7 +47,8 @@ pub use challenge::{
     AdHocOutcomesDto, ChallengeOutcomeApprovalRequest, ChallengeOutcomeDecision,
     ChallengeOutcomePendingNotification, ChallengeResolvedNotification,
     ChallengeResponseDto, ChallengeRollSubmittedNotification, CreateChallengeRequestDto,
-    DifficultyRequestDto, OutcomeRequestDto, OutcomeSuggestionReadyNotification,
+    DifficultyRequestDto, OutcomeBranchDto, OutcomeBranchResponse, OutcomeBranchSelectionRequest,
+    OutcomeBranchesReadyNotification, OutcomeRequestDto, OutcomeSuggestionReadyNotification,
     OutcomeSuggestionRequest, OutcomeSuggestionResponse, OutcomesRequestDto,
     OutcomeTriggerRequestDto, PendingChallengeResolutionDto, TriggerConditionRequestDto,
     UpdateChallengeRequestDto,
@@ -93,9 +95,9 @@ pub use event_chain::{
 
 // Location DTOs
 pub use location::{
-    backdrop_regions_from_requests, parse_location_type, parse_spatial_relationship,
-    ConnectionResponseDto,
-    CreateConnectionRequestDto, CreateLocationRequestDto, LocationResponseDto,
+    parse_location_type, ConnectionResponseDto, CreateConnectionRequestDto,
+    CreateLocationRequestDto, CreateRegionRequestDto, LocationResponseDto,
+    MapBoundsDto, RegionResponseDto,
 };
 
 // Character DTOs
@@ -140,3 +142,6 @@ pub use world::{
     parse_monomyth_stage, ActResponseDto, CreateActRequestDto, CreateWorldRequestDto,
     UpdateWorldRequestDto, WorldResponseDto,
 };
+
+// World snapshot DTO (for session management)
+pub use world_snapshot::WorldSnapshot;

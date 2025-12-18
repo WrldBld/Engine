@@ -30,6 +30,7 @@ impl<Q: QueuePort<PlayerActionItem>, LQ: ProcessingQueuePort<LLMRequestItem>>
         &self,
         session_id: crate::domain::value_objects::SessionId,
         player_id: String,
+        pc_id: Option<crate::domain::value_objects::PlayerCharacterId>,
         action_type: String,
         target: Option<String>,
         dialogue: Option<String>,
@@ -37,6 +38,7 @@ impl<Q: QueuePort<PlayerActionItem>, LQ: ProcessingQueuePort<LLMRequestItem>>
         let item = PlayerActionItem {
             session_id,
             player_id,
+            pc_id,
             action_type,
             target,
             dialogue,
@@ -71,6 +73,7 @@ impl<Q: QueuePort<PlayerActionItem>, LQ: ProcessingQueuePort<LLMRequestItem>>
         // Clone payload before passing to callback (item.payload is already Clone)
         let payload = item.payload.clone();
         let session_id = payload.session_id;
+        let pc_id = payload.pc_id;
         let item_id = item.id;
 
         // Build the prompt request from the action (async)
@@ -82,6 +85,7 @@ impl<Q: QueuePort<PlayerActionItem>, LQ: ProcessingQueuePort<LLMRequestItem>>
                 action_item_id: item_id,
             },
             session_id: Some(session_id),
+            pc_id,
             prompt: Some(prompt),
             suggestion_context: None,
             callback_id: item_id.to_string(),

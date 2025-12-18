@@ -22,7 +22,9 @@ use crate::application::services::location_service::LocationService;
 use crate::application::services::interaction_service::InteractionService;
 use crate::application::services::session_join_service as sjs;
 use crate::application::services::challenge_resolution_service as crs;
-use crate::application::ports::outbound::SessionParticipantRole;
+use crate::application::ports::outbound::{PlayerCharacterRepositoryPort, SessionParticipantRole};
+use crate::domain::value_objects::TimeOfDay;
+use crate::infrastructure::persistence::{RegionRelationshipType, RegionShift, RegionFrequency};
 use crate::domain::value_objects::ActionId;
 use crate::infrastructure::session::ClientId;
 use crate::infrastructure::state::AppState;
@@ -179,6 +181,32 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     tracing::info!("WebSocket connection terminated: {}", client_id);
 }
 
+/// Simple rule-based NPC presence determination
+/// 
+/// Used by navigation handlers to determine which NPCs are present in a region.
+fn is_npc_present(rel_type: &RegionRelationshipType, time_of_day: TimeOfDay) -> bool {
+    match rel_type {
+        RegionRelationshipType::Home => {
+            matches!(time_of_day, TimeOfDay::Night | TimeOfDay::Evening)
+        }
+        RegionRelationshipType::WorksAt { shift } => {
+            match shift {
+                RegionShift::Always => true,
+                RegionShift::Day => matches!(time_of_day, TimeOfDay::Morning | TimeOfDay::Afternoon),
+                RegionShift::Night => matches!(time_of_day, TimeOfDay::Evening | TimeOfDay::Night),
+            }
+        }
+        RegionRelationshipType::Frequents { frequency } => {
+            match frequency {
+                RegionFrequency::Often => true,
+                RegionFrequency::Sometimes => matches!(time_of_day, TimeOfDay::Afternoon | TimeOfDay::Evening),
+                RegionFrequency::Rarely => false,
+            }
+        }
+        RegionRelationshipType::Avoids { .. } => false,
+    }
+}
+
 /// Handle a parsed client message
 async fn handle_message(
     msg: ClientMessage,
@@ -224,10 +252,11 @@ async fn handle_message(
             {
                 Ok(session_joined_info) => {
                     // Broadcast PlayerJoined to other participants via async port
+                    // Note: character_name is None at join time; it's set when player selects a character
                     let player_joined_msg = ServerMessage::PlayerJoined {
                         user_id: user_id.clone(),
                         role,
-                        character_name: None, // TODO: Load from character selection
+                        character_name: None,
                     };
                     if let Ok(msg_json) = serde_json::to_value(&player_joined_msg) {
                         let _ = state.async_session_port.broadcast_except(
@@ -520,12 +549,30 @@ async fn handle_message(
                 }
             }
 
+            // Look up the player's character ID for challenge targeting
+            let pc_id = match state
+                .player.player_character_service
+                .get_pc_by_user_and_session(&player_id, session_id)
+                .await
+            {
+                Ok(Some(pc)) => Some(pc.id),
+                Ok(None) => {
+                    tracing::debug!("Player {} has no character selected in session {}", player_id, session_id);
+                    None
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to look up PC for player {}: {}", player_id, e);
+                    None
+                }
+            };
+
             // Enqueue to PlayerActionQueue - returns immediately
             match state
                 .queues.player_action_queue_service
                 .enqueue_action(
                         session_id,
                     player_id.clone(),
+                    pc_id,
                         action_type.clone(),
                         target.clone(),
                         dialogue.clone(),
@@ -1041,6 +1088,893 @@ async fn handle_message(
                     })
                 }
             }
+        }
+
+        ClientMessage::RequestOutcomeBranches {
+            resolution_id,
+            guidance,
+        } => {
+            tracing::info!(
+                "DM requesting outcome branches for {}: {:?}",
+                resolution_id,
+                guidance
+            );
+
+            // Only DMs should request branches
+            let client_id_str = client_id.to_string();
+            if !state.async_session_port.is_client_dm(&client_id_str).await {
+                return Some(ServerMessage::Error {
+                    code: "NOT_AUTHORIZED".to_string(),
+                    message: "Only the DM can request outcome branches".to_string(),
+                });
+            }
+
+            let session_id = match state.async_session_port.get_client_session(&client_id_str).await {
+                Some(sid) => sid,
+                None => {
+                    return Some(ServerMessage::Error {
+                        code: "NO_SESSION".to_string(),
+                        message: "Client is not in a session".to_string(),
+                    });
+                }
+            };
+
+            // Request branches via the approval service
+            match state.game.challenge_outcome_approval_service
+                .request_branches(session_id, &resolution_id, guidance)
+                .await
+            {
+                Ok(()) => {
+                    // Success - the service will send OutcomeBranchesReady when LLM completes
+                    None
+                }
+                Err(e) => {
+                    tracing::error!("Failed to request outcome branches: {}", e);
+                    Some(ServerMessage::Error {
+                        code: "BRANCH_ERROR".to_string(),
+                        message: format!("Failed to request branches: {}", e),
+                    })
+                }
+            }
+        }
+
+        ClientMessage::SelectOutcomeBranch {
+            resolution_id,
+            branch_id,
+            modified_description,
+        } => {
+            tracing::info!(
+                "DM selecting branch {} for resolution {}",
+                branch_id,
+                resolution_id
+            );
+
+            // Only DMs should select branches
+            let client_id_str = client_id.to_string();
+            if !state.async_session_port.is_client_dm(&client_id_str).await {
+                return Some(ServerMessage::Error {
+                    code: "NOT_AUTHORIZED".to_string(),
+                    message: "Only the DM can select outcome branches".to_string(),
+                });
+            }
+
+            let session_id = match state.async_session_port.get_client_session(&client_id_str).await {
+                Some(sid) => sid,
+                None => {
+                    return Some(ServerMessage::Error {
+                        code: "NO_SESSION".to_string(),
+                        message: "Client is not in a session".to_string(),
+                    });
+                }
+            };
+
+            // Process branch selection via the approval service
+            match state.game.challenge_outcome_approval_service
+                .select_branch(session_id, &resolution_id, &branch_id, modified_description)
+                .await
+            {
+                Ok(()) => {
+                    // Success - challenge is resolved
+                    None
+                }
+                Err(e) => {
+                    tracing::error!("Failed to select outcome branch: {}", e);
+                    Some(ServerMessage::Error {
+                        code: "BRANCH_SELECT_ERROR".to_string(),
+                        message: format!("Failed to select branch: {}", e),
+                    })
+                }
+            }
+        }
+
+        // =========================================================================
+        // Phase 23D: NPC Location Sharing (HeardAbout observations)
+        // =========================================================================
+
+        ClientMessage::ShareNpcLocation {
+            pc_id,
+            npc_id,
+            location_id,
+            region_id,
+            notes,
+        } => {
+            tracing::info!(
+                "DM sharing NPC {} location with PC {}",
+                npc_id,
+                pc_id
+            );
+
+            // Only DMs can share NPC locations
+            let client_id_str = client_id.to_string();
+            if !state.async_session_port.is_client_dm(&client_id_str).await {
+                return Some(ServerMessage::Error {
+                    code: "NOT_AUTHORIZED".to_string(),
+                    message: "Only the DM can share NPC locations".to_string(),
+                });
+            }
+
+            let session_id = match state.async_session_port.get_client_session(&client_id_str).await {
+                Some(sid) => sid,
+                None => {
+                    return Some(ServerMessage::Error {
+                        code: "NO_SESSION".to_string(),
+                        message: "Client is not in a session".to_string(),
+                    });
+                }
+            };
+
+            // Parse IDs
+            let pc_uuid = match uuid::Uuid::parse_str(&pc_id) {
+                Ok(uuid) => crate::domain::value_objects::PlayerCharacterId::from_uuid(uuid),
+                Err(_) => {
+                    return Some(ServerMessage::Error {
+                        code: "INVALID_PC_ID".to_string(),
+                        message: "Invalid PC ID format".to_string(),
+                    });
+                }
+            };
+            let npc_uuid = match uuid::Uuid::parse_str(&npc_id) {
+                Ok(uuid) => crate::domain::value_objects::CharacterId::from_uuid(uuid),
+                Err(_) => {
+                    return Some(ServerMessage::Error {
+                        code: "INVALID_NPC_ID".to_string(),
+                        message: "Invalid NPC ID format".to_string(),
+                    });
+                }
+            };
+            let location_uuid = match uuid::Uuid::parse_str(&location_id) {
+                Ok(uuid) => crate::domain::value_objects::LocationId::from_uuid(uuid),
+                Err(_) => {
+                    return Some(ServerMessage::Error {
+                        code: "INVALID_LOCATION_ID".to_string(),
+                        message: "Invalid location ID format".to_string(),
+                    });
+                }
+            };
+            let region_uuid = match uuid::Uuid::parse_str(&region_id) {
+                Ok(uuid) => crate::domain::value_objects::RegionId::from_uuid(uuid),
+                Err(_) => {
+                    return Some(ServerMessage::Error {
+                        code: "INVALID_REGION_ID".to_string(),
+                        message: "Invalid region ID format".to_string(),
+                    });
+                }
+            };
+
+            // Get game time from session
+            let game_time = {
+                let sessions = state.sessions.read().await;
+                match sessions.get_session(session_id) {
+                    Some(session) => session.game_time().current(),
+                    None => {
+                        return Some(ServerMessage::Error {
+                            code: "SESSION_NOT_FOUND".to_string(),
+                            message: "Session not found".to_string(),
+                        });
+                    }
+                }
+            };
+
+            // Create HeardAbout observation
+            let observation = crate::domain::entities::NpcObservation::heard_about(
+                pc_uuid,
+                npc_uuid,
+                location_uuid,
+                region_uuid,
+                game_time,
+                notes,
+            );
+
+            // Store the observation
+            match state.repository.observations().upsert(&observation).await {
+                Ok(()) => {
+                    tracing::info!(
+                        "Created HeardAbout observation: PC {} now knows NPC {} was at region {}",
+                        pc_id,
+                        npc_id,
+                        region_id
+                    );
+                    // Could broadcast to the player here if we had their client ID
+                    None
+                }
+                Err(e) => {
+                    tracing::error!("Failed to create observation: {}", e);
+                    Some(ServerMessage::Error {
+                        code: "OBSERVATION_ERROR".to_string(),
+                        message: format!("Failed to record observation: {}", e),
+                    })
+                }
+            }
+        }
+
+        // =========================================================================
+        // Phase 23E: DM Event System
+        // =========================================================================
+
+        ClientMessage::TriggerApproachEvent {
+            npc_id,
+            target_pc_id,
+            description,
+        } => {
+            tracing::info!(
+                "DM triggering approach event: NPC {} approaching PC {}",
+                npc_id,
+                target_pc_id
+            );
+
+            // Only DMs can trigger approach events
+            let client_id_str = client_id.to_string();
+            if !state.async_session_port.is_client_dm(&client_id_str).await {
+                return Some(ServerMessage::Error {
+                    code: "NOT_AUTHORIZED".to_string(),
+                    message: "Only the DM can trigger approach events".to_string(),
+                });
+            }
+
+            let session_id = match state.async_session_port.get_client_session(&client_id_str).await {
+                Some(sid) => sid,
+                None => {
+                    return Some(ServerMessage::Error {
+                        code: "NO_SESSION".to_string(),
+                        message: "Client is not in a session".to_string(),
+                    });
+                }
+            };
+
+            // Parse NPC ID and get NPC details
+            let npc_uuid = match uuid::Uuid::parse_str(&npc_id) {
+                Ok(uuid) => crate::domain::value_objects::CharacterId::from_uuid(uuid),
+                Err(_) => {
+                    return Some(ServerMessage::Error {
+                        code: "INVALID_NPC_ID".to_string(),
+                        message: "Invalid NPC ID format".to_string(),
+                    });
+                }
+            };
+
+            // Get NPC details
+            let npc = match state.repository.characters().get(npc_uuid).await {
+                Ok(Some(npc)) => npc,
+                Ok(None) => {
+                    return Some(ServerMessage::Error {
+                        code: "NPC_NOT_FOUND".to_string(),
+                        message: "NPC not found".to_string(),
+                    });
+                }
+                Err(e) => {
+                    return Some(ServerMessage::Error {
+                        code: "DATABASE_ERROR".to_string(),
+                        message: format!("Failed to fetch NPC: {}", e),
+                    });
+                }
+            };
+
+            // Parse PC ID and get PC details (for region)
+            let pc_uuid = match uuid::Uuid::parse_str(&target_pc_id) {
+                Ok(uuid) => crate::domain::value_objects::PlayerCharacterId::from_uuid(uuid),
+                Err(_) => {
+                    return Some(ServerMessage::Error {
+                        code: "INVALID_PC_ID".to_string(),
+                        message: "Invalid PC ID format".to_string(),
+                    });
+                }
+            };
+
+            let pc = match state.repository.player_characters().get(pc_uuid).await {
+                Ok(Some(pc)) => pc,
+                Ok(None) => {
+                    return Some(ServerMessage::Error {
+                        code: "PC_NOT_FOUND".to_string(),
+                        message: "Player character not found".to_string(),
+                    });
+                }
+                Err(e) => {
+                    return Some(ServerMessage::Error {
+                        code: "DATABASE_ERROR".to_string(),
+                        message: format!("Failed to fetch PC: {}", e),
+                    });
+                }
+            };
+
+            // Create Direct observation for the PC (they now see the NPC)
+            if let Some(region_id) = pc.current_region_id {
+                let game_time = {
+                    let sessions = state.sessions.read().await;
+                    sessions.get_session(session_id)
+                        .map(|s| s.game_time().current())
+                        .unwrap_or_else(chrono::Utc::now)
+                };
+
+                let observation = crate::domain::entities::NpcObservation::direct(
+                    pc_uuid,
+                    npc_uuid,
+                    pc.current_location_id,
+                    region_id,
+                    game_time,
+                );
+
+                if let Err(e) = state.repository.observations().upsert(&observation).await {
+                    tracing::warn!("Failed to create observation for approach event: {}", e);
+                }
+            }
+
+            // Build the ApproachEvent message
+            let approach_event = ServerMessage::ApproachEvent {
+                npc_id: npc_id.clone(),
+                npc_name: npc.name.clone(),
+                npc_sprite: npc.sprite_asset.clone(),
+                description,
+            };
+
+            // Broadcast to the target PC (via session broadcast)
+            // For now, broadcast to all in session - client filters by PC
+            if let Ok(msg_json) = serde_json::to_value(&approach_event) {
+                // Use broadcast_except with empty string to broadcast to all
+                let _ = state.async_session_port.broadcast_except(session_id, msg_json, "").await;
+            }
+
+            tracing::info!(
+                "Approach event triggered: {} approached by {}",
+                target_pc_id,
+                npc.name
+            );
+            None
+        }
+
+        ClientMessage::TriggerLocationEvent {
+            region_id,
+            description,
+        } => {
+            tracing::info!(
+                "DM triggering location event in region {}",
+                region_id
+            );
+
+            // Only DMs can trigger location events
+            let client_id_str = client_id.to_string();
+            if !state.async_session_port.is_client_dm(&client_id_str).await {
+                return Some(ServerMessage::Error {
+                    code: "NOT_AUTHORIZED".to_string(),
+                    message: "Only the DM can trigger location events".to_string(),
+                });
+            }
+
+            let session_id = match state.async_session_port.get_client_session(&client_id_str).await {
+                Some(sid) => sid,
+                None => {
+                    return Some(ServerMessage::Error {
+                        code: "NO_SESSION".to_string(),
+                        message: "Client is not in a session".to_string(),
+                    });
+                }
+            };
+
+            // Build the LocationEvent message
+            let location_event = ServerMessage::LocationEvent {
+                region_id: region_id.clone(),
+                description,
+            };
+
+            // Broadcast to all in session - clients filter by their current region
+            if let Ok(msg_json) = serde_json::to_value(&location_event) {
+                // Use broadcast_except with empty string to broadcast to all
+                let _ = state.async_session_port.broadcast_except(session_id, msg_json, "").await;
+            }
+
+            tracing::info!("Location event triggered in region {}", region_id);
+            None
+        }
+
+        // =========================================================================
+        // Phase 23F: Game Time Control
+        // =========================================================================
+
+        ClientMessage::AdvanceGameTime { hours } => {
+            tracing::info!("DM advancing game time by {} hours", hours);
+
+            // Only DMs can advance time
+            let client_id_str = client_id.to_string();
+            if !state.async_session_port.is_client_dm(&client_id_str).await {
+                return Some(ServerMessage::Error {
+                    code: "NOT_AUTHORIZED".to_string(),
+                    message: "Only the DM can advance game time".to_string(),
+                });
+            }
+
+            let session_id = match state.async_session_port.get_client_session(&client_id_str).await {
+                Some(sid) => sid,
+                None => {
+                    return Some(ServerMessage::Error {
+                        code: "NO_SESSION".to_string(),
+                        message: "Client is not in a session".to_string(),
+                    });
+                }
+            };
+
+            // Advance game time in session
+            let game_time_info = {
+                let mut sessions = state.sessions.write().await;
+                match sessions.get_session_mut(session_id) {
+                    Some(session) => {
+                        session.advance_time_hours(hours);
+                        (
+                            session.display_game_time(),
+                            session.time_of_day().to_string(),
+                            session.is_time_paused(),
+                        )
+                    }
+                    None => {
+                        return Some(ServerMessage::Error {
+                            code: "SESSION_NOT_FOUND".to_string(),
+                            message: "Session not found".to_string(),
+                        });
+                    }
+                }
+            };
+
+            // Build the GameTimeUpdated message
+            let time_updated = ServerMessage::GameTimeUpdated {
+                display: game_time_info.0,
+                time_of_day: game_time_info.1,
+                is_paused: game_time_info.2,
+            };
+
+            // Broadcast to all in session
+            if let Ok(msg_json) = serde_json::to_value(&time_updated) {
+                // Use broadcast_except with empty string to broadcast to all
+                let _ = state.async_session_port.broadcast_except(session_id, msg_json, "").await;
+            }
+
+            tracing::info!("Game time advanced by {} hours", hours);
+            None
+        }
+
+        // =========================================================================
+        // Phase 23C: Navigation
+        // =========================================================================
+
+        ClientMessage::SelectPlayerCharacter { pc_id } => {
+            tracing::info!("Player selecting PC {}", pc_id);
+
+            let client_id_str = client_id.to_string();
+            let session_id = match state.async_session_port.get_client_session(&client_id_str).await {
+                Some(sid) => sid,
+                None => {
+                    return Some(ServerMessage::Error {
+                        code: "NO_SESSION".to_string(),
+                        message: "Client is not in a session".to_string(),
+                    });
+                }
+            };
+
+            // Parse PC ID
+            let pc_uuid = match uuid::Uuid::parse_str(&pc_id) {
+                Ok(uuid) => crate::domain::value_objects::PlayerCharacterId::from_uuid(uuid),
+                Err(_) => {
+                    return Some(ServerMessage::Error {
+                        code: "INVALID_PC_ID".to_string(),
+                        message: "Invalid PC ID format".to_string(),
+                    });
+                }
+            };
+
+            // Get PC details
+            let pc = match state.repository.player_characters().get(pc_uuid).await {
+                Ok(Some(pc)) => pc,
+                Ok(None) => {
+                    return Some(ServerMessage::Error {
+                        code: "PC_NOT_FOUND".to_string(),
+                        message: "Player character not found".to_string(),
+                    });
+                }
+                Err(e) => {
+                    return Some(ServerMessage::Error {
+                        code: "DATABASE_ERROR".to_string(),
+                        message: format!("Failed to fetch PC: {}", e),
+                    });
+                }
+            };
+
+            // Send PcSelected response
+            Some(ServerMessage::PcSelected {
+                pc_id: pc_id.clone(),
+                pc_name: pc.name.clone(),
+                location_id: pc.current_location_id.to_string(),
+                region_id: pc.current_region_id.map(|r| r.to_string()),
+            })
+        }
+
+        ClientMessage::MoveToRegion { pc_id, region_id } => {
+            tracing::info!("PC {} moving to region {}", pc_id, region_id);
+
+            let client_id_str = client_id.to_string();
+            let session_id = match state.async_session_port.get_client_session(&client_id_str).await {
+                Some(sid) => sid,
+                None => {
+                    return Some(ServerMessage::Error {
+                        code: "NO_SESSION".to_string(),
+                        message: "Client is not in a session".to_string(),
+                    });
+                }
+            };
+
+            // Parse IDs
+            let pc_uuid = match uuid::Uuid::parse_str(&pc_id) {
+                Ok(uuid) => crate::domain::value_objects::PlayerCharacterId::from_uuid(uuid),
+                Err(_) => {
+                    return Some(ServerMessage::Error {
+                        code: "INVALID_PC_ID".to_string(),
+                        message: "Invalid PC ID format".to_string(),
+                    });
+                }
+            };
+            let region_uuid = match uuid::Uuid::parse_str(&region_id) {
+                Ok(uuid) => crate::domain::value_objects::RegionId::from_uuid(uuid),
+                Err(_) => {
+                    return Some(ServerMessage::Error {
+                        code: "INVALID_REGION_ID".to_string(),
+                        message: "Invalid region ID format".to_string(),
+                    });
+                }
+            };
+
+            // Get current PC to check if movement is valid
+            let pc = match state.repository.player_characters().get(pc_uuid).await {
+                Ok(Some(pc)) => pc,
+                Ok(None) => {
+                    return Some(ServerMessage::Error {
+                        code: "PC_NOT_FOUND".to_string(),
+                        message: "Player character not found".to_string(),
+                    });
+                }
+                Err(e) => {
+                    return Some(ServerMessage::Error {
+                        code: "DATABASE_ERROR".to_string(),
+                        message: format!("Failed to fetch PC: {}", e),
+                    });
+                }
+            };
+
+            // Check if movement is allowed (check for locked connections)
+            if let Some(current_region_id) = pc.current_region_id {
+                let connections = match state.repository.regions().get_connections(current_region_id).await {
+                    Ok(conns) => conns,
+                    Err(e) => {
+                        return Some(ServerMessage::Error {
+                            code: "DATABASE_ERROR".to_string(),
+                            message: format!("Failed to fetch connections: {}", e),
+                        });
+                    }
+                };
+
+                // Find the connection to target region
+                if let Some(conn) = connections.iter().find(|c| c.to_region == region_uuid) {
+                    if conn.is_locked {
+                        return Some(ServerMessage::MovementBlocked {
+                            pc_id: pc_id.clone(),
+                            reason: conn.lock_description.clone().unwrap_or_else(|| "The path is locked.".to_string()),
+                        });
+                    }
+                }
+            }
+
+            // Get target region
+            let target_region = match state.repository.regions().get(region_uuid).await {
+                Ok(Some(region)) => region,
+                Ok(None) => {
+                    return Some(ServerMessage::Error {
+                        code: "REGION_NOT_FOUND".to_string(),
+                        message: "Target region not found".to_string(),
+                    });
+                }
+                Err(e) => {
+                    return Some(ServerMessage::Error {
+                        code: "DATABASE_ERROR".to_string(),
+                        message: format!("Failed to fetch region: {}", e),
+                    });
+                }
+            };
+
+            // Update PC position
+            if let Err(e) = state.repository.player_characters()
+                .update_position(pc_uuid, target_region.location_id, Some(region_uuid))
+                .await
+            {
+                return Some(ServerMessage::Error {
+                    code: "UPDATE_ERROR".to_string(),
+                    message: format!("Failed to update position: {}", e),
+                });
+            }
+
+            // Get location for name
+            let location = state.repository.locations().get(target_region.location_id).await
+                .ok().flatten();
+            let location_name = location.as_ref().map(|l| l.name.clone()).unwrap_or_default();
+            let backdrop = target_region.backdrop_asset.clone()
+                .or_else(|| location.as_ref().and_then(|l| l.backdrop_asset.clone()));
+
+            // Get NPCs present (simple rule-based)
+            let game_time = {
+                let sessions = state.sessions.read().await;
+                sessions.get_session(session_id)
+                    .map(|s| s.game_time().clone())
+                    .unwrap_or_default()
+            };
+
+            let npc_relationships = state.repository.characters()
+                .get_npcs_related_to_region(region_uuid)
+                .await
+                .unwrap_or_default();
+
+            let time_of_day = game_time.time_of_day();
+            let npcs_present: Vec<messages::NpcPresenceData> = npc_relationships
+                .into_iter()
+                .filter_map(|(character, rel_type)| {
+                    let is_present = is_npc_present(&rel_type, time_of_day);
+                    if is_present {
+                        Some(messages::NpcPresenceData {
+                            character_id: character.id.to_string(),
+                            name: character.name,
+                            sprite_asset: character.sprite_asset,
+                            portrait_asset: character.portrait_asset,
+                        })
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            // Get navigation options
+            let connections = state.repository.regions().get_connections(region_uuid).await.unwrap_or_default();
+            let exits = state.repository.regions().get_exits(region_uuid).await.unwrap_or_default();
+
+            let mut connected_regions = Vec::new();
+            for conn in connections {
+                if let Ok(Some(target)) = state.repository.regions().get(conn.to_region).await {
+                    connected_regions.push(messages::NavigationTarget {
+                        region_id: conn.to_region.to_string(),
+                        name: target.name,
+                        is_locked: conn.is_locked,
+                        lock_description: conn.lock_description,
+                    });
+                }
+            }
+
+            let mut exit_targets = Vec::new();
+            for exit in exits {
+                if let Ok(Some(target_loc)) = state.repository.locations().get(exit.to_location).await {
+                    exit_targets.push(messages::NavigationExit {
+                        location_id: exit.to_location.to_string(),
+                        location_name: target_loc.name,
+                        arrival_region_id: exit.arrival_region_id.to_string(),
+                        description: exit.description,
+                    });
+                }
+            }
+
+            Some(ServerMessage::SceneChanged {
+                pc_id,
+                region: messages::RegionData {
+                    id: region_uuid.to_string(),
+                    name: target_region.name,
+                    location_id: target_region.location_id.to_string(),
+                    location_name,
+                    backdrop_asset: backdrop,
+                    atmosphere: target_region.atmosphere,
+                },
+                npcs_present,
+                navigation: messages::NavigationData {
+                    connected_regions,
+                    exits: exit_targets,
+                },
+            })
+        }
+
+        ClientMessage::ExitToLocation { pc_id, location_id, arrival_region_id } => {
+            tracing::info!("PC {} exiting to location {}", pc_id, location_id);
+
+            let client_id_str = client_id.to_string();
+            let session_id = match state.async_session_port.get_client_session(&client_id_str).await {
+                Some(sid) => sid,
+                None => {
+                    return Some(ServerMessage::Error {
+                        code: "NO_SESSION".to_string(),
+                        message: "Client is not in a session".to_string(),
+                    });
+                }
+            };
+
+            // Parse IDs
+            let pc_uuid = match uuid::Uuid::parse_str(&pc_id) {
+                Ok(uuid) => crate::domain::value_objects::PlayerCharacterId::from_uuid(uuid),
+                Err(_) => {
+                    return Some(ServerMessage::Error {
+                        code: "INVALID_PC_ID".to_string(),
+                        message: "Invalid PC ID format".to_string(),
+                    });
+                }
+            };
+            let location_uuid = match uuid::Uuid::parse_str(&location_id) {
+                Ok(uuid) => crate::domain::value_objects::LocationId::from_uuid(uuid),
+                Err(_) => {
+                    return Some(ServerMessage::Error {
+                        code: "INVALID_LOCATION_ID".to_string(),
+                        message: "Invalid location ID format".to_string(),
+                    });
+                }
+            };
+
+            // Get target location
+            let target_location = match state.repository.locations().get(location_uuid).await {
+                Ok(Some(loc)) => loc,
+                Ok(None) => {
+                    return Some(ServerMessage::Error {
+                        code: "LOCATION_NOT_FOUND".to_string(),
+                        message: "Target location not found".to_string(),
+                    });
+                }
+                Err(e) => {
+                    return Some(ServerMessage::Error {
+                        code: "DATABASE_ERROR".to_string(),
+                        message: format!("Failed to fetch location: {}", e),
+                    });
+                }
+            };
+
+            // Determine arrival region
+            let arrival_region_uuid = if let Some(arrival_id) = arrival_region_id {
+                match uuid::Uuid::parse_str(&arrival_id) {
+                    Ok(uuid) => crate::domain::value_objects::RegionId::from_uuid(uuid),
+                    Err(_) => {
+                        return Some(ServerMessage::Error {
+                            code: "INVALID_REGION_ID".to_string(),
+                            message: "Invalid arrival region ID format".to_string(),
+                        });
+                    }
+                }
+            } else if let Some(default_region) = target_location.default_region_id {
+                default_region
+            } else {
+                // Find first spawn point in location
+                let regions = state.repository.regions().list_by_location(location_uuid).await.unwrap_or_default();
+                match regions.into_iter().find(|r| r.is_spawn_point).map(|r| r.id) {
+                    Some(id) => id,
+                    None => {
+                        return Some(ServerMessage::Error {
+                            code: "NO_ARRIVAL_REGION".to_string(),
+                            message: "No arrival region specified and location has no default or spawn point".to_string(),
+                        });
+                    }
+                }
+            };
+
+            // Get arrival region
+            let arrival_region = match state.repository.regions().get(arrival_region_uuid).await {
+                Ok(Some(region)) => region,
+                Ok(None) => {
+                    return Some(ServerMessage::Error {
+                        code: "REGION_NOT_FOUND".to_string(),
+                        message: "Arrival region not found".to_string(),
+                    });
+                }
+                Err(e) => {
+                    return Some(ServerMessage::Error {
+                        code: "DATABASE_ERROR".to_string(),
+                        message: format!("Failed to fetch region: {}", e),
+                    });
+                }
+            };
+
+            // Update PC position
+            if let Err(e) = state.repository.player_characters()
+                .update_position(pc_uuid, location_uuid, Some(arrival_region_uuid))
+                .await
+            {
+                return Some(ServerMessage::Error {
+                    code: "UPDATE_ERROR".to_string(),
+                    message: format!("Failed to update position: {}", e),
+                });
+            }
+
+            // Get backdrop
+            let backdrop = arrival_region.backdrop_asset.clone()
+                .or_else(|| target_location.backdrop_asset.clone());
+
+            // Get NPCs present
+            let game_time = {
+                let sessions = state.sessions.read().await;
+                sessions.get_session(session_id)
+                    .map(|s| s.game_time().clone())
+                    .unwrap_or_default()
+            };
+
+            let npc_relationships = state.repository.characters()
+                .get_npcs_related_to_region(arrival_region_uuid)
+                .await
+                .unwrap_or_default();
+
+            let time_of_day = game_time.time_of_day();
+            let npcs_present: Vec<messages::NpcPresenceData> = npc_relationships
+                .into_iter()
+                .filter_map(|(character, rel_type)| {
+                    let is_present = is_npc_present(&rel_type, time_of_day);
+                    if is_present {
+                        Some(messages::NpcPresenceData {
+                            character_id: character.id.to_string(),
+                            name: character.name,
+                            sprite_asset: character.sprite_asset,
+                            portrait_asset: character.portrait_asset,
+                        })
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            // Get navigation options
+            let connections = state.repository.regions().get_connections(arrival_region_uuid).await.unwrap_or_default();
+            let exits = state.repository.regions().get_exits(arrival_region_uuid).await.unwrap_or_default();
+
+            let mut connected_regions = Vec::new();
+            for conn in connections {
+                if let Ok(Some(target)) = state.repository.regions().get(conn.to_region).await {
+                    connected_regions.push(messages::NavigationTarget {
+                        region_id: conn.to_region.to_string(),
+                        name: target.name,
+                        is_locked: conn.is_locked,
+                        lock_description: conn.lock_description,
+                    });
+                }
+            }
+
+            let mut exit_targets = Vec::new();
+            for exit in exits {
+                if let Ok(Some(target_loc)) = state.repository.locations().get(exit.to_location).await {
+                    exit_targets.push(messages::NavigationExit {
+                        location_id: exit.to_location.to_string(),
+                        location_name: target_loc.name,
+                        arrival_region_id: exit.arrival_region_id.to_string(),
+                        description: exit.description,
+                    });
+                }
+            }
+
+            Some(ServerMessage::SceneChanged {
+                pc_id,
+                region: messages::RegionData {
+                    id: arrival_region_uuid.to_string(),
+                    name: arrival_region.name,
+                    location_id: location_uuid.to_string(),
+                    location_name: target_location.name,
+                    backdrop_asset: backdrop,
+                    atmosphere: arrival_region.atmosphere,
+                },
+                npcs_present,
+                navigation: messages::NavigationData {
+                    connected_regions,
+                    exits: exit_targets,
+                },
+            })
         }
     }
 }

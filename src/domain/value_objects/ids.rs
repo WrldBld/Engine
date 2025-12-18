@@ -82,3 +82,5 @@ define_id!(NarrativeEventId);
 define_id!(EventChainId);
 define_id!(QueueItemId);
 define_id!(PlayerCharacterId);
+define_id!(RegionId);
+define_id!(GoalId);

@@ -266,6 +266,7 @@ impl Neo4jAssetRepository {
         let q = query(
             "CREATE (b:GenerationBatch {
                 id: $id,
+                world_id: $world_id,
                 entity_type: $entity_type,
                 entity_id: $entity_id,
                 asset_type: $asset_type,
@@ -282,6 +283,7 @@ impl Neo4jAssetRepository {
             RETURN b.id as id",
         )
         .param("id", batch.id.to_string())
+        .param("world_id", batch.world_id.to_string())
         .param("entity_type", batch.entity_type.to_string())
         .param("entity_id", batch.entity_id.clone())
         .param("asset_type", batch.asset_type.to_string())
@@ -332,14 +334,17 @@ impl Neo4jAssetRepository {
         }
     }
 
-    /// List all non-terminal batches (queue)
-    pub async fn list_active_batches(&self) -> Result<Vec<GenerationBatch>> {
+    /// List all non-terminal batches for a specific world
+    pub async fn list_active_batches_by_world(&self, world_id: crate::domain::value_objects::WorldId) -> Result<Vec<GenerationBatch>> {
         let q = query(
             "MATCH (b:GenerationBatch)
-            WHERE NOT b.status CONTAINS 'Completed' AND NOT b.status CONTAINS 'Failed'
+            WHERE b.world_id = $world_id
+              AND NOT b.status CONTAINS 'Completed' 
+              AND NOT b.status CONTAINS 'Failed'
             RETURN b
             ORDER BY b.requested_at ASC",
-        );
+        )
+        .param("world_id", world_id.to_string());
 
         let mut result = self.connection.graph().execute(q).await?;
         let mut batches = Vec::new();
@@ -489,9 +494,12 @@ fn row_to_gallery_asset(row: Row) -> Result<GalleryAsset> {
 }
 
 fn row_to_generation_batch(row: Row) -> Result<GenerationBatch> {
+    use crate::domain::value_objects::WorldId;
+    
     let node: neo4rs::Node = row.get("b")?;
 
     let id_str: String = node.get("id")?;
+    let world_id_str: String = node.get("world_id")?;
     let entity_type_str: String = node.get("entity_type")?;
     let entity_id: String = node.get("entity_id")?;
     let asset_type_str: String = node.get("asset_type")?;
@@ -506,6 +514,7 @@ fn row_to_generation_batch(row: Row) -> Result<GenerationBatch> {
     let completed_at_str: String = node.get("completed_at")?;
 
     let id = uuid::Uuid::parse_str(&id_str)?;
+    let world_id = WorldId::from_uuid(uuid::Uuid::parse_str(&world_id_str)?);
     let entity_type = parse_entity_type(&entity_type_str);
     let asset_type = AssetType::from_str(&asset_type_str)
         .ok_or_else(|| anyhow::anyhow!("Invalid asset type: {}", asset_type_str))?;
@@ -533,6 +542,7 @@ fn row_to_generation_batch(row: Row) -> Result<GenerationBatch> {
 
     Ok(GenerationBatch {
         id: BatchId::from_uuid(id),
+        world_id,
         entity_type,
         entity_id,
         asset_type,
@@ -690,8 +700,8 @@ impl AssetRepositoryPort for Neo4jAssetRepository {
         Neo4jAssetRepository::update_batch_assets(self, id, assets).await
     }
 
-    async fn list_active_batches(&self) -> Result<Vec<GenerationBatch>> {
-        Neo4jAssetRepository::list_active_batches(self).await
+    async fn list_active_batches_by_world(&self, world_id: crate::domain::value_objects::WorldId) -> Result<Vec<GenerationBatch>> {
+        Neo4jAssetRepository::list_active_batches_by_world(self, world_id).await
     }
 
     async fn list_ready_batches(&self) -> Result<Vec<GenerationBatch>> {

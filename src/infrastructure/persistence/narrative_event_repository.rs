@@ -10,11 +10,11 @@ use uuid::Uuid;
 use super::connection::Neo4jConnection;
 use crate::application::ports::outbound::NarrativeEventRepositoryPort;
 use crate::domain::entities::{
-    ChainedEvent, EventEffect, EventOutcome, NarrativeEvent, NarrativeTrigger,
-    NarrativeTriggerType, OutcomeCondition, TriggerLogic,
+    ChainedEvent, EventChainMembership, EventEffect, EventOutcome, FeaturedNpc, NarrativeEvent,
+    NarrativeTrigger, NarrativeTriggerType, OutcomeCondition, TriggerLogic,
 };
 use crate::domain::value_objects::{
-    ActId, CharacterId, ChallengeId, EventChainId, LocationId, NarrativeEventId, SceneId, WorldId,
+    ActId, ChallengeId, CharacterId, EventChainId, LocationId, NarrativeEventId, SceneId, WorldId,
 };
 
 // ============================================================================
@@ -758,6 +758,14 @@ impl Neo4jNarrativeEventRepository {
     }
 
     /// Create a new narrative event
+    ///
+    /// NOTE: This only creates the node. Scene/location/act associations and featured NPCs
+    /// are now stored as graph edges and must be created separately using the edge methods:
+    /// - `tie_to_scene()` for TIED_TO_SCENE edge
+    /// - `tie_to_location()` for TIED_TO_LOCATION edge
+    /// - `assign_to_act()` for BELONGS_TO_ACT edge
+    /// - `add_featured_npc()` for FEATURES_NPC edges
+    /// - Chain membership is managed via EventChainRepositoryPort
     pub async fn create(&self, event: &NarrativeEvent) -> Result<()> {
         let stored_triggers: Vec<StoredNarrativeTrigger> =
             event.trigger_conditions.iter().map(|t| t.into()).collect();
@@ -765,11 +773,6 @@ impl Neo4jNarrativeEventRepository {
         let stored_outcomes: Vec<StoredEventOutcome> =
             event.outcomes.iter().map(|o| o.into()).collect();
         let outcomes_json = serde_json::to_string(&stored_outcomes)?;
-        let featured_npcs: Vec<String> = event
-            .featured_npcs
-            .iter()
-            .map(|id| id.to_string())
-            .collect();
         let tags_json = serde_json::to_string(&event.tags)?;
 
         let q = query(
@@ -784,7 +787,6 @@ impl Neo4jNarrativeEventRepository {
                 trigger_logic: $trigger_logic,
                 scene_direction: $scene_direction,
                 suggested_opening: $suggested_opening,
-                featured_npcs: $featured_npcs,
                 outcomes_json: $outcomes_json,
                 default_outcome: $default_outcome,
                 is_active: $is_active,
@@ -795,13 +797,8 @@ impl Neo4jNarrativeEventRepository {
                 trigger_count: $trigger_count,
                 delay_turns: $delay_turns,
                 expires_after_turns: $expires_after_turns,
-                scene_id: $scene_id,
-                location_id: $location_id,
-                act_id: $act_id,
                 priority: $priority,
                 is_favorite: $is_favorite,
-                chain_id: $chain_id,
-                chain_position: $chain_position,
                 created_at: $created_at,
                 updated_at: $updated_at
             })
@@ -820,7 +817,6 @@ impl Neo4jNarrativeEventRepository {
             "suggested_opening",
             event.suggested_opening.clone().unwrap_or_default(),
         )
-        .param("featured_npcs", featured_npcs)
         .param("outcomes_json", outcomes_json)
         .param(
             "default_outcome",
@@ -846,28 +842,8 @@ impl Neo4jNarrativeEventRepository {
             "expires_after_turns",
             event.expires_after_turns.map(|t| t as i64).unwrap_or(-1),
         )
-        .param(
-            "scene_id",
-            event.scene_id.map(|s| s.to_string()).unwrap_or_default(),
-        )
-        .param(
-            "location_id",
-            event.location_id.map(|l| l.to_string()).unwrap_or_default(),
-        )
-        .param(
-            "act_id",
-            event.act_id.map(|a| a.to_string()).unwrap_or_default(),
-        )
         .param("priority", event.priority as i64)
         .param("is_favorite", event.is_favorite)
-        .param(
-            "chain_id",
-            event.chain_id.map(|c| c.to_string()).unwrap_or_default(),
-        )
-        .param(
-            "chain_position",
-            event.chain_position.map(|p| p as i64).unwrap_or(-1),
-        )
         .param("created_at", event.created_at.to_rfc3339())
         .param("updated_at", event.updated_at.to_rfc3339());
 
@@ -895,6 +871,9 @@ impl Neo4jNarrativeEventRepository {
     }
 
     /// Update a narrative event
+    ///
+    /// NOTE: This only updates node properties. Scene/location/act associations and featured NPCs
+    /// are now stored as graph edges and must be managed separately using the edge methods.
     pub async fn update(&self, event: &NarrativeEvent) -> Result<bool> {
         let stored_triggers: Vec<StoredNarrativeTrigger> =
             event.trigger_conditions.iter().map(|t| t.into()).collect();
@@ -902,11 +881,6 @@ impl Neo4jNarrativeEventRepository {
         let stored_outcomes: Vec<StoredEventOutcome> =
             event.outcomes.iter().map(|o| o.into()).collect();
         let outcomes_json = serde_json::to_string(&stored_outcomes)?;
-        let featured_npcs: Vec<String> = event
-            .featured_npcs
-            .iter()
-            .map(|id| id.to_string())
-            .collect();
         let tags_json = serde_json::to_string(&event.tags)?;
 
         let q = query(
@@ -918,7 +892,6 @@ impl Neo4jNarrativeEventRepository {
                 e.trigger_logic = $trigger_logic,
                 e.scene_direction = $scene_direction,
                 e.suggested_opening = $suggested_opening,
-                e.featured_npcs = $featured_npcs,
                 e.outcomes_json = $outcomes_json,
                 e.default_outcome = $default_outcome,
                 e.is_active = $is_active,
@@ -929,13 +902,8 @@ impl Neo4jNarrativeEventRepository {
                 e.trigger_count = $trigger_count,
                 e.delay_turns = $delay_turns,
                 e.expires_after_turns = $expires_after_turns,
-                e.scene_id = $scene_id,
-                e.location_id = $location_id,
-                e.act_id = $act_id,
                 e.priority = $priority,
                 e.is_favorite = $is_favorite,
-                e.chain_id = $chain_id,
-                e.chain_position = $chain_position,
                 e.updated_at = $updated_at
             RETURN e.id as id",
         )
@@ -950,7 +918,6 @@ impl Neo4jNarrativeEventRepository {
             "suggested_opening",
             event.suggested_opening.clone().unwrap_or_default(),
         )
-        .param("featured_npcs", featured_npcs)
         .param("outcomes_json", outcomes_json)
         .param(
             "default_outcome",
@@ -976,28 +943,8 @@ impl Neo4jNarrativeEventRepository {
             "expires_after_turns",
             event.expires_after_turns.map(|t| t as i64).unwrap_or(-1),
         )
-        .param(
-            "scene_id",
-            event.scene_id.map(|s| s.to_string()).unwrap_or_default(),
-        )
-        .param(
-            "location_id",
-            event.location_id.map(|l| l.to_string()).unwrap_or_default(),
-        )
-        .param(
-            "act_id",
-            event.act_id.map(|a| a.to_string()).unwrap_or_default(),
-        )
         .param("priority", event.priority as i64)
         .param("is_favorite", event.is_favorite)
-        .param(
-            "chain_id",
-            event.chain_id.map(|c| c.to_string()).unwrap_or_default(),
-        )
-        .param(
-            "chain_position",
-            event.chain_position.map(|p| p as i64).unwrap_or(-1),
-        )
         .param("updated_at", Utc::now().to_rfc3339());
 
         let mut result = self.connection.graph().execute(q).await?;
@@ -1178,9 +1125,407 @@ impl Neo4jNarrativeEventRepository {
             Ok(false)
         }
     }
+
+    // =========================================================================
+    // TIED_TO_SCENE Edge Methods
+    // =========================================================================
+
+    /// Tie event to a scene (creates TIED_TO_SCENE edge)
+    pub async fn tie_to_scene(
+        &self,
+        event_id: NarrativeEventId,
+        scene_id: SceneId,
+    ) -> Result<bool> {
+        // First remove any existing scene tie, then create the new one
+        let q = query(
+            "MATCH (e:NarrativeEvent {id: $event_id})
+            OPTIONAL MATCH (e)-[old:TIED_TO_SCENE]->()
+            DELETE old
+            WITH e
+            MATCH (s:Scene {id: $scene_id})
+            CREATE (e)-[:TIED_TO_SCENE]->(s)
+            RETURN e.id as id",
+        )
+        .param("event_id", event_id.to_string())
+        .param("scene_id", scene_id.to_string());
+
+        let mut result = self.connection.graph().execute(q).await?;
+        Ok(result.next().await?.is_some())
+    }
+
+    /// Get the scene this event is tied to (if any)
+    pub async fn get_tied_scene(&self, event_id: NarrativeEventId) -> Result<Option<SceneId>> {
+        let q = query(
+            "MATCH (e:NarrativeEvent {id: $event_id})-[:TIED_TO_SCENE]->(s:Scene)
+            RETURN s.id as scene_id",
+        )
+        .param("event_id", event_id.to_string());
+
+        let mut result = self.connection.graph().execute(q).await?;
+        if let Some(row) = result.next().await? {
+            let scene_id_str: String = row.get("scene_id")?;
+            Ok(Some(SceneId::from(Uuid::parse_str(&scene_id_str)?)))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Remove scene tie (deletes TIED_TO_SCENE edge)
+    pub async fn untie_from_scene(&self, event_id: NarrativeEventId) -> Result<bool> {
+        let q = query(
+            "MATCH (e:NarrativeEvent {id: $event_id})-[r:TIED_TO_SCENE]->()
+            DELETE r
+            RETURN count(*) as deleted",
+        )
+        .param("event_id", event_id.to_string());
+
+        let mut result = self.connection.graph().execute(q).await?;
+        if let Some(row) = result.next().await? {
+            let deleted: i64 = row.get("deleted")?;
+            Ok(deleted > 0)
+        } else {
+            Ok(false)
+        }
+    }
+
+    // =========================================================================
+    // TIED_TO_LOCATION Edge Methods
+    // =========================================================================
+
+    /// Tie event to a location (creates TIED_TO_LOCATION edge)
+    pub async fn tie_to_location(
+        &self,
+        event_id: NarrativeEventId,
+        location_id: LocationId,
+    ) -> Result<bool> {
+        // First remove any existing location tie, then create the new one
+        let q = query(
+            "MATCH (e:NarrativeEvent {id: $event_id})
+            OPTIONAL MATCH (e)-[old:TIED_TO_LOCATION]->()
+            DELETE old
+            WITH e
+            MATCH (l:Location {id: $location_id})
+            CREATE (e)-[:TIED_TO_LOCATION]->(l)
+            RETURN e.id as id",
+        )
+        .param("event_id", event_id.to_string())
+        .param("location_id", location_id.to_string());
+
+        let mut result = self.connection.graph().execute(q).await?;
+        Ok(result.next().await?.is_some())
+    }
+
+    /// Get the location this event is tied to (if any)
+    pub async fn get_tied_location(
+        &self,
+        event_id: NarrativeEventId,
+    ) -> Result<Option<LocationId>> {
+        let q = query(
+            "MATCH (e:NarrativeEvent {id: $event_id})-[:TIED_TO_LOCATION]->(l:Location)
+            RETURN l.id as location_id",
+        )
+        .param("event_id", event_id.to_string());
+
+        let mut result = self.connection.graph().execute(q).await?;
+        if let Some(row) = result.next().await? {
+            let location_id_str: String = row.get("location_id")?;
+            Ok(Some(LocationId::from(Uuid::parse_str(&location_id_str)?)))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Remove location tie (deletes TIED_TO_LOCATION edge)
+    pub async fn untie_from_location(&self, event_id: NarrativeEventId) -> Result<bool> {
+        let q = query(
+            "MATCH (e:NarrativeEvent {id: $event_id})-[r:TIED_TO_LOCATION]->()
+            DELETE r
+            RETURN count(*) as deleted",
+        )
+        .param("event_id", event_id.to_string());
+
+        let mut result = self.connection.graph().execute(q).await?;
+        if let Some(row) = result.next().await? {
+            let deleted: i64 = row.get("deleted")?;
+            Ok(deleted > 0)
+        } else {
+            Ok(false)
+        }
+    }
+
+    // =========================================================================
+    // BELONGS_TO_ACT Edge Methods
+    // =========================================================================
+
+    /// Assign event to an act (creates BELONGS_TO_ACT edge)
+    pub async fn assign_to_act(&self, event_id: NarrativeEventId, act_id: ActId) -> Result<bool> {
+        // First remove any existing act assignment, then create the new one
+        let q = query(
+            "MATCH (e:NarrativeEvent {id: $event_id})
+            OPTIONAL MATCH (e)-[old:BELONGS_TO_ACT]->()
+            DELETE old
+            WITH e
+            MATCH (a:Act {id: $act_id})
+            CREATE (e)-[:BELONGS_TO_ACT]->(a)
+            RETURN e.id as id",
+        )
+        .param("event_id", event_id.to_string())
+        .param("act_id", act_id.to_string());
+
+        let mut result = self.connection.graph().execute(q).await?;
+        Ok(result.next().await?.is_some())
+    }
+
+    /// Get the act this event belongs to (if any)
+    pub async fn get_act(&self, event_id: NarrativeEventId) -> Result<Option<ActId>> {
+        let q = query(
+            "MATCH (e:NarrativeEvent {id: $event_id})-[:BELONGS_TO_ACT]->(a:Act)
+            RETURN a.id as act_id",
+        )
+        .param("event_id", event_id.to_string());
+
+        let mut result = self.connection.graph().execute(q).await?;
+        if let Some(row) = result.next().await? {
+            let act_id_str: String = row.get("act_id")?;
+            Ok(Some(ActId::from(Uuid::parse_str(&act_id_str)?)))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Remove act assignment (deletes BELONGS_TO_ACT edge)
+    pub async fn unassign_from_act(&self, event_id: NarrativeEventId) -> Result<bool> {
+        let q = query(
+            "MATCH (e:NarrativeEvent {id: $event_id})-[r:BELONGS_TO_ACT]->()
+            DELETE r
+            RETURN count(*) as deleted",
+        )
+        .param("event_id", event_id.to_string());
+
+        let mut result = self.connection.graph().execute(q).await?;
+        if let Some(row) = result.next().await? {
+            let deleted: i64 = row.get("deleted")?;
+            Ok(deleted > 0)
+        } else {
+            Ok(false)
+        }
+    }
+
+    // =========================================================================
+    // FEATURES_NPC Edge Methods
+    // =========================================================================
+
+    /// Add a featured NPC to the event (creates FEATURES_NPC edge)
+    pub async fn add_featured_npc(
+        &self,
+        event_id: NarrativeEventId,
+        featured_npc: FeaturedNpc,
+    ) -> Result<bool> {
+        let q = query(
+            "MATCH (e:NarrativeEvent {id: $event_id})
+            MATCH (c:Character {id: $character_id})
+            MERGE (e)-[r:FEATURES_NPC]->(c)
+            SET r.role = $role
+            RETURN e.id as id",
+        )
+        .param("event_id", event_id.to_string())
+        .param("character_id", featured_npc.character_id.to_string())
+        .param("role", featured_npc.role.unwrap_or_default());
+
+        let mut result = self.connection.graph().execute(q).await?;
+        Ok(result.next().await?.is_some())
+    }
+
+    /// Get all featured NPCs for an event
+    pub async fn get_featured_npcs(&self, event_id: NarrativeEventId) -> Result<Vec<FeaturedNpc>> {
+        let q = query(
+            "MATCH (e:NarrativeEvent {id: $event_id})-[r:FEATURES_NPC]->(c:Character)
+            RETURN c.id as character_id, r.role as role
+            ORDER BY c.name",
+        )
+        .param("event_id", event_id.to_string());
+
+        let mut result = self.connection.graph().execute(q).await?;
+        let mut npcs = Vec::new();
+
+        while let Some(row) = result.next().await? {
+            let character_id_str: String = row.get("character_id")?;
+            let role: String = row.get("role").unwrap_or_default();
+
+            npcs.push(FeaturedNpc {
+                character_id: CharacterId::from(Uuid::parse_str(&character_id_str)?),
+                role: if role.is_empty() { None } else { Some(role) },
+            });
+        }
+
+        Ok(npcs)
+    }
+
+    /// Remove a featured NPC from the event (deletes FEATURES_NPC edge)
+    pub async fn remove_featured_npc(
+        &self,
+        event_id: NarrativeEventId,
+        character_id: CharacterId,
+    ) -> Result<bool> {
+        let q = query(
+            "MATCH (e:NarrativeEvent {id: $event_id})-[r:FEATURES_NPC]->(c:Character {id: $character_id})
+            DELETE r
+            RETURN count(*) as deleted",
+        )
+        .param("event_id", event_id.to_string())
+        .param("character_id", character_id.to_string());
+
+        let mut result = self.connection.graph().execute(q).await?;
+        if let Some(row) = result.next().await? {
+            let deleted: i64 = row.get("deleted")?;
+            Ok(deleted > 0)
+        } else {
+            Ok(false)
+        }
+    }
+
+    /// Update featured NPC role
+    pub async fn update_featured_npc_role(
+        &self,
+        event_id: NarrativeEventId,
+        character_id: CharacterId,
+        role: Option<String>,
+    ) -> Result<bool> {
+        let q = query(
+            "MATCH (e:NarrativeEvent {id: $event_id})-[r:FEATURES_NPC]->(c:Character {id: $character_id})
+            SET r.role = $role
+            RETURN e.id as id",
+        )
+        .param("event_id", event_id.to_string())
+        .param("character_id", character_id.to_string())
+        .param("role", role.unwrap_or_default());
+
+        let mut result = self.connection.graph().execute(q).await?;
+        Ok(result.next().await?.is_some())
+    }
+
+    // =========================================================================
+    // Chain Membership Query Methods
+    // =========================================================================
+
+    /// Get chain membership info for an event (queries CONTAINS_EVENT edges)
+    pub async fn get_chain_memberships(
+        &self,
+        event_id: NarrativeEventId,
+    ) -> Result<Vec<EventChainMembership>> {
+        let q = query(
+            "MATCH (chain:EventChain)-[r:CONTAINS_EVENT]->(e:NarrativeEvent {id: $event_id})
+            RETURN chain.id as chain_id, r.position as position, r.is_completed as is_completed
+            ORDER BY chain.name",
+        )
+        .param("event_id", event_id.to_string());
+
+        let mut result = self.connection.graph().execute(q).await?;
+        let mut memberships = Vec::new();
+
+        while let Some(row) = result.next().await? {
+            let chain_id_str: String = row.get("chain_id")?;
+            let position: i64 = row.get("position").unwrap_or(0);
+            let is_completed: bool = row.get("is_completed").unwrap_or(false);
+
+            memberships.push(EventChainMembership {
+                chain_id: EventChainId::from(Uuid::parse_str(&chain_id_str)?),
+                position: position as u32,
+                is_completed,
+            });
+        }
+
+        Ok(memberships)
+    }
+
+    // =========================================================================
+    // Query Methods for Events by Edge Relationships
+    // =========================================================================
+
+    /// List events tied to a specific scene
+    pub async fn list_by_scene(&self, scene_id: SceneId) -> Result<Vec<NarrativeEvent>> {
+        let q = query(
+            "MATCH (e:NarrativeEvent)-[:TIED_TO_SCENE]->(s:Scene {id: $scene_id})
+            RETURN e
+            ORDER BY e.priority DESC, e.name",
+        )
+        .param("scene_id", scene_id.to_string());
+
+        let mut result = self.connection.graph().execute(q).await?;
+        let mut events = Vec::new();
+
+        while let Some(row) = result.next().await? {
+            events.push(row_to_narrative_event(row)?);
+        }
+
+        Ok(events)
+    }
+
+    /// List events tied to a specific location
+    pub async fn list_by_location(&self, location_id: LocationId) -> Result<Vec<NarrativeEvent>> {
+        let q = query(
+            "MATCH (e:NarrativeEvent)-[:TIED_TO_LOCATION]->(l:Location {id: $location_id})
+            RETURN e
+            ORDER BY e.priority DESC, e.name",
+        )
+        .param("location_id", location_id.to_string());
+
+        let mut result = self.connection.graph().execute(q).await?;
+        let mut events = Vec::new();
+
+        while let Some(row) = result.next().await? {
+            events.push(row_to_narrative_event(row)?);
+        }
+
+        Ok(events)
+    }
+
+    /// List events belonging to a specific act
+    pub async fn list_by_act(&self, act_id: ActId) -> Result<Vec<NarrativeEvent>> {
+        let q = query(
+            "MATCH (e:NarrativeEvent)-[:BELONGS_TO_ACT]->(a:Act {id: $act_id})
+            RETURN e
+            ORDER BY e.priority DESC, e.name",
+        )
+        .param("act_id", act_id.to_string());
+
+        let mut result = self.connection.graph().execute(q).await?;
+        let mut events = Vec::new();
+
+        while let Some(row) = result.next().await? {
+            events.push(row_to_narrative_event(row)?);
+        }
+
+        Ok(events)
+    }
+
+    /// List events featuring a specific NPC
+    pub async fn list_by_featured_npc(
+        &self,
+        character_id: CharacterId,
+    ) -> Result<Vec<NarrativeEvent>> {
+        let q = query(
+            "MATCH (e:NarrativeEvent)-[:FEATURES_NPC]->(c:Character {id: $character_id})
+            RETURN e
+            ORDER BY e.priority DESC, e.name",
+        )
+        .param("character_id", character_id.to_string());
+
+        let mut result = self.connection.graph().execute(q).await?;
+        let mut events = Vec::new();
+
+        while let Some(row) = result.next().await? {
+            events.push(row_to_narrative_event(row)?);
+        }
+
+        Ok(events)
+    }
 }
 
 /// Convert a Neo4j row to a NarrativeEvent
+///
+/// NOTE: Scene/location/act associations and featured NPCs are now stored as graph edges
+/// and must be fetched separately using the edge methods on the repository.
 fn row_to_narrative_event(row: Row) -> Result<NarrativeEvent> {
     let node: neo4rs::Node = row.get("e")?;
 
@@ -1193,7 +1538,7 @@ fn row_to_narrative_event(row: Row) -> Result<NarrativeEvent> {
     let trigger_logic_str: String = node.get("trigger_logic").unwrap_or_else(|_| "All".to_string());
     let scene_direction: String = node.get("scene_direction").unwrap_or_default();
     let suggested_opening: String = node.get("suggested_opening").unwrap_or_default();
-    let featured_npcs: Vec<String> = node.get("featured_npcs").unwrap_or_default();
+    // NOTE: featured_npcs moved to FEATURES_NPC edges
     let outcomes_json: String = node.get("outcomes_json").unwrap_or_else(|_| "[]".to_string());
     let default_outcome: String = node.get("default_outcome").unwrap_or_default();
     let is_active: bool = node.get("is_active").unwrap_or(true);
@@ -1204,13 +1549,10 @@ fn row_to_narrative_event(row: Row) -> Result<NarrativeEvent> {
     let trigger_count: i64 = node.get("trigger_count").unwrap_or(0);
     let delay_turns: i64 = node.get("delay_turns").unwrap_or(0);
     let expires_after_turns: i64 = node.get("expires_after_turns").unwrap_or(-1);
-    let scene_id_str: String = node.get("scene_id").unwrap_or_default();
-    let location_id_str: String = node.get("location_id").unwrap_or_default();
-    let act_id_str: String = node.get("act_id").unwrap_or_default();
+    // NOTE: scene_id, location_id, act_id moved to graph edges
     let priority: i64 = node.get("priority").unwrap_or(0);
     let is_favorite: bool = node.get("is_favorite").unwrap_or(false);
-    let chain_id_str: String = node.get("chain_id").unwrap_or_default();
-    let chain_position: i64 = node.get("chain_position").unwrap_or(-1);
+    // NOTE: chain_id, chain_position moved to CONTAINS_EVENT edge
     let created_at_str: String = node.get("created_at")?;
     let updated_at_str: String = node.get("updated_at")?;
 
@@ -1235,11 +1577,6 @@ fn row_to_narrative_event(row: Row) -> Result<NarrativeEvent> {
         _ => TriggerLogic::All,
     };
 
-    let featured_npcs_ids: Vec<CharacterId> = featured_npcs
-        .iter()
-        .filter_map(|s| Uuid::parse_str(s).ok().map(CharacterId::from))
-        .collect();
-
     Ok(NarrativeEvent {
         id: NarrativeEventId::from(Uuid::parse_str(&id_str)?),
         world_id: WorldId::from(Uuid::parse_str(&world_id_str)?),
@@ -1254,7 +1591,7 @@ fn row_to_narrative_event(row: Row) -> Result<NarrativeEvent> {
         } else {
             Some(suggested_opening)
         },
-        featured_npcs: featured_npcs_ids,
+        // NOTE: featured_npcs now stored as FEATURES_NPC edges
         outcomes,
         default_outcome: if default_outcome.is_empty() {
             None
@@ -1283,33 +1620,10 @@ fn row_to_narrative_event(row: Row) -> Result<NarrativeEvent> {
         } else {
             Some(expires_after_turns as u32)
         },
-        scene_id: if scene_id_str.is_empty() {
-            None
-        } else {
-            Uuid::parse_str(&scene_id_str).ok().map(SceneId::from)
-        },
-        location_id: if location_id_str.is_empty() {
-            None
-        } else {
-            Uuid::parse_str(&location_id_str).ok().map(LocationId::from)
-        },
-        act_id: if act_id_str.is_empty() {
-            None
-        } else {
-            Uuid::parse_str(&act_id_str).ok().map(ActId::from)
-        },
+        // NOTE: scene_id, location_id, act_id now stored as graph edges
         priority: priority as i32,
         is_favorite,
-        chain_id: if chain_id_str.is_empty() {
-            None
-        } else {
-            Uuid::parse_str(&chain_id_str).ok().map(EventChainId::from)
-        },
-        chain_position: if chain_position < 0 {
-            None
-        } else {
-            Some(chain_position as u32)
-        },
+        // NOTE: chain_id, chain_position now stored as CONTAINS_EVENT edge
         created_at: DateTime::parse_from_rfc3339(&created_at_str)?.with_timezone(&Utc),
         updated_at: DateTime::parse_from_rfc3339(&updated_at_str)?.with_timezone(&Utc),
     })
@@ -1367,5 +1681,122 @@ impl NarrativeEventRepositoryPort for Neo4jNarrativeEventRepository {
 
     async fn delete(&self, id: NarrativeEventId) -> Result<bool> {
         self.delete(id).await
+    }
+
+    // =========================================================================
+    // TIED_TO_SCENE Edge Methods
+    // =========================================================================
+
+    async fn tie_to_scene(&self, event_id: NarrativeEventId, scene_id: SceneId) -> Result<bool> {
+        self.tie_to_scene(event_id, scene_id).await
+    }
+
+    async fn get_tied_scene(&self, event_id: NarrativeEventId) -> Result<Option<SceneId>> {
+        self.get_tied_scene(event_id).await
+    }
+
+    async fn untie_from_scene(&self, event_id: NarrativeEventId) -> Result<bool> {
+        self.untie_from_scene(event_id).await
+    }
+
+    // =========================================================================
+    // TIED_TO_LOCATION Edge Methods
+    // =========================================================================
+
+    async fn tie_to_location(
+        &self,
+        event_id: NarrativeEventId,
+        location_id: LocationId,
+    ) -> Result<bool> {
+        self.tie_to_location(event_id, location_id).await
+    }
+
+    async fn get_tied_location(&self, event_id: NarrativeEventId) -> Result<Option<LocationId>> {
+        self.get_tied_location(event_id).await
+    }
+
+    async fn untie_from_location(&self, event_id: NarrativeEventId) -> Result<bool> {
+        self.untie_from_location(event_id).await
+    }
+
+    // =========================================================================
+    // BELONGS_TO_ACT Edge Methods
+    // =========================================================================
+
+    async fn assign_to_act(&self, event_id: NarrativeEventId, act_id: ActId) -> Result<bool> {
+        self.assign_to_act(event_id, act_id).await
+    }
+
+    async fn get_act(&self, event_id: NarrativeEventId) -> Result<Option<ActId>> {
+        self.get_act(event_id).await
+    }
+
+    async fn unassign_from_act(&self, event_id: NarrativeEventId) -> Result<bool> {
+        self.unassign_from_act(event_id).await
+    }
+
+    // =========================================================================
+    // FEATURES_NPC Edge Methods
+    // =========================================================================
+
+    async fn add_featured_npc(
+        &self,
+        event_id: NarrativeEventId,
+        featured_npc: FeaturedNpc,
+    ) -> Result<bool> {
+        self.add_featured_npc(event_id, featured_npc).await
+    }
+
+    async fn get_featured_npcs(&self, event_id: NarrativeEventId) -> Result<Vec<FeaturedNpc>> {
+        self.get_featured_npcs(event_id).await
+    }
+
+    async fn remove_featured_npc(
+        &self,
+        event_id: NarrativeEventId,
+        character_id: CharacterId,
+    ) -> Result<bool> {
+        self.remove_featured_npc(event_id, character_id).await
+    }
+
+    async fn update_featured_npc_role(
+        &self,
+        event_id: NarrativeEventId,
+        character_id: CharacterId,
+        role: Option<String>,
+    ) -> Result<bool> {
+        self.update_featured_npc_role(event_id, character_id, role)
+            .await
+    }
+
+    // =========================================================================
+    // Chain Membership Query Methods
+    // =========================================================================
+
+    async fn get_chain_memberships(
+        &self,
+        event_id: NarrativeEventId,
+    ) -> Result<Vec<EventChainMembership>> {
+        self.get_chain_memberships(event_id).await
+    }
+
+    // =========================================================================
+    // Query Methods for Events by Edge Relationships
+    // =========================================================================
+
+    async fn list_by_scene(&self, scene_id: SceneId) -> Result<Vec<NarrativeEvent>> {
+        self.list_by_scene(scene_id).await
+    }
+
+    async fn list_by_location(&self, location_id: LocationId) -> Result<Vec<NarrativeEvent>> {
+        self.list_by_location(location_id).await
+    }
+
+    async fn list_by_act(&self, act_id: ActId) -> Result<Vec<NarrativeEvent>> {
+        self.list_by_act(act_id).await
+    }
+
+    async fn list_by_featured_npc(&self, character_id: CharacterId) -> Result<Vec<NarrativeEvent>> {
+        self.list_by_featured_npc(character_id).await
     }
 }

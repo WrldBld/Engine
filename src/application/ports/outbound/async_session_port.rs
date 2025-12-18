@@ -24,6 +24,8 @@ pub struct SessionParticipantInfo {
     pub client_id: String,
     pub user_id: String,
     pub role: SessionParticipantRole,
+    /// Character name if the participant has selected a character
+    pub character_name: Option<String>,
 }
 
 /// World snapshot for session initialization
