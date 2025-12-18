@@ -140,9 +140,7 @@ pub use session_info::SessionInfo;
 pub use export::ExportQueryDto;
 
 // Suggestion DTOs
-pub use suggestion::{
-    SuggestionRequestDto, SuggestionResponseDto, UnifiedSuggestionRequestDto,
-};
+pub use suggestion::{SuggestionRequestDto, UnifiedSuggestionRequestDto};
 
 // World DTOs
 pub use world::{

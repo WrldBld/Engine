@@ -34,15 +34,6 @@ impl From<SuggestionRequestDto> for SuggestionContext {
     }
 }
 
-/// Response containing generated suggestions.
-#[derive(Debug, Serialize)]
-pub struct SuggestionResponseDto {
-    /// The type of suggestion that was generated
-    pub suggestion_type: String,
-    /// The generated suggestions
-    pub suggestions: Vec<String>,
-}
-
 /// Unified suggestion endpoint request - uses `suggestion_type` in body.
 #[derive(Debug, Deserialize)]
 pub struct UnifiedSuggestionRequestDto {

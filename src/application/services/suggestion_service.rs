@@ -288,6 +288,24 @@ pub enum SuggestionType {
     LocationSecrets,
 }
 
+impl SuggestionType {
+    /// Convert to the field type string used in LLM queue routing
+    pub fn to_field_type(&self) -> &'static str {
+        match self {
+            SuggestionType::CharacterName => "character_name",
+            SuggestionType::CharacterDescription => "character_description",
+            SuggestionType::CharacterWants => "character_wants",
+            SuggestionType::CharacterFears => "character_fears",
+            SuggestionType::CharacterBackstory => "character_backstory",
+            SuggestionType::LocationName => "location_name",
+            SuggestionType::LocationDescription => "location_description",
+            SuggestionType::LocationAtmosphere => "location_atmosphere",
+            SuggestionType::LocationFeatures => "location_features",
+            SuggestionType::LocationSecrets => "location_secrets",
+        }
+    }
+}
+
 /// Response containing suggestions
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SuggestionResponse {

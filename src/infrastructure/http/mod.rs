@@ -397,55 +397,11 @@ pub fn create_routes() -> Router<Arc<AppState>> {
             "/api/assets/batch/{batch_id}/retry",
             post(asset_routes::retry_batch),
         )
-        // Suggestion routes
+        // Suggestion routes (async queue-based)
         .route("/api/suggest", post(suggestion_routes::suggest))
         .route(
             "/api/suggest/{request_id}/cancel",
             delete(suggestion_routes::cancel_suggestion),
-        )
-        .route(
-            "/api/suggest/{request_id}/retry",
-            post(suggestion_routes::retry_suggestion),
-        )
-        .route(
-            "/api/suggest/character/name",
-            post(suggestion_routes::suggest_character_names),
-        )
-        .route(
-            "/api/suggest/character/description",
-            post(suggestion_routes::suggest_character_description),
-        )
-        .route(
-            "/api/suggest/character/wants",
-            post(suggestion_routes::suggest_character_wants),
-        )
-        .route(
-            "/api/suggest/character/fears",
-            post(suggestion_routes::suggest_character_fears),
-        )
-        .route(
-            "/api/suggest/character/backstory",
-            post(suggestion_routes::suggest_character_backstory),
-        )
-        .route(
-            "/api/suggest/location/name",
-            post(suggestion_routes::suggest_location_names),
-        )
-        .route(
-            "/api/suggest/location/description",
-            post(suggestion_routes::suggest_location_description),
-        )
-        .route(
-            "/api/suggest/location/atmosphere",
-            post(suggestion_routes::suggest_location_atmosphere),
-        )
-        .route(
-            "/api/suggest/location/features",
-            post(suggestion_routes::suggest_location_features),
-        )
-        .route(
-            "/api/suggest/location/secrets",
-            post(suggestion_routes::suggest_location_secrets),
         )
         // Workflow Configuration routes
         .route("/api/workflows", get(workflow_routes::list_workflow_slots))
