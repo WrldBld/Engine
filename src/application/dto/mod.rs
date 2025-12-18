@@ -11,6 +11,7 @@ mod comfyui_config;
 mod event_chain;
 mod export;
 mod interaction;
+mod item;
 mod location;
 mod narrative_event;
 mod queue_items;
@@ -104,6 +105,12 @@ pub use location::{
 pub use character::{
     parse_archetype, parse_relationship_type, ChangeArchetypeRequestDto, CharacterResponseDto,
     CreateCharacterRequestDto, CreateRelationshipRequestDto, CreatedIdResponseDto,
+};
+
+// Item DTOs
+pub use item::{
+    parse_acquisition_method, AddInventoryItemRequestDto, CreateItemRequestDto,
+    InventoryItemResponseDto, ItemResponseDto, UpdateInventoryItemRequestDto,
 };
 
 // ComfyUI config DTO

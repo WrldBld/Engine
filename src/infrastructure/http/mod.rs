@@ -66,6 +66,11 @@ pub fn create_routes() -> Router<Arc<AppState>> {
             "/api/characters/{id}/archetype",
             put(character_routes::change_archetype),
         )
+        // Character inventory route (Phase 23B)
+        .route(
+            "/api/characters/{id}/inventory",
+            get(character_routes::get_inventory),
+        )
         // Character-Region relationship routes (Phase 23C)
         .route(
             "/api/characters/{id}/region-relationships",

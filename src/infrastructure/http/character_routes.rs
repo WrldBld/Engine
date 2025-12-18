@@ -18,7 +18,8 @@ use crate::domain::value_objects::{CharacterId, RegionId, Relationship, Relation
 use crate::application::ports::outbound::SocialNetwork;
 use crate::application::dto::{
     ChangeArchetypeRequestDto, CharacterResponseDto, CreateCharacterRequestDto,
-    CreateRelationshipRequestDto, CreatedIdResponseDto, parse_archetype, parse_relationship_type,
+    CreateRelationshipRequestDto, CreatedIdResponseDto, InventoryItemResponseDto,
+    parse_archetype, parse_relationship_type,
 };
 use crate::infrastructure::persistence::{
     RegionFrequency, RegionRelationship, RegionRelationshipType, RegionShift,
@@ -274,6 +275,33 @@ pub async fn delete_relationship(
 }
 
 // NOTE: parsing helpers live in `application/dto/character.rs`.
+
+// =============================================================================
+// Inventory Routes (Phase 23B - US-CHAR-009)
+// =============================================================================
+
+/// Get character's inventory
+pub async fn get_inventory(
+    State(state): State<Arc<AppState>>,
+    Path(character_id): Path<String>,
+) -> Result<Json<Vec<InventoryItemResponseDto>>, (StatusCode, String)> {
+    let uuid = Uuid::parse_str(&character_id)
+        .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid character ID".to_string()))?;
+
+    let inventory = state
+        .repository
+        .characters()
+        .get_inventory(CharacterId::from_uuid(uuid))
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    Ok(Json(
+        inventory
+            .into_iter()
+            .map(InventoryItemResponseDto::from)
+            .collect(),
+    ))
+}
 
 // =============================================================================
 // Region Relationship DTOs (Phase 23C)
