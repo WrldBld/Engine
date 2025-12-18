@@ -23,9 +23,7 @@ use crate::application::services::interaction_service::InteractionService;
 use crate::application::services::session_join_service as sjs;
 use crate::application::services::challenge_resolution_service as crs;
 use crate::application::ports::outbound::{PlayerCharacterRepositoryPort, SessionParticipantRole};
-use crate::domain::value_objects::TimeOfDay;
-use crate::infrastructure::persistence::{RegionRelationshipType, RegionShift, RegionFrequency};
-use crate::domain::value_objects::ActionId;
+use crate::domain::value_objects::{TimeOfDay, ActionId, RegionRelationshipType};
 use crate::infrastructure::session::ClientId;
 use crate::infrastructure::state::AppState;
 
@@ -181,31 +179,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     tracing::info!("WebSocket connection terminated: {}", client_id);
 }
 
-/// Simple rule-based NPC presence determination
-/// 
-/// Used by navigation handlers to determine which NPCs are present in a region.
-fn is_npc_present(rel_type: &RegionRelationshipType, time_of_day: TimeOfDay) -> bool {
-    match rel_type {
-        RegionRelationshipType::Home => {
-            matches!(time_of_day, TimeOfDay::Night | TimeOfDay::Evening)
-        }
-        RegionRelationshipType::WorksAt { shift } => {
-            match shift {
-                RegionShift::Always => true,
-                RegionShift::Day => matches!(time_of_day, TimeOfDay::Morning | TimeOfDay::Afternoon),
-                RegionShift::Night => matches!(time_of_day, TimeOfDay::Evening | TimeOfDay::Night),
-            }
-        }
-        RegionRelationshipType::Frequents { frequency } => {
-            match frequency {
-                RegionFrequency::Often => true,
-                RegionFrequency::Sometimes => matches!(time_of_day, TimeOfDay::Afternoon | TimeOfDay::Evening),
-                RegionFrequency::Rarely => false,
-            }
-        }
-        RegionRelationshipType::Avoids { .. } => false,
-    }
-}
+// NPC presence determination is now in domain::value_objects::region::RegionRelationshipType::is_npc_present
 
 /// Handle a parsed client message
 async fn handle_message(
@@ -1730,7 +1704,7 @@ async fn handle_message(
             let npcs_present: Vec<messages::NpcPresenceData> = npc_relationships
                 .into_iter()
                 .filter_map(|(character, rel_type)| {
-                    let is_present = is_npc_present(&rel_type, time_of_day);
+                    let is_present = rel_type.is_npc_present(time_of_day);
                     if is_present {
                         Some(messages::NpcPresenceData {
                             character_id: character.id.to_string(),
@@ -1917,7 +1891,7 @@ async fn handle_message(
             let npcs_present: Vec<messages::NpcPresenceData> = npc_relationships
                 .into_iter()
                 .filter_map(|(character, rel_type)| {
-                    let is_present = is_npc_present(&rel_type, time_of_day);
+                    let is_present = rel_type.is_npc_present(time_of_day);
                     if is_present {
                         Some(messages::NpcPresenceData {
                             character_id: character.id.to_string(),

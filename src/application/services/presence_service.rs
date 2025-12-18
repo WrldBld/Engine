@@ -19,7 +19,7 @@ use tokio::sync::RwLock;
 use crate::application::ports::outbound::{ChatMessage, LlmPort, LlmRequest, RegionRepositoryPort};
 use crate::domain::entities::Character;
 use crate::domain::value_objects::{
-    GameTime, RegionFrequency, RegionId, RegionRelationshipType, RegionShift, TimeOfDay,
+    GameTime, RegionId, RegionRelationshipType, TimeOfDay,
 };
 
 /// Result of an NPC presence query
@@ -140,6 +140,8 @@ impl<L: LlmPort, R: RegionRepositoryPort> PresenceService<L, R> {
     }
 
     /// Simple rule-based presence determination (no LLM)
+    /// 
+    /// Uses the canonical presence rules from RegionRelationshipType.
     fn determine_presence_simple(
         &self,
         npc_relationships: &[(Character, RegionRelationshipType)],
@@ -148,35 +150,9 @@ impl<L: LlmPort, R: RegionRepositoryPort> PresenceService<L, R> {
         npc_relationships
             .iter()
             .map(|(character, rel_type)| {
-                let (is_present, reasoning) = match rel_type {
-                    RegionRelationshipType::Home => {
-                        // Home: likely present at night, sometimes during day
-                        let present = matches!(time_of_day, TimeOfDay::Night | TimeOfDay::Evening);
-                        (present, format!("Lives here. {} is typically home time.", time_of_day))
-                    }
-                    RegionRelationshipType::WorksAt { shift } => {
-                        // Work: depends on shift
-                        let present = match shift {
-                            RegionShift::Always => true,
-                            RegionShift::Day => matches!(time_of_day, TimeOfDay::Morning | TimeOfDay::Afternoon),
-                            RegionShift::Night => matches!(time_of_day, TimeOfDay::Evening | TimeOfDay::Night),
-                        };
-                        (present, format!("Works here ({:?} shift). Current time: {}", shift, time_of_day))
-                    }
-                    RegionRelationshipType::Frequents { frequency } => {
-                        // Frequents: probabilistic based on frequency
-                        let present = match frequency {
-                            RegionFrequency::Often => true,
-                            RegionFrequency::Sometimes => matches!(time_of_day, TimeOfDay::Afternoon | TimeOfDay::Evening),
-                            RegionFrequency::Rarely => false,
-                        };
-                        (present, format!("Frequents here ({:?}). Current time: {}", frequency, time_of_day))
-                    }
-                    RegionRelationshipType::Avoids { reason } => {
-                        // Avoids: never present
-                        (false, format!("Avoids this location: {}", reason))
-                    }
-                };
+                // Use canonical domain logic
+                let is_present = rel_type.is_npc_present(time_of_day);
+                let reasoning = rel_type.presence_reasoning(time_of_day);
 
                 NpcPresenceResult {
                     character_id: character.id.to_string(),

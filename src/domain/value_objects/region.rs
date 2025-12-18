@@ -79,6 +79,58 @@ pub enum RegionRelationshipType {
     Avoids { reason: String },
 }
 
+impl RegionRelationshipType {
+    /// Determine if an NPC with this relationship would be present at the given time of day.
+    /// 
+    /// This is the canonical implementation of NPC presence rules:
+    /// - Home: present at night/evening (sleeping/resting time)
+    /// - WorksAt: depends on shift (day workers in morning/afternoon, night workers evening/night)
+    /// - Frequents: depends on frequency (often=always, sometimes=afternoon/evening, rarely=never)
+    /// - Avoids: never present
+    pub fn is_npc_present(&self, time_of_day: super::game_time::TimeOfDay) -> bool {
+        use super::game_time::TimeOfDay;
+        
+        match self {
+            RegionRelationshipType::Home => {
+                matches!(time_of_day, TimeOfDay::Night | TimeOfDay::Evening)
+            }
+            RegionRelationshipType::WorksAt { shift } => {
+                match shift {
+                    RegionShift::Always => true,
+                    RegionShift::Day => matches!(time_of_day, TimeOfDay::Morning | TimeOfDay::Afternoon),
+                    RegionShift::Night => matches!(time_of_day, TimeOfDay::Evening | TimeOfDay::Night),
+                }
+            }
+            RegionRelationshipType::Frequents { frequency } => {
+                match frequency {
+                    RegionFrequency::Often => true,
+                    RegionFrequency::Sometimes => matches!(time_of_day, TimeOfDay::Afternoon | TimeOfDay::Evening),
+                    RegionFrequency::Rarely => false,
+                }
+            }
+            RegionRelationshipType::Avoids { .. } => false,
+        }
+    }
+    
+    /// Get a human-readable reasoning for presence at the given time of day.
+    pub fn presence_reasoning(&self, time_of_day: super::game_time::TimeOfDay) -> String {
+        match self {
+            RegionRelationshipType::Home => {
+                format!("Lives here. {} is typically home time.", time_of_day.display_name())
+            }
+            RegionRelationshipType::WorksAt { shift } => {
+                format!("Works here ({} shift). Current time: {}", shift, time_of_day.display_name())
+            }
+            RegionRelationshipType::Frequents { frequency } => {
+                format!("Frequents here ({}). Current time: {}", frequency, time_of_day.display_name())
+            }
+            RegionRelationshipType::Avoids { reason } => {
+                format!("Avoids this location: {}", reason)
+            }
+        }
+    }
+}
+
 /// A character's relationship to a region
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegionRelationship {
