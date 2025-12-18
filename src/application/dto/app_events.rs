@@ -100,24 +100,25 @@ pub enum AppEvent {
     },
 
     // ========================================================================
-    // Suggestion Events (LLM Text)
+    // Suggestion Events (LLM Text) - World-scoped
     // ========================================================================
     /// An LLM suggestion request was queued
     SuggestionQueued {
         request_id: String,
         field_type: String,
         entity_id: Option<String>,
-        /// Optional live session associated with this suggestion
+        /// World ID for routing to correct clients
         #[serde(default)]
-        session_id: Option<String>,
+        world_id: Option<String>,
     },
 
     /// An LLM suggestion request is being processed
     SuggestionProgress {
         request_id: String,
         status: String,
+        /// World ID for routing to correct clients
         #[serde(default)]
-        session_id: Option<String>,
+        world_id: Option<String>,
     },
 
     /// An LLM suggestion request completed
@@ -125,8 +126,9 @@ pub enum AppEvent {
         request_id: String,
         field_type: String,
         suggestions: Vec<String>,
+        /// World ID for routing to correct clients
         #[serde(default)]
-        session_id: Option<String>,
+        world_id: Option<String>,
     },
 
     /// An LLM suggestion request failed
@@ -134,8 +136,9 @@ pub enum AppEvent {
         request_id: String,
         field_type: String,
         error: String,
+        /// World ID for routing to correct clients
         #[serde(default)]
-        session_id: Option<String>,
+        world_id: Option<String>,
     },
 }
 
@@ -163,6 +166,11 @@ impl AppEvent {
             AppEvent::StoryEventCreated { world_id, .. }
             | AppEvent::NarrativeEventTriggered { world_id, .. }
             | AppEvent::ChallengeResolved { world_id, .. } => Some(world_id.as_str()),
+            // Suggestion events are world-scoped
+            AppEvent::SuggestionQueued { world_id, .. }
+            | AppEvent::SuggestionProgress { world_id, .. }
+            | AppEvent::SuggestionCompleted { world_id, .. }
+            | AppEvent::SuggestionFailed { world_id, .. } => world_id.as_deref(),
             _ => None,
         }
     }
@@ -175,13 +183,10 @@ impl AppEvent {
             | AppEvent::GenerationBatchQueued { session_id, .. }
             | AppEvent::GenerationBatchProgress { session_id, .. }
             | AppEvent::GenerationBatchCompleted { session_id, .. }
-            | AppEvent::GenerationBatchFailed { session_id, .. }
-            | AppEvent::SuggestionQueued { session_id, .. }
-            | AppEvent::SuggestionProgress { session_id, .. }
-            | AppEvent::SuggestionCompleted { session_id, .. }
-            | AppEvent::SuggestionFailed { session_id, .. } => {
+            | AppEvent::GenerationBatchFailed { session_id, .. } => {
                 session_id.as_deref()
             }
+            // Suggestion events use world_id for routing, not session_id
             _ => None,
         }
     }

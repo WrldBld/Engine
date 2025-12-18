@@ -48,6 +48,8 @@ pub struct SuggestionResponseDto {
 pub struct UnifiedSuggestionRequestDto {
     /// Type of suggestion to generate
     pub suggestion_type: SuggestionType,
+    /// World ID for routing the response back to the correct clients
+    pub world_id: String,
     /// Context for the suggestion
     #[serde(flatten)]
     pub context: SuggestionRequestDto,

@@ -56,23 +56,27 @@ pub enum GenerationEvent {
         request_id: String,
         field_type: String,
         entity_id: Option<String>,
+        world_id: Option<WorldId>,
     },
     /// A suggestion request is being processed
     SuggestionProgress {
         request_id: String,
         status: String,
+        world_id: Option<WorldId>,
     },
     /// A suggestion request has completed
     SuggestionComplete {
         request_id: String,
         field_type: String,
         suggestions: Vec<String>,
+        world_id: Option<WorldId>,
     },
     /// A suggestion request has failed
     SuggestionFailed {
         request_id: String,
         field_type: String,
         error: String,
+        world_id: Option<WorldId>,
     },
 }
 

@@ -98,38 +98,41 @@ impl GenerationEventPublisher {
                 request_id,
                 field_type,
                 entity_id,
+                world_id,
             } => Some(AppEvent::SuggestionQueued {
                 request_id,
                 field_type,
                 entity_id,
-                session_id: None,
+                world_id: world_id.map(|w| w.to_string()),
             }),
-            GenerationEvent::SuggestionProgress { request_id, status } => {
+            GenerationEvent::SuggestionProgress { request_id, status, world_id } => {
                 Some(AppEvent::SuggestionProgress {
                     request_id,
                     status,
-                    session_id: None,
+                    world_id: world_id.map(|w| w.to_string()),
                 })
             }
             GenerationEvent::SuggestionComplete {
                 request_id,
                 field_type,
                 suggestions,
+                world_id,
             } => Some(AppEvent::SuggestionCompleted {
                 request_id,
                 field_type,
                 suggestions,
-                session_id: None,
+                world_id: world_id.map(|w| w.to_string()),
             }),
             GenerationEvent::SuggestionFailed {
                 request_id,
                 field_type,
                 error,
+                world_id,
             } => Some(AppEvent::SuggestionFailed {
                 request_id,
                 field_type,
                 error,
-                session_id: None,
+                world_id: world_id.map(|w| w.to_string()),
             }),
         }
     }

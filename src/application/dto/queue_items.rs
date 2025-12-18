@@ -57,6 +57,9 @@ pub enum DMAction {
 pub struct LLMRequestItem {
     pub request_type: LLMRequestType,
     pub session_id: Option<SessionId>,
+    /// World ID for routing suggestion responses (world-scoped events)
+    #[serde(default)]
+    pub world_id: Option<crate::domain::value_objects::WorldId>,
     /// The player character ID associated with this request (for challenge targeting)
     #[serde(default)]
     pub pc_id: Option<crate::domain::value_objects::PlayerCharacterId>,

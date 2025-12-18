@@ -230,6 +230,11 @@ pub async fn suggest(
     // Generate request ID
     let request_id = Uuid::new_v4().to_string();
     
+    // Parse world_id for routing
+    let world_id = uuid::Uuid::parse_str(&req.world_id)
+        .map(crate::domain::value_objects::WorldId::from_uuid)
+        .ok();
+    
     // Create LLM request item
     let llm_request = LLMRequestItem {
         request_type: LLMRequestType::Suggestion {
@@ -237,6 +242,7 @@ pub async fn suggest(
             entity_id: None, // Could extract from context if needed
         },
         session_id: None, // Creator mode, no session
+        world_id, // World-scoped for routing
         pc_id: None, // Creator mode, no player character
         prompt: None, // Suggestions don't use GamePromptRequest
         suggestion_context: Some(context),
@@ -278,6 +284,7 @@ pub async fn cancel_suggestion(
 #[derive(Debug, serde::Deserialize)]
 pub struct RetrySuggestionRequest {
     pub field_type: String,
+    pub world_id: String,
     pub context: SuggestionRequestDto,
 }
 
@@ -291,6 +298,11 @@ pub async fn retry_suggestion(
     
     let context: SuggestionContext = req.context.into();
     
+    // Parse world_id for routing
+    let world_id = uuid::Uuid::parse_str(&req.world_id)
+        .map(crate::domain::value_objects::WorldId::from_uuid)
+        .ok();
+    
     // Create LLM request item
     let llm_request = LLMRequestItem {
         request_type: LLMRequestType::Suggestion {
@@ -298,6 +310,7 @@ pub async fn retry_suggestion(
             entity_id: None,
         },
         session_id: None,
+        world_id, // World-scoped for routing
         pc_id: None, // Suggestion retry, no player character context
         prompt: None,
         suggestion_context: Some(context),

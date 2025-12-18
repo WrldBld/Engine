@@ -85,6 +85,7 @@ impl<Q: QueuePort<PlayerActionItem>, LQ: ProcessingQueuePort<LLMRequestItem>>
                 action_item_id: item_id,
             },
             session_id: Some(session_id),
+            world_id: None, // NPC responses use session_id for routing, not world_id
             pc_id,
             prompt: Some(prompt),
             suggestion_context: None,

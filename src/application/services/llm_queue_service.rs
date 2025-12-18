@@ -103,6 +103,7 @@ impl<Q: ProcessingQueuePort<LLMRequestItem> + 'static, L: LlmPort + Clone + 'sta
                         _ => String::new(),
                     },
                     error: "Cancelled by user".to_string(),
+                    world_id: item.payload.world_id.clone(),
                 });
                 
                 return Ok(true);
@@ -404,12 +405,14 @@ impl<Q: ProcessingQueuePort<LLMRequestItem> + 'static, L: LlmPort + Clone + 'sta
                         let request_id = request.callback_id.clone();
                         let field_type_clone = field_type.clone();
                         let entity_id_clone = entity_id.clone();
+                        let world_id_clone = request.world_id.clone();
                         
                         // Emit queued event
                         let _ = generation_event_tx_clone.send(GenerationEvent::SuggestionQueued {
                             request_id: request_id.clone(),
                             field_type: field_type_clone.clone(),
                             entity_id: entity_id_clone.clone(),
+                            world_id: world_id_clone.clone(),
                         });
                         
                         // Create suggestion service
@@ -435,6 +438,7 @@ impl<Q: ProcessingQueuePort<LLMRequestItem> + 'static, L: LlmPort + Clone + 'sta
                                     request_id: request_id.clone(),
                                     field_type: field_type_clone.clone(),
                                     error: error.clone(),
+                                    world_id: world_id_clone.clone(),
                                 });
                                 let _ = queue_clone.fail(item_id, &error).await;
                                 return;
@@ -448,8 +452,9 @@ impl<Q: ProcessingQueuePort<LLMRequestItem> + 'static, L: LlmPort + Clone + 'sta
                                     request_id: request_id.clone(),
                                     field_type: field_type_clone.clone(),
                                     suggestions,
+                                    world_id: world_id_clone,
                                 });
-                        let _ = queue_clone.complete(item_id).await;
+                                let _ = queue_clone.complete(item_id).await;
                             }
                             Err(e) => {
                                 let error = e.to_string();
@@ -458,6 +463,7 @@ impl<Q: ProcessingQueuePort<LLMRequestItem> + 'static, L: LlmPort + Clone + 'sta
                                     request_id: request_id.clone(),
                                     field_type: field_type_clone.clone(),
                                     error: error.clone(),
+                                    world_id: world_id_clone,
                                 });
                                 let _ = queue_clone.fail(item_id, &error).await;
                             }
